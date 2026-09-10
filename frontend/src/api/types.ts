@@ -33,6 +33,29 @@ export interface Truck {
   initial_anchor2_lat?: number | null;
   initial_anchor2_lng?: number | null;
   initial_anchor2_address?: string | null;
+  /** Amazon's printed anchor point — the IDENTIFIER used to resolve an uploaded
+   *  BTR sheet to this truck (ADR-410). Static per truck, and NOT a territory
+   *  seed: run_sort reads initial_anchor_* for that and never these.
+   *  Set via PATCH /trucks/{id}/amazon-anchor as raw coordinates. */
+  amazon_anchor_lat?: number | null;
+  amazon_anchor_lng?: number | null;
+  amazon_anchor_set_at?: string | null;
+}
+
+/** Body for PATCH /trucks/{id}/amazon-anchor (ADR-410 D4). Raw coordinates,
+ *  unlike the address-based initial anchor. Send both null to clear. */
+export interface TruckAmazonAnchorPatch {
+  lat: number | null;
+  lng: number | null;
+}
+
+/** The truck a BTR sheet's anchor point resolved to (ADR-410 D5).
+ *  A SUGGESTION — /btr-sheets/confirm still requires an explicit truck_id.
+ *  truck_name is present so the UI never shows a UUID. */
+export interface TruckMatch {
+  truck_id: string;
+  truck_name: string;
+  matched_on: string;
 }
 
 export interface OutlierTote {

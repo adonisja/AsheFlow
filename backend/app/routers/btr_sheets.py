@@ -39,6 +39,7 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.services.audit import write_audit
+from app.services.resolve_truck_anchor import anchor_key, haversine_m, resolve_truck_by_anchor
 from app.core.bag_colors import canonical_hex
 from app.services.btr_ingestor import (
     BTRSheetRead, CSVBTRIngestor, ImageBTRIngestor, ManualBTRIngestor, reconcile,
@@ -136,6 +137,18 @@ class RouteOut(BaseModel):
     ov_zones: list[OVZoneOut] = []
 
 
+class TruckMatchOut(BaseModel):
+    """The truck this sheet's anchor point resolves to — ADR-410 D5.
+
+    A SUGGESTION. /confirm still requires an explicit truck_id; this only spares
+    the reviewer the lookup. truck_name exists so the client never has to show a
+    UUID to justify the choice (ADR-410 D8).
+    """
+    truck_id: UUID
+    truck_name: str
+    matched_on: str = "amazon_anchor"
+
+
 class BTRSheetOut(BaseModel):
     btr_loading_zone: Optional[str] = None
     service_type: Optional[str] = None
@@ -153,6 +166,11 @@ class BTRSheetOut(BaseModel):
     # configured name. The reviewer must resolve it before confirm will accept.
     dsp_mismatch: Optional[str] = None
     total_bags: int = 0
+    # ADR-410 D5/D6: the truck resolved from the sheet's anchor point, or null
+    # when no active truck is registered at it. Null is not an error — the
+    # reviewer picks by name, and the client may offer to create a truck
+    # pre-filled with amazon_anchor_lat/lng above.
+    truck_match: Optional[TruckMatchOut] = None
 
 
 class BTRSheetSaved(BaseModel):
@@ -167,7 +185,11 @@ class BTRSheetSaved(BaseModel):
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _to_out(sheet: BTRSheetRead, dsp_mismatch: Optional[str] = None) -> BTRSheetOut:
+def _to_out(
+    sheet: BTRSheetRead,
+    dsp_mismatch: Optional[str] = None,
+    truck_match: Optional[TruckMatchOut] = None,
+) -> BTRSheetOut:
     return BTRSheetOut(
         btr_loading_zone=sheet.btr_loading_zone,
         service_type=sheet.service_type,
@@ -192,6 +214,7 @@ def _to_out(sheet: BTRSheetRead, dsp_mismatch: Optional[str] = None) -> BTRSheet
         confidence=sheet.confidence,
         dsp_mismatch=dsp_mismatch,
         total_bags=sheet.bag_count,
+        truck_match=truck_match,
     )
 
 
@@ -290,7 +313,17 @@ async def preview_btr_sheet(
             detail="No routes found on that sheet. Check the photo includes the Pick List.",
         )
 
-    return _to_out(sheet, _check_dsp(db, caller.company_id, sheet.dsp))
+    # ADR-410 D5 — suggest the truck from the anchor point. Read-only, and a
+    # miss is silent: the reviewer picks by name exactly as before.
+    matched = resolve_truck_by_anchor(
+        db, caller.company_id, sheet.amazon_anchor_lat, sheet.amazon_anchor_lng,
+    )
+    truck_match = (
+        TruckMatchOut(truck_id=matched.id, truck_name=matched.name)
+        if matched is not None else None
+    )
+
+    return _to_out(sheet, _check_dsp(db, caller.company_id, sheet.dsp), truck_match)
 
 
 @router.post("/confirm", response_model=BTRSheetSaved,
@@ -307,7 +340,7 @@ def confirm_btr_sheet(
     is a correction, not a second truck. Children cascade on delete, so the
     replacement cannot leave orphaned bags behind.
     """
-    _load_truck(db, caller.company_id, payload.truck_id)
+    truck = _load_truck(db, caller.company_id, payload.truck_id)
 
     # D6: refuse outright. A partial import of another DSP's sheet would
     # attribute their totes to this company.
@@ -407,6 +440,31 @@ def confirm_btr_sheet(
             assignment.btr_loading_zone = payload.btr_loading_zone[:50]
 
     db.flush()
+
+    # ADR-410 D7 — the registered anchor is dispatch's assumption; this records
+    # when the sheet disagrees with it. Deliberately does NOT update the truck,
+    # warn the reviewer, or block the sheet: making the assumption's failure
+    # visible is the whole job. A registered anchor changes only by hand (D4).
+    observed = anchor_key(payload.amazon_anchor_lat, payload.amazon_anchor_lng)
+    registered = anchor_key(truck.amazon_anchor_lat, truck.amazon_anchor_lng)
+    if observed is not None and registered is not None and observed != registered:
+        write_audit(
+            db=db,
+            company_id=str(caller.company_id),
+            actor_id=str(caller.id),
+            action_type="btr_sheet.anchor_drift",
+            target_table="trucks",
+            target_id=str(truck.id),
+            detail={
+                "sheet_date": payload.sheet_date.isoformat(),
+                "registered_lat": registered[0],
+                "registered_lng": registered[1],
+                "observed_lat": observed[0],
+                "observed_lng": observed[1],
+                "distance_m": round(haversine_m(*registered, *observed), 1),
+            },
+        )
+
     write_audit(
         db=db,
         company_id=str(caller.company_id),
