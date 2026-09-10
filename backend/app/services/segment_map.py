@@ -108,6 +108,20 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             # would blank it out on the next sort. Same reasoning as the
             # topology comment above, which is why it sits here rather than in
             # a second writer.
+            # ADR-408 D3d. These were ABSENT from this set_ entirely, so a
+            # column left null at insert stayed null forever: a segment first
+            # seen as a connector got a street name and no block key, and every
+            # later package-driven upsert of the same segment skipped the gap.
+            # That is the mechanism behind the zero overlap between the two
+            # populations — 357 rows with a block key and no name, 222 with a
+            # name and no key, and none with both.
+            #
+            # COALESCE for the same reason as the span below: a partial lookup
+            # must fill a gap it finds, never blank out an answer already there.
+            "block_key":           func.coalesce(
+                stmt.excluded.block_key, StreetSegment.block_key),
+            "street_name":         func.coalesce(
+                stmt.excluded.street_name, StreetSegment.street_name),
             "low_house_number":    func.coalesce(
                 stmt.excluded.low_house_number, StreetSegment.low_house_number),
             "high_house_number":   func.coalesce(
