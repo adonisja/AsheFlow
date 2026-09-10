@@ -11,7 +11,9 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.employee import Employee
 from app.models.truck import Truck
-from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse, TruckAnchorPatch, TruckAnchor2Patch
+from app.schemas.truck import (TruckCreate, TruckUpdate, TruckResponse, TruckAnchorPatch,
+                               TruckAnchor2Patch, TruckAmazonAnchorPatch)
+from app.services.resolve_truck_anchor import ANCHOR_DP, anchor_key
 from app.services.audit import write_audit
 
 # ── Anchor input parsing (ADR-173) ────────────────────────────────────────────
@@ -435,6 +437,104 @@ def set_truck_anchor2(
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
         after={"address": db_truck.initial_anchor2_address},
+    )
+    db.commit()
+    db.refresh(db_truck)
+    return db_truck
+
+
+@router.patch("/{truck_id}/amazon-anchor", response_model=TruckResponse)
+def set_truck_amazon_anchor(
+    truck_id: UUID,
+    body: TruckAmazonAnchorPatch,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_write),
+    db: Session = Depends(get_db),
+):
+    """Register Amazon's printed anchor point for a truck — ADR-410 D4.
+
+    This is the IDENTIFIER used to resolve an uploaded BTR sheet to a truck, not
+    a territory seed: run_sort never reads it. Setting it changes nothing about
+    how the sort partitions geography (ADR-410 D2).
+
+    Raw coordinates on purpose — unlike PATCH /anchor, which takes an address.
+    Pass both null to clear.
+    """
+    db_truck = (
+        db.query(Truck)
+        .filter(Truck.id == truck_id, Truck.company_id == caller.company_id)
+        .first()
+    )
+    if not db_truck:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found.")
+
+    if (body.lat is None) != (body.lng is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide both lat and lng, or neither to clear the anchor.",
+        )
+
+    before = {"lat": db_truck.amazon_anchor_lat, "lng": db_truck.amazon_anchor_lng}
+
+    if body.lat is None:
+        db_truck.amazon_anchor_lat    = None
+        db_truck.amazon_anchor_lng    = None
+        db_truck.amazon_anchor_set_by = None
+        db_truck.amazon_anchor_set_at = None
+    else:
+        # Rounded on write so the stored value and the resolver's key agree by
+        # construction — the match must never depend on how a client formatted
+        # its float (ADR-410 D3).
+        lat = round(body.lat, ANCHOR_DP)
+        lng = round(body.lng, ANCHOR_DP)
+
+        # The partial unique index enforces this too; checking first turns a
+        # 500-shaped IntegrityError into a message naming the other truck.
+        #
+        # Compared on the ROUNDED key, not with SQL float equality. A row stored
+        # unrounded — by a seed, a backfill, or a direct SQL insert — would slip
+        # past `== lat` while still matching the resolver, leaving two trucks
+        # resolvable from one anchor: precisely the ambiguity the uniqueness is
+        # there to prevent (ADR-410 D3).
+        clash = next(
+            (
+                t
+                for t in db.query(Truck)
+                .filter(
+                    Truck.company_id == caller.company_id,
+                    Truck.id != truck_id,
+                    Truck.amazon_anchor_lat.isnot(None),
+                    Truck.amazon_anchor_lng.isnot(None),
+                )
+                .all()
+                if anchor_key(t.amazon_anchor_lat, t.amazon_anchor_lng) == (lat, lng)
+            ),
+            None,
+        )
+        if clash is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Truck '{clash.name}' is already registered at that anchor point. "
+                    "An anchor identifies exactly one truck."
+                ),
+            )
+
+        db_truck.amazon_anchor_lat    = lat
+        db_truck.amazon_anchor_lng    = lng
+        db_truck.amazon_anchor_set_by = caller.id
+        db_truck.amazon_anchor_set_at = datetime.now(timezone.utc)
+
+    db.flush()
+    write_audit(
+        db,
+        action_type="truck.amazon_anchor_updated",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before=before,
+        after={"lat": db_truck.amazon_anchor_lat, "lng": db_truck.amazon_anchor_lng},
     )
     db.commit()
     db.refresh(db_truck)
