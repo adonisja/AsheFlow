@@ -98,3 +98,24 @@ def test_an_unrounded_stored_anchor_still_resolves(db):
     assert truck.amazon_anchor_lat != 40.76066
     got = resolve_truck_by_anchor(db, SEED_COMPANY_ID, *MORGAN)
     assert got is not None and got.id == truck.id
+
+
+def test_a_35m_neighbour_does_not_steal_a_claimed_anchor(db):
+    """The real 2026-09-12 export, which is what D3 exists for.
+
+    BTR29 arrived at 40.75608,-73.99634 — 35 m from Falcon — in the SAME workbook
+    where BTR31 claimed Falcon's anchor exactly. So BTR29 is a different truck
+    standing 35 m away, not Falcon having moved.
+
+    35 m is TIGHTER than the registered fleet's own minimum separation (34.1 m,
+    Morgan<->Titan). A nearest-neighbour resolver with any tolerance able to absorb
+    GPS noise would have filed BTR29's totes onto Falcon, whose own sheet was in
+    the same upload. Exact matching returns None, which routes it to the D6 offer.
+    """
+    falcon = _register(db, "Falcon", 40.75603, -73.99675)
+
+    # Falcon's own sheet still resolves.
+    assert resolve_truck_by_anchor(db, SEED_COMPANY_ID, 40.75603, -73.99675).id == falcon.id
+
+    # The 35 m neighbour does not.
+    assert resolve_truck_by_anchor(db, SEED_COMPANY_ID, 40.75608, -73.99634) is None
