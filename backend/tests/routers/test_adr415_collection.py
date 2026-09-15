@@ -322,11 +322,31 @@ class TestThePlatformOwnerCanReadWhatArrived:
                 f"{fn.__name__} does not scope its read"
             )
 
-    def test_the_token_value_is_never_listed(self):
-        """The secret is returned once at creation. A listing that echoed live
-        tokens would turn one compromised admin session into every campaign."""
+    def test_a_revoked_campaign_shows_no_link(self):
+        """ADR-424 reverses ADR-415's "returned once at creation, never again".
+
+        That rule treated the token as a password. It is not: an open
+        campaign's link is handed to a dozen collectors by design and pasted
+        into group chats — a shared URL, not a credential. Withholding it from
+        the one person authorised to manage campaigns protected nothing while
+        guaranteeing that a mislaid link meant revoking and re-issuing to
+        everyone who had it.
+
+        What the listing must still refuse is a REVOKED link: the string
+        survives in the row but no longer works, and showing it invites someone
+        to send a link that will 404 for whoever receives it.
+        """
+        import inspect
+        from app.routers import collection as C
         from app.schemas.collection import CollectionTokenSummary
-        assert "token" not in CollectionTokenSummary.model_fields
+
+        assert "token" in CollectionTokenSummary.model_fields, (
+            "the listing carries the link so it can be re-copied (ADR-424)"
+        )
+        src = inspect.getsource(C.list_tokens)
+        assert "row.token = None" in src and "revoked_at is not None" in src, (
+            "a revoked campaign must not show its link"
+        )
 
     def test_profile_reads_are_paged(self):
         """This table grows one row per building per collector per day; an
@@ -667,3 +687,58 @@ class TestCampaignScope:
                     f"{fn.__name__} uses {blocking.__name__}, which 401s on a "
                     f"missing Authorization header"
                 )
+
+
+class TestNullableColumnsAreOptionalInResponses:
+    """ADR-424 regression, and the general shape of it.
+
+    ADR-423 made `company_id` nullable on three tables so an open campaign
+    could carry no tenant — and left `CollectedProfileOut.company_id` declared
+    as a bare `UUID`. The first profile submitted to an open campaign 500'd the
+    super-admin listing on `model_validate`.
+
+    It surfaced as a CORS error in the browser, because a 500 raised inside the
+    error middleware never reaches the CORS middleware and so carries no
+    `Access-Control-Allow-Origin` header. Hours went into the wrong layer.
+
+    A field-by-field comparison catches the whole class: a response schema
+    mirroring a nullable column must accept None.
+    """
+
+    def test_every_response_field_accepts_what_its_column_allows(self):
+        import typing
+
+        from app.models.collection import (
+            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+        )
+        from app.schemas.collection import CollectedProfileOut, CollectionTokenSummary
+        from app.schemas.walker_day import CollectedWalkerDayOut
+
+        pairs = [
+            (CollectedProfileOut, CollectedAddressProfile),
+            (CollectionTokenSummary, CollectionToken),
+            (CollectedWalkerDayOut, CollectedWalkerDay),
+        ]
+        mismatches = []
+        for schema, model in pairs:
+            columns = model.__table__.columns
+            for name, field in schema.model_fields.items():
+                if name not in columns or not columns[name].nullable:
+                    continue
+                annotation = field.annotation
+                # `object` is the escape hatch a few fields use for datetimes;
+                # it accepts None, so it is not a mismatch.
+                accepts_none = (
+                    annotation is object
+                    or type(None) in typing.get_args(annotation)
+                )
+                if not accepts_none:
+                    mismatches.append(
+                        f"{schema.__name__}.{name} is {annotation} but "
+                        f"{model.__tablename__}.{name} is nullable"
+                    )
+
+        assert not mismatches, (
+            "these response fields will 500 on a NULL:\n  "
+            + "\n  ".join(mismatches)
+        )
