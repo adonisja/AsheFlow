@@ -1313,16 +1313,25 @@ export interface NextStopSuggestion {
 // Building Profiles
 // ---------------------------------------------------------------------------
 
+/** ADR-422. Mirrors `BUILDING_TYPES` in building_taxonomy.py.
+ *
+ *  The nine `biz_`-prefixed values this used to list were replaced by ADR-418;
+ *  six of them the server now rejects. `unknown` is the sentinel
+ *  address_inventory.py writes for a building nobody has visited — it is a
+ *  valid stored value, so it belongs in the type. */
 export type BuildingType =
-  | 'receptionist'
   | 'walkup'
   | 'elevator'
-  | 'biz_freight'
-  | 'biz_security'
-  | 'biz_loading_dock'
+  | 'doorman_reception'
   | 'mailroom'
-  | 'doorman'
-  | 'biz_front';
+  | 'lockers'
+  | 'public_housing'
+  | 'storefront_reception'
+  | 'storefront_front_door'
+  | 'freight'
+  | 'loading_dock'
+  | 'loading_dock_mailroom'
+  | 'unknown';
 
 export interface BuildingProfileCreate {
   normalised_address: string;
@@ -3043,7 +3052,11 @@ export interface MyRouteOut {
  *  returns it once at creation and never lists it. */
 export interface CollectionTokenSummary {
   id: string;
-  company_id: string;
+  /** NULL for an open, platform-owned campaign (ADR-423). */
+  company_id: string | null;
+  /** 'open' — anyone with the link; 'company' — an authenticated employee of
+   *  company_id. Decided by who created it, never by the request. */
+  scope: 'open' | 'company';
   label: string;
   daily_cap: number;
   revoked_at: string | null;
@@ -3062,16 +3075,26 @@ export interface CollectionTokenCreated {
   label: string;
   daily_cap: number;
   created_at: string;
+  scope: 'open' | 'company';
+  company_id: string | null;
   token: string | null;
 }
 
 /** One building profile submitted from the public collection page. */
 export interface CollectedProfile {
   id: string;
-  company_id: string;
+  company_id: string | null;
   token_id: string;
   address: string;
+  // ADR-418/419. These four drifted: the server has returned them since the
+  // taxonomy change and this interface did not list them, so the super-admin
+  // CSV silently omitted four columns of collected data.
+  building_category: string;
   building_type: string;
+  has_security_desk: boolean;
+  workloads: string[];
+  workload_other: string | null;
+  /** Kept in step with workloads[0] for readers that expect one value. */
   workload_class: string;
   note: string | null;
   opens_at: string | null;
@@ -3083,4 +3106,43 @@ export interface CollectedProfile {
   collected_on: string;
   submitted_at: string;
   review_status: string;
+}
+
+/** One logged walker day (ADR-417 D3). Listing shape — counts, no payload. */
+export interface CollectedWalkerDay {
+  id: string;
+  company_id: string | null;
+  token_id: string;
+  walker_name: string;
+  collected_on: string;
+  arrival_time: string | null;
+  departure_time: string | null;
+  route_count: number;
+  tote_count: number;
+  rts_count: number;
+  submitted_at: string;
+  /** Bumped on every overwrite, so a corrected day is distinguishable from a
+   *  first submission without diffing payloads. */
+  revision: number;
+}
+
+/** The listing row plus the whole day. Fetched one at a time: a page of forty
+ *  days with every tote and address inline is a large response. */
+export interface CollectedWalkerDayDetail extends CollectedWalkerDay {
+  payload: {
+    walker_name: string;
+    collected_on: string;
+    arrival_time: string;
+    departure_time: string;
+    routes: {
+      route_id: number;
+      route_start: string;
+      route_end: string;
+      difficulty: string;
+      notes: string;
+      totes: { bag_id: string; addresses: string[]; sort_zone?: string | null; stop?: string | null }[];
+      ovs: { ov_id: string; size: string; address: string; sort_zone: string }[];
+      rts: { tba: string; code: string; reason: string }[];
+    }[];
+  };
 }

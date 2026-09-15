@@ -12,9 +12,9 @@ from datetime import date, time
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.location_profile import BUILDING_TYPES, WORKLOAD_CLASSES
+from app.schemas.building_taxonomy import BUILDING_TYPES, OTHER, validate_workloads
 
 
 class CollectedProfileIn(BaseModel):
@@ -22,8 +22,24 @@ class CollectedProfileIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     address:        str = Field(..., min_length=3, max_length=200)
-    building_type:  str = Field(..., max_length=30)
-    workload_class: str = Field(..., max_length=20)
+    building_type:  str = Field(..., max_length=40)
+
+    # ADR-418. `building_category` is deliberately ABSENT from the request: it
+    # is derived from building_type server-side. Accepting it would let a client
+    # send residential/loading_dock, and a stored contradiction is worse than a
+    # lookup.
+    has_security_desk: bool = False
+
+    # Multi-select, and REQUIRED to be non-empty — ["not_applicable"] is how a
+    # collector says "none of these", which is a different statement from an
+    # unanswered field. max_length caps it at the tag count so a client cannot
+    # send the same tag a thousand times.
+    workloads: list[str] = Field(..., min_length=1, max_length=5)
+
+    # ADR-419. Required when `other` is picked and forbidden otherwise — see
+    # the model validator. Bounded like every other free-text field at this
+    # trust boundary.
+    workload_other: Optional[str] = Field(None, max_length=200)
 
     note:         Optional[str]  = Field(None, max_length=2000)
     opens_at:     Optional[time] = None
@@ -44,12 +60,39 @@ class CollectedProfileIn(BaseModel):
             raise ValueError(f"Unknown building_type: {v!r}")
         return v
 
-    @field_validator("workload_class")
+    @model_validator(mode="after")
+    def _workloads_agree_with_the_type(self):
+        """Cross-field rules, which a per-field validator cannot see.
+
+        Two of them:
+          - A walk-up is neither a high-rise nor a bulk drop (ADR-419). Checked
+            here because it needs BOTH fields.
+          - `other` means the four tags do not fit, so it must come with the
+            text that says what does; and text without the tag is a value no
+            reader would ever look at.
+        """
+        validate_workloads(self.workloads, self.building_type)
+
+        has_other = OTHER in self.workloads
+        text = (self.workload_other or "").strip()
+        if has_other and not text:
+            raise ValueError("Pick 'other' and say what it is.")
+        if text and not has_other:
+            raise ValueError("workload_other is only meaningful with the 'other' tag.")
+        return self
+
+    @field_validator("workloads")
     @classmethod
-    def _known_workload(cls, v: str) -> str:
-        if v not in WORKLOAD_CLASSES:
-            raise ValueError(f"Unknown workload_class: {v!r}")
-        return v
+    def _known_workloads(cls, v: list[str]) -> list[str]:
+        # Shape only. The rules that need another field (walk-up exclusivity,
+        # `other` requiring its text) are in the model validator above, which
+        # runs after every field is populated.
+        validate_workloads(v)
+        # De-duplicated but ORDER PRESERVED: the set of tags is what matters,
+        # and sorting would discard the order the collector picked them in for
+        # no gain.
+        seen: set[str] = set()
+        return [t for t in v if not (t in seen or seen.add(t))]
 
     @field_validator("address", "note", "collected_by")
     @classmethod
@@ -77,12 +120,76 @@ class CollectionSubmitIn(BaseModel):
 class CollectionSubmitOut(BaseModel):
     """What the submitter is told.
 
-    Deliberately thin. It confirms receipt and nothing else — no ids, no echo of
-    what was stored, no indication of what else is in the table. A public
-    endpoint's response is an information-disclosure surface (ADR-415 D4).
+    Deliberately thin. It confirms receipt and nothing else — no ids, no listing,
+    no lookup, no indication of what else is in the table. A public endpoint's
+    response is an information-disclosure surface (ADR-415 D4).
+
+    `duplicate_addresses` is the one echo, and it is NOT a read path. It returns
+    only addresses present in THIS request that the campaign had already
+    received — data the submitter supplied and already holds. It supports no
+    enumeration: you cannot learn whether an address is known without already
+    knowing the address and submitting a complete profile for it, which costs a
+    row against the daily cap.
+
+    It exists because the alternative is worse for privacy, not better. Without
+    it a collector re-profiles a building someone else already did, discovers
+    this from a bare count after the typing is done, and keeps doing it —
+    every wasted visit being another person standing at a real door.
     """
     accepted:  int
     duplicate: int
+    duplicate_addresses: list[str] = []
+
+
+class CollectionCheckIn(BaseModel):
+    """Ask whether one address is already collected under this campaign.
+
+    ONE address per call, deliberately. A list parameter would turn this into a
+    bulk oracle: paste a thousand addresses, learn the campaign's whole
+    coverage in one request. One-at-a-time plus the rate limit makes mapping
+    the campaign slow enough to be pointless, while costing a collector nothing
+    — they check one door because they are standing at one door.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    token:   str = Field(..., min_length=16, max_length=64)
+    address: str = Field(..., min_length=3, max_length=200)
+
+
+VERIFICATION_LIMIT = 2
+"""How many independent observations a door may collect before it is closed.
+
+Two, because the point is VERIFICATION: a second collector either confirms the
+first or disagrees with them, and both outcomes are informative. A third adds
+cost (someone walks to a door that is already answered twice) without adding
+information, so the door locks.
+"""
+
+
+class CollectionCheckOut(BaseModel):
+    """A count, a date, and whether the door is closed.
+
+    `collected_on` is included because "already done" is far more convincing
+    with a date on it, and it reveals nothing the bit did not: the caller
+    already knows the address and already knows it was collected.
+
+    Nothing else. Not who collected it, not the building type, not an id —
+    those would make this a read path for the record rather than a check for
+    its existence.
+    """
+    known:        bool
+    collected_on: Optional[date] = None
+
+    # ADR-420. How many observations this campaign already has for the door,
+    # and whether that has reached the limit.
+    #
+    # A COUNT, not just a bit, is a wider disclosure than the original check —
+    # but only by "how many times", about an address the caller already named
+    # and already knows is collected. It buys the thing the bit could not: a
+    # collector can be told "one more needed" instead of being turned away from
+    # a door that still wants verifying.
+    count:  int  = 0
+    locked: bool = False
 
 
 class CollectionTokenCreate(BaseModel):
@@ -92,6 +199,23 @@ class CollectionTokenCreate(BaseModel):
     label:      str = Field(..., min_length=1, max_length=120)
     daily_cap:  int = Field(500, ge=1, le=5000)
     expires_in_days: Optional[int] = Field(None, ge=1, le=365)
+
+    # ADR-423. Deliberately ABSENT: `scope` and `company_id` are decided by WHO
+    # is calling, not by what they ask for. A super admin creates an open
+    # campaign; a company admin creates one bound to their own company. Letting
+    # the body choose would let a company admin mint an open campaign, which is
+    # precisely the boundary this ADR draws.
+
+
+# ADR-423. Who may submit under a campaign.
+#
+# OPEN     — anyone with the link. Super admin only: it collects across tenants
+#            and its rows carry no company_id, so no company admin can read it.
+# COMPANY  — an authenticated employee of the owning company. The link is not
+#            enough; this is the Driver Survey model, scoped to a staff pool.
+SCOPE_OPEN = "open"
+SCOPE_COMPANY = "company"
+SCOPES = frozenset({SCOPE_OPEN, SCOPE_COMPANY})
 
 
 class CollectionTokenOut(BaseModel):
@@ -104,6 +228,8 @@ class CollectionTokenOut(BaseModel):
     label:      str
     daily_cap:  int
     created_at: object
+    scope:      str
+    company_id: Optional[UUID] = None
     token:      Optional[str] = None
 
 
@@ -123,9 +249,13 @@ class CollectedProfileOut(BaseModel):
     id:             UUID
     company_id:     UUID
     token_id:       UUID
-    address:        str
-    building_type:  str
-    workload_class: str
+    address:           str
+    building_type:     str
+    building_category: str
+    has_security_desk: bool
+    workloads:         list[str]
+    workload_other:    Optional[str]
+    workload_class:    str
     note:           Optional[str]
     opens_at:       Optional[time]
     closes_at:      Optional[time]
@@ -148,7 +278,9 @@ class CollectionTokenSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id:          UUID
-    company_id:  UUID
+    # NULL for an open campaign (ADR-423).
+    company_id:  Optional[UUID]
+    scope:       str
     label:       str
     daily_cap:   int
     revoked_at:  Optional[object]

@@ -24,7 +24,7 @@ from sqlalchemy import (
     Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, Time,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 
 from app.models.base import Base
@@ -45,7 +45,14 @@ class CollectionToken(Base):
     __tablename__ = "collection_tokens"
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    # ADR-423. NULL means OPEN: a super-admin campaign belongs to no tenant,
+    # which is the literal truth rather than a sentinel company standing in for
+    # one. A company admin's campaign carries their id.
+    #
+    # This is what keeps the two kinds apart on read: a company admin filters by
+    # their own id, which never matches NULL, so open data cannot appear in a
+    # tenant view by construction rather than by remembering to exclude it.
+    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # The secret itself. Compared in full; never logged, never returned after
     # creation. Long enough that guessing is not a threat model.
@@ -64,7 +71,15 @@ class CollectionToken(Base):
     # and a per-IP rate limit does not stop a distributed flood on one token.
     daily_cap   = Column(Integer, nullable=False, server_default="500")
 
+    # ADR-423. A super admin has no Employee row — that is why the create
+    # endpoint 403'd for them with "No employee record found for your account".
+    # Already nullable, now genuinely used that way.
     created_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+
+    # Who may submit, decided at creation and never inferred at submit time.
+    #   "open"    — anyone with the link (super admin only)
+    #   "company" — an authenticated employee of `company_id` (ADR-423 D2)
+    scope       = Column(String(10), nullable=False, server_default="open", index=True)
     created_by_name = Column(String(100), nullable=True)
     created_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -89,8 +104,9 @@ class CollectedAddressProfile(Base):
     )
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Resolved from the token, never from the request body (D2).
-    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    # Resolved from the token, never from the request body (ADR-415 D2).
+    # NULL for an open campaign — see CollectionToken.company_id.
+    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
     token_id    = Column(UUID(as_uuid=True),
                          ForeignKey("collection_tokens.id", ondelete="CASCADE"),
                          nullable=False, index=True)
@@ -99,8 +115,31 @@ class CollectedAddressProfile(Base):
     # form here would produce addresses matching nothing (ADR-277 D1).
     address     = Column(String(200), nullable=False)
 
+    # ADR-417 D7 — the folded form of `address`, for duplicate detection only.
+    #
+    # Stored rather than computed per query so the campaign-wide check is an
+    # index hit instead of a scan over every row folded on the fly. Never read
+    # back as data and never exported: `address` is the record, this is a
+    # lookup key. Indexed WITH token_id because every query filters on both.
+    door_key    = Column(String(200), nullable=False, server_default="", index=True)
+
     building_type  = Column(String(30), nullable=False)
     workload_class = Column(String(20), nullable=False)
+
+    # ── ADR-418 taxonomy ─────────────────────────────────────────────────────
+    # See building_profile.py for the full reasoning. In short: category is
+    # derived from type and written server-side; the security desk became a
+    # flag because it is an attribute of the door, not a kind of door; and
+    # workloads is a set because a doorman high-rise is genuinely both.
+    building_category   = Column(String(20), nullable=False,
+                                 server_default="unknown", index=True)
+    has_security_desk   = Column(Boolean, nullable=False, server_default="false")
+    workloads           = Column(JSONB, nullable=False, server_default="[]")
+    # ADR-419. Free text behind the `other` workload tag. Kept OUT of
+    # `raw_note`: the note is "anything else about this door" and this is an
+    # answer to "which workload", so merging them would make it impossible to
+    # tell later which half was which.
+    workload_other      = Column(String(200), nullable=True)
 
     note        = Column(Text, nullable=True)
 
@@ -123,3 +162,65 @@ class CollectedAddressProfile(Base):
     review_status = Column(String(20), nullable=False, server_default="pending", index=True)
     reviewed_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     reviewed_at   = Column(DateTime(timezone=True), nullable=True)
+
+
+class CollectedWalkerDay(Base):
+    """One walker's logged day, submitted from the public route log (ADR-417 D3).
+
+    A QUARANTINE TABLE, like `collected_address_profiles`. Nothing else reads
+    it, nothing joins to it, and there is no promotion path into the routing
+    model. That is deliberate and it is what makes the eventual PII strip a
+    DELETE rather than a migration: `walker_name` holds real coworkers' names,
+    stored verbatim because the whole point of the data is per-walker
+    comparison against the sort output.
+
+    The day's routes, totes, addresses, RTS and OVs live in one JSONB `payload`
+    rather than five tables. Research data, one reader, a CSV as its output —
+    normalising it would buy join performance nobody needs and cost a migration
+    every time the field log grows a column.
+    """
+    __tablename__ = "collected_walker_days"
+    __table_args__ = (
+        # ADR-417 D5 — upsert key. One row per walker per date per campaign; a
+        # resubmission REPLACES. The field connection drops mid-submit often
+        # enough that a retry has to be safe, and the page already models one
+        # row per walker per date locally.
+        UniqueConstraint(
+            "token_id", "collected_on", "walker_name",
+            name="uq_collected_days_token_day_walker",
+        ),
+    )
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Resolved from the token, never from the request body (ADR-415 D2).
+    # NULL for an open campaign — see CollectionToken.company_id.
+    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
+    token_id    = Column(UUID(as_uuid=True),
+                         ForeignKey("collection_tokens.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+
+    # As typed. NOT resolved to employees.id: a FK would give referential
+    # integrity and make the eventual strip a schema change touching live
+    # relationships, where this is a DELETE.
+    walker_name  = Column(String(100), nullable=False)
+    collected_on = Column(Date, nullable=False, index=True)
+
+    arrival_time   = Column(String(5), nullable=True)   # "HH:MM", station-local
+    departure_time = Column(String(5), nullable=True)
+
+    # Denormalised counts, written from the payload at submit time. They exist
+    # so the super-admin listing can show "3 routes, 41 totes" without parsing
+    # every payload — a read-time aggregate over JSONB would be the same work
+    # repeated on every page load.
+    route_count = Column(Integer, nullable=False, server_default="0")
+    tote_count  = Column(Integer, nullable=False, server_default="0")
+    rts_count   = Column(Integer, nullable=False, server_default="0")
+
+    # The whole day, validated by WalkerDayIn before it lands here.
+    payload = Column(JSONB, nullable=False, server_default="{}")
+
+    submitted_at = Column(DateTime(timezone=True), nullable=False,
+                          server_default=func.now())
+    # Bumped on every overwrite, so a reader can tell a corrected day from a
+    # first submission without diffing payloads.
+    revision = Column(Integer, nullable=False, server_default="1")

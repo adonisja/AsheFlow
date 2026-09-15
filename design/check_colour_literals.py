@@ -70,6 +70,19 @@ EXEMPT: dict[str, str] = {
         "generated FROM the palette — it IS the token layer",
     "frontend/src/pages/PrintLoadSheets.tsx":
         "printed output has no theme; print CSS needs literal values",
+    # These depict PHYSICAL OBJECTS, not UI. A navy bag is navy in the walker's
+    # hand, and the swatch's whole job is matching the thing on the cart. A
+    # token would make the swatch follow a palette change and stop matching
+    # reality, which is the opposite of what every other literal in this
+    # codebase gets flagged for. Theme-neutral by intent: the bag is the same
+    # colour in dark mode.
+    #
+    # The values are physical bag colours from the workbook (navy, black,
+    # green, yellow, orange, red, blue, purple, white, grey) plus a neutral
+    # fallback so an unrecognised colour renders a visible swatch rather than
+    # disappearing.
+    "frontend/src/components/walkerlog/bagColors.ts":
+        "physical bag colours — must match the object, not the theme",
 }
 
 # Specific literals that are legitimate anywhere: third-party brand colours we

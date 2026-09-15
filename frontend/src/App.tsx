@@ -56,6 +56,7 @@ import CompanyDetail from './pages/superadmin/CompanyDetail';
 import PlatformAlerts from './pages/superadmin/PlatformAlerts';
 import PlatformStaff from './pages/superadmin/PlatformStaff';
 import CollectionData from './pages/superadmin/CollectionData';
+import BuildingSurvey from './pages/BuildingSurvey';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
   const { companyId } = useParams<{ companyId: string }>();
@@ -70,6 +71,7 @@ import ScorecardAppeals from './pages/ScorecardAppeals';
 import ScorecardRoster from './pages/ScorecardRoster';
 import Scorecards from './pages/Scorecards';
 import FieldPackages from './pages/FieldPackages';
+import WalkerLog from './pages/WalkerLog';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -218,6 +220,21 @@ function App() {
         <Routes>
           <Route path="/login"    element={<Login />} />
           <Route path="/register" element={<Register />} />
+
+          {/* Local manual research log — deliberately UNGATED and outside
+              <Layout>. It is a data-entry instrument: everything it records
+              lives in this browser's IndexedDB and it makes no API call, so
+              there is no tenant data to protect and no token to authenticate
+              with. Requiring a login would mean signing in to type notes into
+              your own browser. Kept off the Layout shell too, so it does not
+              render a nav that assumes an AuthContext user. */}
+          <Route path="/walker-log"  element={<WalkerLog dataset="routes" />} />
+          {/* Same page, other dataset. Two URLs because these are two jobs:
+              one person logs what a walker carried, another profiles a door.
+              Handing out /address-log does not invite anyone into the route
+              log, and the in-page switcher still moves between them without a
+              network round trip. */}
+          <Route path="/address-log" element={<WalkerLog dataset="addresses" />} />
           
           {/* Setup gate — full-screen, no navbar, shown to admins before company is configured */}
           <Route
@@ -426,6 +443,16 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
                   <OperationsAnalytics />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-423. A company's own building survey, scoped to their
+                employee pool the way Driver Survey is. */}
+            <Route
+              path="/building-survey"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <BuildingSurvey />
                 </ProtectedRoute>
               }
             />
