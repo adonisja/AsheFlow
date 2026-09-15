@@ -76,9 +76,18 @@ export default defineConfig({
      */
     proxy: {
       '/api': {
-        target: 'https://api-staging.asheflow.com',
+        // Staging by default so a fresh checkout has a working backend with no
+        // setup. Point it at a local API with:
+        //
+        //   VITE_PROXY_TARGET=http://localhost:8010 npm run dev
+        //
+        // An env var rather than an edit here: this file is tracked, and
+        // flipping it locally means either committing the local address by
+        // accident or remembering to revert it every time.
+        target: process.env.VITE_PROXY_TARGET || 'https://api-staging.asheflow.com',
         changeOrigin: true,
-        secure: true,
+        // A local API is plain http and has no certificate to verify.
+        secure: !process.env.VITE_PROXY_TARGET,
       },
     },
   }
