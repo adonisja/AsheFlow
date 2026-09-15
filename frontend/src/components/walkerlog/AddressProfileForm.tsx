@@ -3,8 +3,8 @@ import { ChevronDown, ChevronRight, Trash2, AlertTriangle, Info } from 'lucide-r
 import BuildingTypePicker from './BuildingTypePicker';
 import LabelScanner from './LabelScanner';
 import {
-  BUILDING_CATEGORIES, BUILDING_TYPES, NOT_APPLICABLE, SECURITY_DESK_PROTOCOL,
-  TYPE_PROTOCOL, WORKLOAD_TAGS, doorKey, workloadError,
+  BUILDING_CATEGORIES, BUILDING_TYPES, OTHER, SECURITY_DESK_PROTOCOL,
+  TYPE_PROTOCOL, WORKLOAD_TAGS, doorKey, isIncompatible, workloadError,
   type AddressProfile,
 } from '../../utils/addressProfile';
 
@@ -68,8 +68,11 @@ export default function AddressProfileForm({
    *  the whole point of the multi-select is that a door can be two things, and
    *  a summary showing only the first would hide exactly that. */
   const workLabel = profile.workloads
-    .map((t) => WORKLOAD_TAGS.find((w) => w.value === t)?.label
-      ?? (t === NOT_APPLICABLE ? 'n/a' : t))
+    .map((t) => (t === OTHER
+      // The collapsed header shows what "other" MEANT, not the word "other",
+      // which would tell the reader nothing they could act on.
+      ? (profile.workload_other.trim() || 'other')
+      : WORKLOAD_TAGS.find((w) => w.value === t)?.label ?? t))
     .join(', ');
 
   return (
@@ -208,7 +211,12 @@ export default function AddressProfileForm({
                 onChange={(e) => set({ has_security_desk: e.target.checked })}
                 className="h-4 w-4 rounded border-border accent-primary"
               />
-              <span>Security desk</span>
+              <span>
+                Security desk
+                <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                  (requires photo ID)
+                </span>
+              </span>
             </label>
 
             {profile.building_type && TYPE_PROTOCOL[profile.building_type] && (
@@ -232,54 +240,85 @@ export default function AddressProfileForm({
                 genuinely both bulk drop and high-rise, which one value could
                 not say. */}
             <div className="mt-1 space-y-1">
-              {WORKLOAD_TAGS.map((w) => (
-                <label key={w.value} className="flex items-start gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={profile.workloads.includes(w.value)}
-                    onChange={(e) => set({
-                      workloads: e.target.checked
-                        // Ticking a real tag clears "none of these" — the two
-                        // are contradictory, and making the user untick it
-                        // first is friction with no purpose.
-                        ? [...profile.workloads.filter((t) => t !== NOT_APPLICABLE), w.value]
-                        : profile.workloads.filter((t) => t !== w.value),
-                    })}
-                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary"
-                  />
-                  <span className="min-w-0">
-                    {w.label}
-                    <span className="block text-[11px] text-muted-foreground">{w.hint}</span>
-                  </span>
-                </label>
-              ))}
+              {WORKLOAD_TAGS.map((w) => {
+                // A walk-up is neither a high-rise nor a bulk drop. DISABLED
+                // rather than hidden: a box that vanishes when you pick a type
+                // looks like a rendering glitch, where a greyed one with a
+                // reason teaches the rule. The server rejects the pair too —
+                // this is the explanation, not the guarantee.
+                const blocked = isIncompatible(profile.building_type, w.value);
+                return (
+                  <label
+                    key={w.value}
+                    title={blocked ? `Not possible for a ${typeLabel?.toLowerCase()}.` : undefined}
+                    className={`flex items-start gap-2 text-sm ${blocked ? 'opacity-40' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={blocked}
+                      checked={profile.workloads.includes(w.value)}
+                      onChange={(e) => set({
+                        workloads: e.target.checked
+                          // Ticking a real tag clears "other": the four tags
+                          // not fitting and one of them fitting cannot both be
+                          // true, and making the user untick it first is
+                          // friction with no purpose.
+                          ? [...profile.workloads.filter((t) => t !== OTHER), w.value]
+                          : profile.workloads.filter((t) => t !== w.value),
+                        ...(e.target.checked ? { workload_other: '' } : {}),
+                      })}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary disabled:cursor-not-allowed"
+                    />
+                    <span className="min-w-0">
+                      {w.label}
+                      <span className="block text-[11px] text-muted-foreground">{w.hint}</span>
+                    </span>
+                  </label>
+                );
+              })}
 
-              {/* Separated by a rule: this is an answer ABOUT the others, not a
-                  peer of them. Ticking it clears the rest. */}
+              {/* Separated by a rule: an answer ABOUT the others, not a peer
+                  of them. Ticking it clears the rest and opens a text field —
+                  "the four do not fit" is only useful alongside what does. */}
               <label className="mt-1 flex items-start gap-2 border-t border-border pt-1.5 text-sm">
                 <input
                   type="checkbox"
-                  checked={profile.workloads.includes(NOT_APPLICABLE)}
+                  checked={profile.workloads.includes(OTHER)}
                   onChange={(e) => set({
-                    workloads: e.target.checked ? [NOT_APPLICABLE] : [],
+                    workloads: e.target.checked ? [OTHER] : [],
+                    // Clearing the tag clears the text: orphaned text is a
+                    // value nothing would ever read, and the server rejects it.
+                    ...(e.target.checked ? {} : { workload_other: '' }),
                   })}
                   className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary"
                 />
                 <span className="min-w-0">
-                  None of these apply
+                  Other
                   <span className="block text-[11px] text-muted-foreground">
-                    an answer, not a blank
+                    none of the four fit
                   </span>
                 </span>
               </label>
+
+              {profile.workloads.includes(OTHER) && (
+                <input
+                  autoFocus
+                  value={profile.workload_other}
+                  onChange={(e) => set({ workload_other: e.target.value })}
+                  maxLength={200}
+                  placeholder="What makes this door different?"
+                  className={`${INPUT} mt-1`}
+                />
+              )}
             </div>
 
             {/* Shown once the address exists, so a brand-new empty row does not
                 open already scolding the collector. */}
-            {profile.address.trim() && workloadError(profile.workloads) && (
+            {profile.address.trim()
+              && workloadError(profile.workloads, profile.building_type, profile.workload_other) && (
               <p className="mt-1 flex items-start gap-1 text-[11px] font-medium text-warning">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                {workloadError(profile.workloads)}
+                {workloadError(profile.workloads, profile.building_type, profile.workload_other)}
               </p>
             )}
           </div>

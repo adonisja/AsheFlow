@@ -69,6 +69,9 @@ export async function submitProfiles(
         // sending it would 422 the whole batch.
         has_security_desk: p.has_security_desk,
         workloads: p.workloads,
+        // null, not '' — the server forbids text without the `other` tag, and
+        // an empty string is text.
+        workload_other: p.workload_other?.trim() || null,
         note: p.note || null,
         opens_at: p.opens_at || null,
         closes_at: p.closes_at || null,

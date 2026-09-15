@@ -74,6 +74,11 @@ class BuildingProfileLibrary(Base):
                                  server_default="unknown", index=True)
     has_security_desk   = Column(Boolean, nullable=False, server_default="false")
     workloads           = Column(JSONB, nullable=False, server_default="[]")
+    # ADR-419. Free text behind the `other` workload tag. Kept OUT of
+    # `raw_note`: the note is "anything else about this door" and this is an
+    # answer to "which workload", so merging them would make it impossible to
+    # tell later which half was which.
+    workload_other      = Column(String(200), nullable=True)
 
     # Operational note — captain-verified tip promoted from the source company record
     # raw_notes are not promoted — only the structured operational_note is carried forward

@@ -116,6 +116,11 @@ class BuildingProfile(Base):
     # WORKLOAD_TAGS; ["not_applicable"] is an explicit "none apply", which is
     # why an empty list is a validation error rather than a silent blank.
     workloads           = Column(JSONB, nullable=False, server_default="[]")
+    # ADR-419. Free text behind the `other` workload tag. Kept OUT of
+    # `raw_note`: the note is "anything else about this door" and this is an
+    # answer to "which workload", so merging them would make it impossible to
+    # tell later which half was which.
+    workload_other      = Column(String(200), nullable=True)
 
     # Operational notes — surfaced to walker at delivery time
     raw_note            = Column(Text, nullable=True)           # walker free-text submission
