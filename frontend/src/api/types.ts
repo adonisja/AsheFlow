@@ -3052,7 +3052,11 @@ export interface MyRouteOut {
  *  returns it once at creation and never lists it. */
 export interface CollectionTokenSummary {
   id: string;
-  company_id: string;
+  /** NULL for an open, platform-owned campaign (ADR-423). */
+  company_id: string | null;
+  /** 'open' — anyone with the link; 'company' — an authenticated employee of
+   *  company_id. Decided by who created it, never by the request. */
+  scope: 'open' | 'company';
   label: string;
   daily_cap: number;
   revoked_at: string | null;
@@ -3071,13 +3075,15 @@ export interface CollectionTokenCreated {
   label: string;
   daily_cap: number;
   created_at: string;
+  scope: 'open' | 'company';
+  company_id: string | null;
   token: string | null;
 }
 
 /** One building profile submitted from the public collection page. */
 export interface CollectedProfile {
   id: string;
-  company_id: string;
+  company_id: string | null;
   token_id: string;
   address: string;
   // ADR-418/419. These four drifted: the server has returned them since the
@@ -3105,7 +3111,7 @@ export interface CollectedProfile {
 /** One logged walker day (ADR-417 D3). Listing shape — counts, no payload. */
 export interface CollectedWalkerDay {
   id: string;
-  company_id: string;
+  company_id: string | null;
   token_id: string;
   walker_name: string;
   collected_on: string;

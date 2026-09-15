@@ -32,9 +32,44 @@ def upgrade() -> None:
                                    nullable=False, server_default="[]"))
         op.create_index(f"ix_{t}_building_category", t, ["building_category"])
 
-    from app.schemas.building_taxonomy import (
-        LEGACY_SECURITY_DESK, LEGACY_TYPE_MAP, NOT_APPLICABLE, category_for,
-    )
+    # FROZEN AT THIS REVISION, not imported from app.schemas.
+    #
+    # This originally did `from app.schemas.building_taxonomy import ...`, and
+    # ADR-419 then renamed NOT_APPLICABLE to OTHER — so a fresh
+    # `alembic upgrade head` crashed with ImportError while every existing
+    # database, already past this revision, kept working. A migration runs
+    # against TODAY's application code but must express the schema as it was at
+    # its own revision; the only safe dependency is the standard library.
+    LEGACY_TYPE_MAP = {
+        "walkup":            "walkup",
+        "elevator":          "elevator",
+        "doorman":           "doorman_reception",
+        "receptionist":      "doorman_reception",
+        "mailroom":          "mailroom",
+        "biz_front":         "storefront_front_door",
+        "biz_freight":       "freight",
+        "biz_security":      "storefront_front_door",   # + has_security_desk
+        "biz_loading_dock":  "loading_dock",
+        "unknown":           "unknown",
+    }
+    LEGACY_SECURITY_DESK = {"biz_security"}
+    RESIDENTIAL = {"walkup", "elevator", "doorman_reception", "mailroom", "lockers"}
+    COMMERCIAL = {
+        "storefront_reception", "storefront_front_door", "freight",
+        "loading_dock", "loading_dock_mailroom",
+    }
+
+    def category_for(building_type: str) -> str:
+        if building_type in RESIDENTIAL:
+            return "residential"
+        if building_type in COMMERCIAL:
+            return "commercial"
+        return "unknown"
+
+    # The workload tag this revision wrote. ADR-419 renamed it to "other" and
+    # migration 9c32a580c1d3 rewrites these rows — so this must keep writing the
+    # OLD name, or that later migration finds nothing to rename.
+    NOT_APPLICABLE = "not_applicable"
 
     conn = op.get_bind()
     for t in _TABLES:

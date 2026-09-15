@@ -27,12 +27,46 @@ def upgrade() -> None:
         ["token_id", "door_key"],
     )
 
-    # Backfill with the SAME fold as app.services.door_key, in Python rather
-    # than SQL: the fold is ordered (ordinals before directions) and expressing
-    # that as nested REPLACEs would be a second implementation of the rule that
-    # could drift from the first. Existing volume is small — this is a research
-    # table — so a row-by-row pass is the honest choice.
-    from app.services.door_key import door_key
+    # Backfill with the fold as it stood AT THIS REVISION, inlined rather than
+    # imported.
+    #
+    # `from app.services.door_key import door_key` would run today's fold, not
+    # this revision's: an edit to the rule would silently change what this
+    # backfill produces, and a rename would crash a fresh
+    # `alembic upgrade head` outright (see 46f04059c09f, which did exactly
+    # that). A migration must express the schema at its own point in history,
+    # so the only safe dependency is the standard library.
+    #
+    # Python rather than SQL because the fold is ORDERED — ordinals before
+    # directions — and nested REPLACEs would be a second implementation of the
+    # rule. Volume is small; this is a research table.
+    import re as _re
+
+    _PUNCT      = _re.compile(r"[.,#]")
+    _ORDINAL    = _re.compile(r"\b(\d+)(st|nd|rd|th)\b")
+    _DIRECTION  = _re.compile(r"\b(north|south|east|west)\b")
+    _UNIT_TAIL  = _re.compile(r"\b(apartment|apt|unit|suite|ste)\b.*$")
+    _WHITESPACE = _re.compile(r"\s+")
+    _STREET_TYPES = [
+        (_re.compile(r"\b(street|st)\b"), "st"),
+        (_re.compile(r"\b(avenue|ave|av)\b"), "ave"),
+        (_re.compile(r"\b(boulevard|blvd)\b"), "blvd"),
+        (_re.compile(r"\b(road|rd)\b"), "rd"),
+        (_re.compile(r"\b(place|pl)\b"), "pl"),
+        (_re.compile(r"\b(drive|dr)\b"), "dr"),
+        (_re.compile(r"\b(lane|ln)\b"), "ln"),
+        (_re.compile(r"\b(parkway|pkwy)\b"), "pkwy"),
+    ]
+
+    def door_key(address: str) -> str:
+        s = address.lower()
+        s = _PUNCT.sub(" ", s)
+        s = _ORDINAL.sub(r"\1", s)
+        s = _DIRECTION.sub(lambda m: m.group(0)[0], s)
+        for pattern, canon in _STREET_TYPES:
+            s = pattern.sub(canon, s)
+        s = _UNIT_TAIL.sub("", s)
+        return _WHITESPACE.sub(" ", s).strip()
 
     conn = op.get_bind()
     rows = conn.execute(

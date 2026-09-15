@@ -56,6 +56,7 @@ import CompanyDetail from './pages/superadmin/CompanyDetail';
 import PlatformAlerts from './pages/superadmin/PlatformAlerts';
 import PlatformStaff from './pages/superadmin/PlatformStaff';
 import CollectionData from './pages/superadmin/CollectionData';
+import BuildingSurvey from './pages/BuildingSurvey';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
   const { companyId } = useParams<{ companyId: string }>();
@@ -442,6 +443,16 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
                   <OperationsAnalytics />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-423. A company's own building survey, scoped to their
+                employee pool the way Driver Survey is. */}
+            <Route
+              path="/building-survey"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <BuildingSurvey />
                 </ProtectedRoute>
               }
             />

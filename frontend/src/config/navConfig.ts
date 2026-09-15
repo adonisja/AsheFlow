@@ -70,6 +70,9 @@ export const NAV_ITEMS: NavItem[] = [
   // reviewer. The backend gate in audit.py moved in step.
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
+  // ADR-423. A company's own building survey: the admin issues a collection
+  // link, their signed-in staff fill it in, and only their admins read it.
+  { path: '/building-survey',       label: 'Building Survey',   icon: ClipboardList,  roles: ['admin', 'management'] },
   // ADR-277 D3: truck-scoped, alongside the company-wide list above. Field
   // roles + sign-off roles — the same union that gates the endpoint.
   // Explicit list, NOT ...ALL_FIELD: that spread includes `driver`, and a

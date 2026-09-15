@@ -147,7 +147,20 @@ function sheetBlob(name: string, header: readonly string[], rows: unknown[][]): 
   });
 }
 
-export default function CollectionData() {
+export default function CollectionData({ platform = true }: {
+  /** Whose view this is (ADR-423).
+   *
+   *  ONE component for both, because the endpoints already scope themselves:
+   *  a super admin's reads return everything, a company admin's return only
+   *  their own company's rows, and create_token decides the scope from the
+   *  caller. Duplicating the page would duplicate the campaign list, the
+   *  drill-down, three export formats and the token controls in order to change
+   *  a heading — and the duplicate would drift.
+   *
+   *  What this flag changes is only what the page SAYS, not what it can do.
+   *  The gate is server-side; this is copy. */
+  platform?: boolean;
+}) {
   const [tokens, setTokens] = useState<CollectionTokenSummary[]>([]);
   const [profiles, setProfiles] = useState<CollectedProfile[]>([]);
   const [activeToken, setActiveToken] = useState<string | null>(null);
@@ -362,9 +375,11 @@ export default function CollectionData() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        eyebrow="Platform"
-        title="Collected addresses"
-        description="Building profiles submitted from the public collection page. Read-only; nothing here changes routing."
+        eyebrow={platform ? 'Platform' : 'Survey'}
+        title={platform ? 'Collected addresses' : 'Building survey'}
+        description={platform
+          ? 'Building profiles and logged days from every campaign, open and company. Read-only; nothing here changes routing.'
+          : 'Building profiles your staff have collected. A link you issue here works only for signed-in employees of your company.'}
         actions={
           <button
             onClick={() => { void loadTokens(); void loadProfiles(activeToken); }}
@@ -494,6 +509,15 @@ export default function CollectionData() {
                             submission_count is the campaign's LIFETIME total,
                             daily_cap is a per-day ceiling checked against a
                             same-day count the listing does not return. */}
+                        {/* ADR-423. Which auth model this campaign uses, said
+                            plainly: "open link" means the link IS the
+                            credential and anyone holding it can submit, which
+                            is a different thing to hand out than a company
+                            link that also requires signing in. */}
+                        <span className={t.scope === 'open' ? 'text-warning' : ''}>
+                          {t.scope === 'open' ? 'open link' : 'company only'}
+                        </span>
+                        {' · '}
                         {t.submission_count} total · cap {t.daily_cap}/day
                         {dead && ' · revoked'}
                         {!dead && t.expires_at && ` · expires ${new Date(t.expires_at).toLocaleDateString()}`}

@@ -200,6 +200,23 @@ class CollectionTokenCreate(BaseModel):
     daily_cap:  int = Field(500, ge=1, le=5000)
     expires_in_days: Optional[int] = Field(None, ge=1, le=365)
 
+    # ADR-423. Deliberately ABSENT: `scope` and `company_id` are decided by WHO
+    # is calling, not by what they ask for. A super admin creates an open
+    # campaign; a company admin creates one bound to their own company. Letting
+    # the body choose would let a company admin mint an open campaign, which is
+    # precisely the boundary this ADR draws.
+
+
+# ADR-423. Who may submit under a campaign.
+#
+# OPEN     — anyone with the link. Super admin only: it collects across tenants
+#            and its rows carry no company_id, so no company admin can read it.
+# COMPANY  — an authenticated employee of the owning company. The link is not
+#            enough; this is the Driver Survey model, scoped to a staff pool.
+SCOPE_OPEN = "open"
+SCOPE_COMPANY = "company"
+SCOPES = frozenset({SCOPE_OPEN, SCOPE_COMPANY})
+
 
 class CollectionTokenOut(BaseModel):
     """The token is returned ONCE, at creation. It is not readable afterwards —
@@ -211,6 +228,8 @@ class CollectionTokenOut(BaseModel):
     label:      str
     daily_cap:  int
     created_at: object
+    scope:      str
+    company_id: Optional[UUID] = None
     token:      Optional[str] = None
 
 
@@ -259,7 +278,9 @@ class CollectionTokenSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id:          UUID
-    company_id:  UUID
+    # NULL for an open campaign (ADR-423).
+    company_id:  Optional[UUID]
+    scope:       str
     label:       str
     daily_cap:   int
     revoked_at:  Optional[object]

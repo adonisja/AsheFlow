@@ -26,7 +26,12 @@ from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_caller_employee, get_super_admin
+from app.api.deps import (
+    RoleChecker,
+    get_caller_employee,
+    get_caller_employee_optional,
+    get_current_user,
+)
 from app.api.ratelimit import limiter
 from app.database import get_db
 from app.models.collection import CollectedAddressProfile, CollectedWalkerDay, CollectionToken
@@ -36,6 +41,8 @@ from app.schemas.walker_day import (
     WalkerDaySubmitIn, WalkerDaySubmitOut,
 )
 from app.schemas.collection import (
+    SCOPE_COMPANY,
+    SCOPE_OPEN,
     VERIFICATION_LIMIT,
     CollectionCheckIn,
     CollectionCheckOut,
@@ -69,12 +76,43 @@ def _resolve_token(db: Session, raw: str) -> CollectionToken:
     return tok
 
 
+def _authorise_scope(tok: CollectionToken, caller: Employee | None) -> None:
+    """Who may submit under this campaign (ADR-423 D2).
+
+    OPEN campaigns are unchanged: the link is the credential, which is the whole
+    point of the public collection page.
+
+    COMPANY campaigns require an authenticated employee of the owning company.
+    The link alone is not enough — it can be forwarded, and a company survey is
+    scoped to a staff pool the way Driver Survey is. Two checks, not one:
+    authenticated AND of the right tenant, because an employee of company B
+    holding company A's link must not write into A's data.
+
+    Raises 401 when unauthenticated (the client can fix that by logging in) and
+    403 when authenticated as the wrong tenant (it cannot).
+    """
+    if tok.scope != SCOPE_COMPANY:
+        return
+    if caller is None:
+        raise HTTPException(
+            status_code=401,
+            detail="This collection link requires you to sign in.",
+        )
+    if caller.company_id != tok.company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="This collection link belongs to another company.",
+        )
+
+
 @router.post("/submit", response_model=CollectionSubmitOut, status_code=status.HTTP_202_ACCEPTED)
 @limiter.limit("30/minute")
 def submit_profiles(
     request: Request,
     body: CollectionSubmitIn,
     db: Session = Depends(get_db),
+    # ADR-423: optional, so an OPEN campaign still needs no login.
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ):
     """Accept a batch of collected building profiles.
 
@@ -82,6 +120,7 @@ def submit_profiles(
     the caller can go look at.
     """
     tok = _resolve_token(db, body.token)
+    _authorise_scope(tok, caller)
 
     # D3 — a per-IP rate limit does not stop a distributed flood on one leaked
     # token, so the token carries its own daily ceiling.
@@ -204,6 +243,8 @@ def check_address(
     request: Request,
     body: CollectionCheckIn,
     db: Session = Depends(get_db),
+    # ADR-423: optional, so an OPEN campaign still needs no login.
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ):
     """Is this door already collected under this campaign? (ADR-417 D7)
 
@@ -233,6 +274,7 @@ def check_address(
     counts — that is exactly the walk worth skipping.
     """
     tok = _resolve_token(db, body.token)
+    _authorise_scope(tok, caller)
 
     key = door_key(body.address)[:200]
     if not key:
@@ -269,6 +311,8 @@ def submit_walker_days(
     request: Request,
     body: WalkerDaySubmitIn,
     db: Session = Depends(get_db),
+    # ADR-423: optional, so an OPEN campaign still needs no login.
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ):
     """Accept a batch of logged walker days (ADR-417 D3-D5).
 
@@ -284,6 +328,7 @@ def submit_walker_days(
     from a first submission.
     """
     tok = _resolve_token(db, body.token)
+    _authorise_scope(tok, caller)
 
     # Same daily ceiling as addresses, counted in the same unit: one row is one
     # day's work by one walker. A leaked token that could not write addresses
@@ -392,17 +437,56 @@ def create_token(
     request: Request,
     body: CollectionTokenCreate,
     db: Session = Depends(get_db),
-    caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ):
-    """Issue a collection link. Management and admin only.
+    """Issue a collection link (ADR-423).
 
-    Issuing one hands out write access to a tenant's collection table, so it
-    sits behind the same gate as the rest of the tenant's configuration.
+    TWO PRINCIPALS, and the caller decides the scope — not the request body.
+
+      super admin   -> an OPEN campaign. company_id NULL, anyone with the link
+                       may submit. It collects across tenants, so no company
+                       admin can read it.
+      company admin -> a COMPANY campaign bound to their own company, and only
+                       an authenticated employee of that company may submit.
+
+    This endpoint used to take `get_caller_employee` unconditionally, so a
+    super admin hit "No employee record found for your account" on the very
+    page built for them: the platform owner has no Employee row by design
+    (see get_super_admin). The optional resolver lets both through, and the
+    branch below is what refuses everyone else.
     """
+    groups = current_user.get("cognito_groups", [])
+    is_super = "super_admin" in groups
+
+    if is_super:
+        company_id = None
+        scope = SCOPE_OPEN
+        created_by = None
+        created_by_name = current_user.get("username") or "platform"
+    else:
+        # A company admin. RoleChecker is not used here because the two
+        # principals need different gates on one endpoint; the role check is
+        # inline and does the same job.
+        if caller is None:
+            raise HTTPException(
+                status_code=403,
+                detail="No employee record found for your account. Contact your manager.",
+            )
+        if (caller.role or "").lower() not in ("management", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only management or admin can issue a collection link.",
+            )
+        company_id = caller.company_id
+        scope = SCOPE_COMPANY
+        created_by = caller.id
+        created_by_name = f"{caller.first_name} {caller.last_name}".strip()
+
     raw = secrets.token_urlsafe(32)[:64]
     tok = CollectionToken(
-        company_id=caller.company_id,
+        scope=scope,
+        company_id=company_id,
         token=raw,
         label=body.label,
         daily_cap=body.daily_cap,
@@ -410,8 +494,8 @@ def create_token(
             datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
             if body.expires_in_days else None
         ),
-        created_by=caller.id,
-        created_by_name=f"{caller.first_name} {caller.last_name}".strip(),
+        created_by=created_by,
+        created_by_name=created_by_name,
     )
     db.add(tok)
     db.flush()
@@ -420,9 +504,9 @@ def create_token(
         action_type="collection.token.create",
         target_table="collection_tokens",
         target_id=str(tok.id),
-        actor_id=str(caller.id),
-        company_id=str(caller.company_id),
-        detail={"label": tok.label, "daily_cap": tok.daily_cap},
+        actor_id=str(created_by) if created_by else None,
+        company_id=str(company_id) if company_id else None,
+        detail={"label": tok.label, "daily_cap": tok.daily_cap, "scope": scope},
     )
     db.commit()
     db.refresh(tok)
@@ -474,19 +558,52 @@ def revoke_token(
     return {"revoked": True}
 
 
-# ── Platform owner read (ADR-415 addendum) ───────────────────────────────────
+# ── Reads (ADR-415 addendum, rescoped by ADR-423) ────────────────────────────
 #
-# WHY get_super_admin AND NOT get_platform_staff
-# ----------------------------------------------
-# These rows are customer delivery addresses. ADR-343 D4 is explicit that no
-# endpoint gated by `platform_support` may return addresses or personal data,
-# because that login is cross-tenant and PII behind it becomes a cross-tenant
-# PII surface. The platform OWNER reading data collected for their own campaigns
-# is a different principal from support staff diagnosing a ticket, so this takes
-# the stricter gate.
+# WHO CAN READ WHAT
+# -----------------
+# super admin   — everything. Open campaigns are the platform's own.
+# company admin — only rows carrying their company_id. Open-campaign rows carry
+#                 NULL, and `company_id == <uuid>` never matches NULL, so they
+#                 are excluded by the comparison rather than by a clause someone
+#                 has to remember. See _scope_reads.
+# anyone else   — 403.
+#
+# STILL NOT get_platform_staff, and this is the part ADR-423 must not erode.
+# These rows are customer delivery addresses and, on the walker-day side, real
+# coworkers' names. ADR-343 D4 is explicit that no endpoint gated by
+# `platform_support` may return addresses or personal data, because that login
+# is cross-tenant and PII behind it becomes a cross-tenant PII surface. Widening
+# from "super admin only" to "super admin OR the owning company's admin" adds a
+# principal who already owns the data; it does not add a cross-tenant one.
 #
 # These are the ONLY reads on collected data. The public submit path still
 # exposes none (ADR-415 D4) — the collector already has their own local copy.
+
+
+def _scope_reads(q, model, current_user: dict, caller: Employee | None):
+    """Narrow a read to what this caller may see (ADR-423 D3).
+
+    A super admin sees everything, open and company alike — they are the
+    platform owner and the open campaigns are theirs.
+
+    A company admin sees ONLY rows carrying their own company_id. Open-campaign
+    rows carry NULL, and `company_id == <uuid>` never matches NULL in SQL, so
+    they are excluded by the comparison itself rather than by an extra clause
+    someone has to remember to write.
+
+    Anyone else gets 403 rather than an empty list: "you may not read this" and
+    "there is nothing here" are different answers, and returning the second for
+    the first teaches a caller the wrong thing.
+    """
+    if "super_admin" in current_user.get("cognito_groups", []):
+        return q
+    if caller is None or (caller.role or "").lower() not in ("management", "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only management or admin can read collected data.",
+        )
+    return q.filter(model.company_id == caller.company_id)
 
 
 @router.get("/tokens", status_code=status.HTTP_200_OK)
@@ -496,7 +613,8 @@ def list_tokens(
     company_id: str | None = Query(None, description="Filter to one tenant."),
     include_revoked: bool = Query(True),
     db: Session = Depends(get_db),
-    _super: dict = Depends(get_super_admin),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ) -> list[CollectionTokenSummary]:
     """Campaigns and how much has arrived under each.
 
@@ -505,7 +623,7 @@ def list_tokens(
 
     The token VALUE is never returned — see CollectionTokenSummary.
     """
-    q = db.query(CollectionToken)
+    q = _scope_reads(db.query(CollectionToken), CollectionToken, current_user, caller)
     if company_id:
         q = q.filter(CollectionToken.company_id == company_id)
     if not include_revoked:
@@ -542,7 +660,8 @@ def list_collected_days(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _super: dict = Depends(get_super_admin),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ) -> list[CollectedWalkerDayOut]:
     """Logged walker days, newest first. Counts only, no payloads.
 
@@ -553,7 +672,8 @@ def list_collected_days(
     and address inline is a large response for a listing that only needs the
     counts. Use /walker-days/{id} for one day in full.
     """
-    q = db.query(CollectedWalkerDay)
+    q = _scope_reads(db.query(CollectedWalkerDay), CollectedWalkerDay,
+                     current_user, caller)
     if company_id:
         q = q.filter(CollectedWalkerDay.company_id == company_id)
     if token_id:
@@ -579,10 +699,15 @@ def get_collected_day(
     request: Request,
     day_id: str,
     db: Session = Depends(get_db),
-    _super: dict = Depends(get_super_admin),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ) -> CollectedWalkerDayDetail:
     """One logged day, payload included."""
-    row = db.query(CollectedWalkerDay).filter(CollectedWalkerDay.id == day_id).first()
+    # Scoped, not just fetched by id: without this a company admin could read
+    # any day by guessing a UUID, which is the classic IDOR.
+    row = _scope_reads(db.query(CollectedWalkerDay), CollectedWalkerDay,
+                       current_user, caller).filter(
+        CollectedWalkerDay.id == day_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="No such collected day.")
     return CollectedWalkerDayDetail.model_validate(row)
@@ -598,7 +723,8 @@ def list_collected_profiles(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _super: dict = Depends(get_super_admin),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ) -> list[CollectedProfileOut]:
     """Collected building profiles, newest first.
 
@@ -606,7 +732,8 @@ def list_collected_profiles(
     collector per day, and an accidental full-table response over a phone
     connection is its own kind of outage.
     """
-    q = db.query(CollectedAddressProfile)
+    q = _scope_reads(db.query(CollectedAddressProfile), CollectedAddressProfile,
+                     current_user, caller)
     if company_id:
         q = q.filter(CollectedAddressProfile.company_id == company_id)
     if token_id:

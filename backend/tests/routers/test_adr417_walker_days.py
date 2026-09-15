@@ -145,9 +145,18 @@ class TestTheReadsAreSuperAdminOnly:
         "/collection/walker-days",
         "/collection/walker-days/{day_id}",
     ])
-    def test_the_gate_resolves_to_get_super_admin(self, path):
+    def test_the_gate_never_admits_platform_staff(self, path):
+        """ADR-423 widened these from "super admin only" to "super admin OR the
+        owning company's admin", so the gate is no longer one dependency — it
+        is _scope_reads.
+
+        The invariant that must NOT erode is the other one: a cross-tenant
+        `platform_support` login may never reach these rows, which carry real
+        coworkers' names (ADR-343 D4). Widening to a principal who already owns
+        the data is not the same as widening to one who does not.
+        """
         import inspect
-        from app.api.deps import get_super_admin
+        from app.api.deps import get_platform_staff
         from app.routers.collection import router
 
         route = next(r for r in router.routes
@@ -157,8 +166,11 @@ class TestTheReadsAreSuperAdminOnly:
             for p in inspect.signature(route.endpoint).parameters.values()
             if getattr(p.default, "dependency", None) is not None
         ]
-        assert get_super_admin in gates, (
-            "reads of named field data must be super-admin only, not platform staff"
+        assert get_platform_staff not in gates, (
+            f"{path} admits platform_support to named field data"
+        )
+        assert "_scope_reads(" in inspect.getsource(route.endpoint), (
+            f"{path} does not scope its read to the caller"
         )
 
     def test_the_public_day_path_accepts_no_GET(self):
