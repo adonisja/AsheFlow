@@ -132,8 +132,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setIsConfigured(true);
       }
 
-      // Every role, not just admins (ADR-289).
-      await loadCapabilities();
+      // Every TENANT role, not just admins (ADR-289). A super admin has no
+      // company, so /companies/my-capabilities resolves through an Employee row
+      // they do not have (ADR-274) and 403s on every page load. The failure was
+      // already handled -- capabilities stay null and hasFeature fails open --
+      // so this was pure console noise, but a guaranteed 403 in the log trains
+      // people to ignore the console on the one UI where a real 403 matters.
+      //
+      // Same guard as the /employees/me call above, which already skips it.
+      if (!userGroups.includes('super_admin')) {
+        await loadCapabilities();
+      }
 
         /* ADR-377 D2/D3 — the call that starts the MFA grace clock and trims
            the remembered-device fleet.

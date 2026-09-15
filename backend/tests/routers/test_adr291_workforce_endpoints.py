@@ -51,12 +51,33 @@ def test_address_is_length_bounded():
                       bag_id="5270", raw_address="ab")     # min_length=3
 
 
-def test_overflow_is_off_by_default():
-    """D7: an overflow must be a deliberate act. Defaulting it on would make
-    every capacity limit advisory without anyone choosing that."""
+def test_overflow_does_not_need_permission():
+    """ADR-400 A3 — capacity MEASURES, it does not ENFORCE.
+
+    This test previously asserted the opposite, on the reasoning that defaulting
+    overflow on "would make every capacity limit advisory without anyone
+    choosing that". Someone did then choose that: a cart's capacity is an
+    estimate of a physical object walkers routinely beat (stacking above the
+    cover, a light bag on the handle), so an advisory limit is the honest model
+    and the 409 was a confirmation nobody could refuse.
+
+    `allow_overflow` is still ACCEPTED — the request model is extra="forbid",
+    so removing it would 422 an older client — but nothing reads it.
+    """
     payload = CommitWorkforceSortIn(truck_assignment_id=uuid.uuid4(),
                                     route_date=date.today())
-    assert payload.allow_overflow is False
+    assert payload.allow_overflow is False, "the field is kept for compatibility"
+
+    src = __import__("pathlib").Path(W.__file__).read_text()
+    assert "not payload.allow_overflow" not in src, (
+        "commit-sort gates on allow_overflow again — capacity measures rather "
+        "than enforces, and overflow is reported via overflowed_routes "
+        "(ADR-400 A3)"
+    )
+    assert "overflowed += 1" in src, (
+        "overflow is no longer COUNTED — dropping the gate must not drop the "
+        "measurement, which is the whole point of A3"
+    )
 
 
 # ── mode gating: exactly one routing path per company ─────────────────────────

@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 class BTRBagRead:
     bag_id: str
     bag_color: Optional[str] = None
+    # ADR-405. Where the station staged this bag. Parallel to the label in its
+    # own column, so it is zipped in by position rather than parsed out of the
+    # label cell.
+    sort_zone: Optional[str] = None
 
 
 @dataclass
@@ -110,7 +114,39 @@ def parse_anchor(text: str | None) -> tuple[Optional[float], Optional[float]]:
 
 
 # "A-27.2W | 2" repeated, sometimes with a leading "OV" line between entries.
-_OV_ZONE_RE = re.compile(r"([A-Z]-[\d.]+[A-Z])\s*\|\s*(\d+)")
+#
+# The middle section is [A-Z0-9.]+, not [\d.]+. The verified export (2026-09-09)
+# contains `H-2.AZ | 3 OV`, and a digits-only pattern dropped that entry
+# SILENTLY — the route reported 7 OVs where the sheet said 10. Found by ADR-290's
+# reconciliation check running over every route of a real file rather than the
+# one route on the original photograph.
+#
+# A dropped zone is not a cosmetic loss: ADR-400 seeds one addressable OV unit
+# per zone-count, so three OVs simply never existed for that route.
+_OV_ZONE_RE = re.compile(r"([A-Z]-[A-Z0-9.]+[A-Z])\s*\|\s*(\d+)")
+
+
+def _with_sort_zones(
+    bags: list["BTRBagRead"], cell: str | None,
+) -> list["BTRBagRead"]:
+    """Attach ADR-405 sort zones to already-parsed bags, BY POSITION.
+
+    Labels and zones are two parallel columns that wrap together — one label per
+    line, one zone per line — so the nth zone belongs to the nth bag. There is no
+    key linking them, which is why this is positional and why a length mismatch
+    must not guess.
+
+    A short or absent zone column leaves the remaining bags with `sort_zone=None`
+    rather than shifting the alignment: a bag pointed at the wrong shelf is worse
+    than a bag with no shelf, because the driver walks to it and finds someone
+    else's tote.
+    """
+    if not cell:
+        return bags
+    zones = [z.strip() for z in str(cell).replace("_x000D_", "").splitlines() if z.strip()]
+    for bag, zone in zip(bags, zones):
+        bag.sort_zone = zone
+    return bags
 
 
 def parse_ov_zones(cell: str | None) -> list[BTROVZoneRead]:
@@ -219,6 +255,8 @@ DEFAULT_COLUMN_MAP = {
     "ov_count":      "OV Count",
     "ov_sort_zones": "OV Sort Zones",
     "bag_labels":    "Bag Labels",
+    # ADR-405. Column I of the verified export — per-bag station location.
+    "bag_sort_zones": "Bag Sort Zones",
 }
 
 
@@ -269,7 +307,10 @@ def _sheet_from_rows(rows: list[dict], cm: dict) -> BTRSheetRead:
             package_count=_to_int(_pick(row, cm["package_count"])),
             bag_count=_to_int(_pick(row, cm["bag_count"])),
             ov_count=_to_int(_pick(row, cm["ov_count"])),
-            bags=parse_bag_labels(_pick(row, cm["bag_labels"])),
+            bags=_with_sort_zones(
+                parse_bag_labels(_pick(row, cm["bag_labels"])),
+                _pick(row, cm.get("bag_sort_zones", "Bag Sort Zones")),
+            ),
             ov_zones=parse_ov_zones(_pick(row, cm["ov_sort_zones"])),
         ))
 
@@ -287,6 +328,136 @@ class CSVBTRIngestor(BTRSheetIngestor):
     def ingest(self) -> BTRSheetRead:
         rows = list(csv.DictReader(io.StringIO(self.content)))
         return _sheet_from_rows(rows, self.column_map)
+
+
+class XLSXBTRIngestor:
+    """Dispatch's workbook export — ONE WORKSHEET PER TRUCK (ADR-411 D1).
+
+    Deliberately not a BTRSheetIngestor: that base returns one BTRSheetRead, and a
+    workbook returns many. A list-returning override of a scalar contract is a lie
+    the type system cannot catch, so this is a sibling with its own signature.
+
+    Each worksheet is laid out as:
+
+        row 0   Route | Service Type | DSP | Dispatch Time | Anchor Point | ...
+        row 1   BTR43 | Box Truck ... | NYCD| -             | 40.76066  -73.99086
+        row 2   (section labels)
+        row 3   Dispatch Time | Duration | Name | Package Count | ... | Bag Labels | ...
+        row 4+  one BLOCK per route
+
+    A block is the reason csv.DictReader cannot read this even after conversion: the
+    first row of a block carries the route's fields, and the rows beneath carry ONLY
+    additional Bag Labels / Bag Sort Zones with every other cell blank (ADR-411 D2).
+    Flattening them yields routes with no name, which _sheet_from_rows skips — so the
+    bags on those rows would vanish silently.
+
+    Rows are re-emitted as dicts keyed by the row-3 header, which is exactly the
+    shape _sheet_from_rows already consumes, so every parsing rule pinned by ADR-290
+    and ADR-405 applies unchanged.
+    """
+
+    HEADER_ROW  = 3     # the route table's own header
+    FIRST_DATA  = 4
+    _TRUCK_HDR  = 1     # the row carrying Route / DSP / Anchor Point values
+
+    def __init__(self, content: bytes, column_map: dict | None = None):
+        self.content = content
+        self.column_map = column_map or DEFAULT_COLUMN_MAP
+
+    def ingest(self) -> list["BTRSheetRead"]:
+        """One BTRSheetRead per worksheet, in workbook order."""
+        import openpyxl
+
+        wb = openpyxl.load_workbook(
+            io.BytesIO(self.content), data_only=True, read_only=True,
+        )
+        try:
+            return [self._sheet(ws) for ws in wb.worksheets]
+        finally:
+            wb.close()
+
+    # ── one worksheet ─────────────────────────────────────────────────────────
+
+    def _sheet(self, ws) -> "BTRSheetRead":
+        grid = [list(r) for r in ws.iter_rows(values_only=True)]
+        rows = self._rows_from_grid(grid)
+        return _sheet_from_rows(rows, self.column_map)
+
+    def _rows_from_grid(self, grid: list[list]) -> list[dict]:
+        """Fold each route's continuation rows into the route that owns them.
+
+        The truck-level header (row 1) repeats onto every emitted row because
+        _sheet_from_rows reads those fields from "the first row carrying each".
+        """
+        if len(grid) <= self.FIRST_DATA:
+            return []
+
+        cm = self.column_map
+        header = [str(c).strip() if c is not None else "" for c in grid[self.HEADER_ROW]]
+        truck  = grid[self._TRUCK_HDR]
+
+        def cell(r, i):
+            return r[i] if i < len(r) else None
+
+        # Column indexes on the truck header row are positional, not named: row 0's
+        # labels are the ones that name them.
+        top = [str(c).strip() if c is not None else "" for c in grid[0]]
+        def top_idx(name):
+            t = name.strip().lower()
+            for i, c in enumerate(top):
+                if c.strip().lower() == t:
+                    return i
+            return None
+
+        truck_fields = {}
+        for key in ("route", "service_type", "dsp", "anchor_point", "total_routes"):
+            i = top_idx(cm[key])
+            if i is not None:
+                truck_fields[cm[key]] = cell(truck, i)
+
+        def col(name):
+            t = name.strip().lower()
+            for i, c in enumerate(header):
+                if c.strip().lower() == t:
+                    return i
+            return None
+
+        i_name  = col(cm["name"])
+        i_bag   = col(cm["bag_labels"])
+        i_zone  = col(cm.get("bag_sort_zones", "Bag Sort Zones"))
+
+        out: list[dict] = []
+        for raw in grid[self.FIRST_DATA:]:
+            name = cell(raw, i_name) if i_name is not None else None
+            has_name = name is not None and str(name).strip() != ""
+
+            if has_name:
+                row = dict(truck_fields)
+                for i, h in enumerate(header):
+                    if h:
+                        row[h] = cell(raw, i)
+                out.append(row)
+                continue
+
+            # A continuation row: only its bag label and sort zone are real, and they
+            # belong to the route above. Appending with a separator lets the existing
+            # parse_bag_labels/_with_sort_zones handle them as if they had been in the
+            # original cell.
+            if not out:
+                continue        # stray rows before the first route
+            bag = cell(raw, i_bag) if i_bag is not None else None
+            if bag is None or str(bag).strip() == "":
+                continue        # a blank spacer row between blocks
+
+            prev = out[-1]
+            zone = cell(raw, i_zone) if i_zone is not None else None
+            bag_key = header[i_bag]
+            prev[bag_key] = f"{prev.get(bag_key) or ''}\n{bag}".strip()
+            if i_zone is not None and zone is not None and str(zone).strip():
+                zone_key = header[i_zone]
+                prev[zone_key] = f"{prev.get(zone_key) or ''}\n{zone}".strip()
+
+        return out
 
 
 class ManualBTRIngestor(BTRSheetIngestor):

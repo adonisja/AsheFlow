@@ -34,11 +34,50 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'scorecard', label: 'Scorecard' },
 ];
 
+/** ADR-398 D3: the field tabs are shown on DATA **or** FIELD ROLE, and each
+ *  half of that disjunction covers a case the other gets wrong.
+ *
+ *  Data alone hides the tab from a walker on day one — the page where their
+ *  first numbers will appear, missing until numbers exist. Role alone hides it
+ *  from a manager promoted out of the field, whose history does not stop being
+ *  theirs on promotion. Only the OR handles both, and leaves a career manager
+ *  who never walked a route with neither tab. */
+const FIELD_ROLES = ['driver', 'walker', 'trainer', 'trainee', 'captain'];
+
 type Step = 'idle' | 'entering' | 'verifying';
 
 export default function Account() {
   const { user, groups } = useAuth();
   const [tab, setTab] = useState<Tab>('settings');
+
+  // ADR-398 D3 — see FIELD_ROLES above for why this is a disjunction.
+  // `hasFieldData` starts null (unknown) so the tabs do not flicker in and out
+  // while the probe is in flight; a field role alone already settles it.
+  const [hasFieldData, setHasFieldData] = useState<boolean | null>(null);
+  const isFieldRole = groups.some(g => FIELD_ROLES.includes(g));
+  const showFieldTabs = isFieldRole || hasFieldData === true;
+  const visibleTabs = TABS.filter(
+    t => t.key === 'settings' || showFieldTabs,
+  );
+
+  // Probe only when the role does not already settle it — a walker never needs
+  // this request. `years` is the signal rather than `lifetime.delivered`,
+  // because delivered is null in workforce mode until a route is Flex-scanned
+  // (ADR-305): a worked-but-unscanned route is real work and must count here.
+  useEffect(() => {
+    if (isFieldRole) return;
+    let alive = true;
+    axiosClient
+      .get<{ years?: unknown[] }>('/assignment-history/me/stats')
+      .then(r => { if (alive) setHasFieldData((r.data.years?.length ?? 0) > 0); })
+      .catch(() => { if (alive) setHasFieldData(false); });
+    return () => { alive = false; };
+  }, [isFieldRole]);
+
+  // A tab that disappears under the user must not leave the page blank.
+  useEffect(() => {
+    if (!showFieldTabs && tab !== 'settings') setTab('settings');
+  }, [showFieldTabs, tab]);
 
   // ── password ──
   const [current,  setCurrent]  = useState('');
@@ -182,7 +221,7 @@ export default function Account() {
       <h1 className="page-title">My Account</h1>
 
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
-        {TABS.map(t => (
+        {visibleTabs.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}

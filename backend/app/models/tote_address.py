@@ -83,6 +83,19 @@ class ToteAddress(Base):
 
     # Ties break by first-entered so a re-sort is stable (ADR-291 D2). Assigned
     # server-side, never client-supplied.
+    # ADR-403 D1a. How many packages in this tote go to THIS address.
+    #
+    # A workforce tote's block is inferred from 1-3 sampled addresses out of a
+    # tote that may hold fifty packages, so the sample is tiny and the inference
+    # weak. A drop is the one case where the captain KNOWS the weight of the
+    # evidence: eight packages to one door means most of this tote goes there.
+    # Counting distinct addresses threw that away — "8 packages to W 36th" and
+    # "1 to Broadway" tied at one vote each.
+    #
+    # Defaults to 1, so a captain who does not count gets exactly today's
+    # behaviour and no entry is blocked on a number nobody counted.
+    package_count  = Column(Integer, nullable=False, server_default="1", default=1)
+
     entry_sequence = Column(Integer, nullable=False, default=0)
 
     entered_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"),

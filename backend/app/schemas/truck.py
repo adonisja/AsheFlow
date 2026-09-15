@@ -30,6 +30,22 @@ class TruckAnchor2Patch(BaseModel):
     borough: Optional[str] = Field(None, max_length=30)
 
 
+class TruckAmazonAnchorPatch(BaseModel):
+    """Register Amazon's printed anchor for a truck — ADR-410 D4.
+
+    Raw coordinates, deliberately unlike TruckAnchorPatch. That one takes an
+    address because an operational anchor is a PLACE; this is a constant copied
+    off a BTR sheet with no address behind it, and geocoding it could only lose
+    precision.
+
+    Pass both as null to clear.
+    """
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
+
+    model_config = {"extra": "forbid"}
+
+
 class TruckResponse(BaseModel):
     id: UUID
     name: str
@@ -46,6 +62,10 @@ class TruckResponse(BaseModel):
     initial_anchor2_lat: Optional[float] = None
     initial_anchor2_lng: Optional[float] = None
     initial_anchor2_set_at: Optional[datetime] = None
+    # ADR-410: Amazon's printed identifier anchor. Not a territory seed.
+    amazon_anchor_lat: Optional[float] = None
+    amazon_anchor_lng: Optional[float] = None
+    amazon_anchor_set_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

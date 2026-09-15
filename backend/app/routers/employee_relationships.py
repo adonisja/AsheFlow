@@ -7,6 +7,7 @@ from sqlalchemy import and_
 
 from app.database import get_db
 from app.services.audit import write_audit
+from app.services.audit_snapshot import snapshot
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
@@ -328,11 +329,13 @@ def delete_employee_relationships(
         target_id=str(relationship.id),
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
-        before={
-            "employee_id": str(relationship.employee_id),
-            "target_employee_id": str(relationship.target_employee_id),
-            "relationship_type": relationship.relationship_type,
-        },
+        # ADR-395 — validated against the mapper. This exact snapshot named
+        # `related_employee_id` for months (ADR-384); the helper turns that into
+        # an import-time-visible failure instead of a 500 on the delete path.
+        before=snapshot(
+            relationship,
+            "employee_id", "target_employee_id", "relationship_type",
+        ),
         after=None,
     )
     db.delete(relationship)

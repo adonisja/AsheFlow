@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from app.models.btr_sheet import BTRBag, BTRSheet
 from app.models.tote_address import ToteAddress
+from app.models.workforce_ov import WorkforceOV
 from app.schemas.walker_routes import PackageInput
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,25 @@ def build_packages(
         .all()
     )
 
+    # ADR-400 A2 / ADR-404. An addressed OV already arrives here: it has a
+    # ToteAddress row keyed by its OV#### id, so the loop below groups it as its
+    # own bag. What is missing is its SIZE, and without a size the sort costs it
+    # as an ordinary tote — 2 half-slots for everything from an envelope to an
+    # XL. That is wrong in both directions: an XS envelope ends a route early
+    # (too many routes), and an XL is charged half what it occupies, so the BFS
+    # overfills and a walker gets a cart that does not physically hold it.
+    ov_sizes: dict[str, str] = {
+        ov_id: size
+        for ov_id, size in db.query(WorkforceOV.ov_id, WorkforceOV.size)
+        .filter(
+            WorkforceOV.company_id == company_id,
+            WorkforceOV.truck_id == truck_id,
+            WorkforceOV.entry_date == entry_date,
+            WorkforceOV.size.isnot(None),
+        )
+        .all()
+    }
+
     by_bag: dict[str, list[ToteAddress]] = {}
     for a in addresses:
         by_bag.setdefault(a.bag_id, []).append(a)
@@ -142,11 +162,25 @@ def build_packages(
     for bag_id, entries in by_bag.items():
         blocks = [e.block_key for e in entries if e.block_key]
 
-        # ADR-291 D4: surface a split tote at entry. The sort still proceeds —
-        # _Tote.dominant_block_key resolves it by majority vote exactly as it
-        # does for forty package addresses (D2).
+        # ADR-291 D4: surface a split tote at entry. The sort still proceeds.
+        #
+        # ADR-403: the reported winner weights by PACKAGE COUNT, matching what
+        # the sort will actually choose. Counting addresses here while the sort
+        # counts packages would report one block and route to another — a
+        # disagreement display that itself disagrees.
+        #
+        # A remaining TIE is reported as the alphabetically-first candidate and
+        # may not be the block the sort picks: `resolve_dominant_blocks` breaks
+        # ties with the rest of the truck, which this per-tote loop cannot see.
+        # That is why the field is `winning_block_key` on a DISAGREEMENT record
+        # — it names the leading candidate, and the disagreement is the point.
         if len(set(blocks)) > 1:
-            winner = Counter(blocks).most_common(1)[0][0]
+            weighted = Counter()
+            for e in entries:
+                if e.block_key:
+                    weighted[e.block_key] += e.package_count or 1
+            top = max(weighted.values())
+            winner = sorted(b for b, n in weighted.items() if n == top)[0]
             disagreements.append(ToteBlockDisagreement(
                 bag_id=bag_id,
                 block_keys=sorted(set(blocks)),
@@ -156,11 +190,33 @@ def build_packages(
         for i, e in enumerate(entries, start=1):
             if not e.block_key:
                 unparseable.append(f"{bag_id}: {e.raw_address or '(no address)'}")
-            packages.append(PackageInput(
-                # Synthetic — see the module docstring. Sequence is 1-based and
-                # taken from position within the tote, so it is stable across
-                # re-sorts of the same rows.
-                tba_number=synthetic_tba(bag_id, i),
+
+            # ADR-403 D1a. ONE PackageInput PER PACKAGE, not per address.
+            #
+            # A drop is several packages at one door, and the captain records
+            # how many. Emitting one input per address would weight "8 packages
+            # to W 36th" the same as "1 to Broadway" — a tie, when the captain
+            # has just said it is 8-1. `_Tote.dominant_block_key` counts inputs,
+            # so emitting the real number makes the count mean what its name
+            # says.
+            #
+            # It also repairs `Route.package_count`, which ADR-298 records as
+            # counting captain-entered ADDRESSES while reading like a parcel
+            # count. With this it counts packages — still the captain's figure
+            # rather than Flex's, but no longer a different unit wearing the
+            # same name.
+            for n in range(e.package_count or 1):
+                packages.append(PackageInput(
+                # Synthetic — see the module docstring. Sequence is 1-based
+                # and taken from position within the tote, so it is stable
+                # across re-sorts of the same rows. The `n` suffix keeps a
+                # drop's packages distinct because downstream code puts these
+                # ids in SETS — `flagged_out_tbas` and the misroute id sets in
+                # route_sort collapse duplicates, so eight identical ids would
+                # report one misroute where eight packages are affected.
+                # Verified: there is no dedupe on the sort path itself, so the
+                # suffix is for those sets rather than for the counting.
+                tba_number=synthetic_tba(bag_id, i) + (f"-{n + 1}" if n else ""),
                 bag_id=bag_id,
                 block_key=e.block_key,
                 normalised_address=e.normalised_address,
@@ -168,9 +224,24 @@ def build_packages(
                 lng=e.lng,
                 first_cross_street=e.first_cross_street,
                 second_cross_street=e.second_cross_street,
-                # No package_type: a captain enters a tote's geography, not its
-                # contents. OV sizing comes from the BTR sheet (ADR-291 D6),
-                # which the caller layers on separately.
+                # ADR-400 A2. `OV_{size}` for an OV, None for a tote.
+                #
+                # This is the whole capacity fix and it needs no new arithmetic:
+                # `_pair_ovs` already scans for the OV_ prefix and adds
+                # OV_HALF_SLOTS[tier], and `_Tote.half_slot_cost`'s all-OV
+                # branch already gives a standalone OV its own cost instead of a
+                # tote's base 2 — including the XS exemption (ADR-260), which
+                # returns 0 rather than flooring at 1 because an envelope
+                # genuinely occupies no cart slot.
+                #
+                # A captain enters geography, not contents, so a TOTE still gets
+                # None. The earlier comment here said OV sizing "comes from the
+                # BTR sheet, which the caller layers on separately" — no caller
+                # ever did, and the sheet carries only zone and count, never a
+                # size. The size comes from the captain at address entry.
+                package_type=(
+                    f"OV_{ov_sizes[bag_id]}" if bag_id in ov_sizes else None
+                ),
             ))
 
     # Excluded totes count as ADDRESSED for this purpose: they are on a retained

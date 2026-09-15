@@ -33,6 +33,103 @@ export interface Truck {
   initial_anchor2_lat?: number | null;
   initial_anchor2_lng?: number | null;
   initial_anchor2_address?: string | null;
+  /** Amazon's printed anchor point — the IDENTIFIER used to resolve an uploaded
+   *  BTR sheet to this truck (ADR-410). Static per truck, and NOT a territory
+   *  seed: run_sort reads initial_anchor_* for that and never these.
+   *  Set via PATCH /trucks/{id}/amazon-anchor as raw coordinates. */
+  amazon_anchor_lat?: number | null;
+  amazon_anchor_lng?: number | null;
+  amazon_anchor_set_at?: string | null;
+}
+
+/** Body for PATCH /trucks/{id}/amazon-anchor (ADR-410 D4). Raw coordinates,
+ *  unlike the address-based initial anchor. Send both null to clear. */
+export interface TruckAmazonAnchorPatch {
+  lat: number | null;
+  lng: number | null;
+}
+
+/** A bag as printed on the BTR sheet (ADR-290 / ADR-405). */
+export interface BTRBagPreview {
+  bag_id: string;
+  bag_color: string | null;
+  amazon_route_name: string | null;
+}
+
+/** "B-27.2Y | 4 OV" — a station zone and how many OVs sit there (ADR-400 A2). */
+export interface BTROVZonePreview {
+  zone_label: string;
+  ov_count: number;
+}
+
+/** One Amazon route on the sheet. Counts are nullable because an unread cell is
+ *  UNKNOWN — zero is a measurement and would make reconciliation lie (ADR-290). */
+export interface BTRRoutePreview {
+  amazon_route_name: string;
+  package_count: number | null;
+  bag_count: number | null;
+  ov_count: number | null;
+  bags: BTRBagPreview[];
+  ov_zones: BTROVZonePreview[];
+}
+
+/** POST /btr-sheets/preview (and each entry of a workbook preview). Nothing here
+ *  is persisted until /confirm — an OCR read is a suggestion (ADR-290 D3). */
+export interface BTRSheetPreview {
+  btr_loading_zone: string | null;
+  service_type: string | null;
+  dsp: string | null;
+  amazon_route_count: number | null;
+  amazon_anchor_lat: number | null;
+  amazon_anchor_lng: number | null;
+  routes: BTRRoutePreview[];
+  /** Non-blocking: counts that do not reconcile against the printed totals. */
+  warnings: string[];
+  confidence: number | null;
+  dsp_mismatch: string | null;
+  total_bags: number;
+  truck_match: TruckMatch | null;
+}
+
+/** One worksheet's outcome in a workbook preview (ADR-411 D3). Either `sheet`
+ *  or `error` is set, never both — a bad worksheet reports while the rest import. */
+export interface WorkbookSheetResult {
+  worksheet: string;
+  sheet: BTRSheetPreview | null;
+  error: string | null;
+}
+
+/** A truck registered at an anchor that no worksheet in this workbook claimed
+ *  (ADR-411 D6). Offered as a candidate for an unmatched worksheet BEFORE the
+ *  create-a-truck path: a reassigned anchor looks exactly like a new truck until
+ *  you can see the whole fleet at once.
+ *
+ *  `distance_m` is present only when exactly one worksheet is unmatched. It
+ *  DESCRIBES the candidate and must not preselect it — the UI asks, it never
+ *  adopts on proximity. */
+export interface UnclaimedTruck {
+  truck_id: string;
+  truck_name: string;
+  amazon_anchor_lat: number;
+  amazon_anchor_lng: number;
+  distance_m: number | null;
+}
+
+/** POST /btr-sheets/preview-workbook — a whole .xlsx, one worksheet per truck. */
+export interface WorkbookPreview {
+  sheets: WorkbookSheetResult[];
+  unclaimed_trucks: UnclaimedTruck[];
+  parsed: number;
+  failed: number;
+}
+
+/** The truck a BTR sheet's anchor point resolved to (ADR-410 D5).
+ *  A SUGGESTION — /btr-sheets/confirm still requires an explicit truck_id.
+ *  truck_name is present so the UI never shows a UUID. */
+export interface TruckMatch {
+  truck_id: string;
+  truck_name: string;
+  matched_on: string;
 }
 
 export interface OutlierTote {
@@ -2658,4 +2755,332 @@ export interface MfaStatus {
   grace_days_total: number;
   days_remaining: number | null;
   blocked: boolean;
+}
+
+/* ── Workforce mode: the captain's truck-day (ADR-291/297/299/302) ────────────
+ *
+ * Hand-maintained, like the rest of this file — there is no codegen. These
+ * mirror `workforce_routes.py`; a field added there must be added here or the
+ * client silently drops it.
+ *
+ * Every one of these endpoints sits on the `_workforce_mode`-gated router, so a
+ * full-mode tenant 404s on all of them. Guard the calls on the capability, not
+ * on a role. */
+
+/** One person on a route (ADR-212). Exactly one `executor` — the walker, or the
+ *  trainee in a training pair — plus zero-or-more `supervisor` (their trainer).
+ *  A pair is therefore TWO rows on one route, which is what the captain sees on
+ *  the floor and what `assigned_to_name` alone cannot express. */
+export interface RouteParticipantOut {
+  employee_id: string;
+  name: string | null;
+  role: 'executor' | 'supervisor';
+}
+
+export interface WorkforceRouteOut {
+  id: string;
+  route_number: number;
+  tote_ids: string[];
+  block_keys: string[];
+  /** ADR-298: counts captain-entered ADDRESSES, not parcels. Not displayed in
+   *  workforce mode (ADR-297 D5) — `flex_package_count` is the parcel count. */
+  package_count: number;
+  slot_cost: number;
+  capacity_limit: number;
+  overflow_half_slots: number;
+  status: 'unassigned' | 'assigned' | 'in_progress' | 'completed';
+  assigned_to: string | null;
+  /** The executor's name, flattened. Kept for compatibility; prefer
+   *  `participants`, which can express a supervised pair. */
+  assigned_to_name: string | null;
+  /** ADR-291 D11. NULL = not recorded yet; 0 = genuinely carried nothing. */
+  flex_package_count: number | null;
+  /** ADR-406 D1. "assigned" = take it now; "reserved" = it is this walker's,
+   *  but they are carrying something else. Null when nobody holds it.
+   *
+   *  Derived server-side from whether the holder has a route out — NOT stored,
+   *  and NOT route order. A walker carrying route 7 with route 4 assigned has 4
+   *  reserved, despite 4 sorting lower. */
+  assignment_kind: 'assigned' | 'reserved' | null;
+  /** ADR-402 D2. Null until the walker leaves / returns. Duration is derived
+   *  from the pair client-side, never stored. */
+  departed_at: string | null;
+  returned_at: string | null;
+  participants: RouteParticipantOut[];
+}
+
+/** One tote whose addresses disagreed about where it belongs (ADR-291 D4).
+ *  Surfaced, never averaged into a single wrong answer. */
+export interface ToteDisagreementOut {
+  bag_id: string;
+  block_keys: string[];
+  /** The block the majority vote picked (ADR-291 D2). Non-null: a disagreement
+   *  always has a winner, which is why it is reported rather than refused. */
+  winning_block_key: string;
+}
+
+export interface CommitWorkforceSortIn {
+  truck_assignment_id: string;
+  route_date: string;
+  /** D7: exceeding the capacity lock is always a deliberate act. */
+  allow_overflow?: boolean;
+  /** ADR-302 D2a. Re-planning a route someone was told is theirs is an
+   *  operational act, so it is stated explicitly. Omit both fields and the
+   *  server 409s while naming the assigned routes, rather than re-planning
+   *  silently. */
+  clear_assigned_route_ids?: string[];
+  clear_all_assigned?: boolean;
+}
+
+export interface CommitWorkforceSortOut {
+  routes: WorkforceRouteOut[];
+  /** ADR-302 D3. Skipped because a RETAINED route already carries them — these
+   *  are accounted for, unlike `unaddressed_bags`. Someone is carrying them now
+   *  or already delivered them. */
+  already_routed_bags: string[];
+  retained_routes: number;
+  totes_sorted: number;
+  /** Reported, never silently dropped. */
+  unaddressed_bags: string[];
+  unparseable: string[];
+  disagreements: ToteDisagreementOut[];
+  overflowed_routes: number;
+}
+
+export interface TruckDayTotalsOut {
+  route_date: string;
+  truck_assignment_id: string;
+  routes_total: number;
+  routes_closed: number;
+  /** ADR-299 D4. NULL — never a partial sum — while any closed route has no
+   *  Flex count: summing three of five reports a smaller truck than went out. */
+  packages_carried: number | null;
+  routes_missing_flex_count: number;
+}
+
+/** One oversized package on a truck-day (ADR-400 A4).
+ *
+ *  Its own unit, never a package borrowing a tote's bag_id: only XS and S fit
+ *  inside a tote, and an OV wearing a tote's id gets counted as that tote's
+ *  contents by any reader that forgets to re-separate them. */
+export interface WorkforceOVOut {
+  /** "OV0012" — unique per company per day, reset daily, so "OV12" is today's
+   *  twelfth. Lives in `bag_id` once an address is entered against it. */
+  ov_id: string;
+  /** The DRIVER's field (A5a): where the station staged it, for the person
+   *  loading at 06:00. Null for a milk-run item, which never had a zone. */
+  zone_label: string | null;
+  /** XS | S | M | L | XL. Null until the captain measures it at address entry;
+   *  the sort cannot cost the route without it, so it is asked for, not
+   *  guessed. */
+  size: string | null;
+  /** sheet | milk_run | captain. A mid-day OV is an ARRIVAL, not evidence the
+   *  sheet was wrong (A5b) — collapsing these loses "how much extra freight
+   *  came in today". */
+  source: string;
+  /** Null = expected from the sheet, not yet in hand. Reported, never a loss
+   *  claim, and never blocks the day close (A5c). */
+  confirmed_at: string | null;
+  addressed: boolean;
+}
+
+export interface SeedOVsOut {
+  expected: number;
+  created: number;
+  already_present: number;
+  no_sheet: boolean;
+}
+
+/** Recording one address against a tote or an OV (ADR-291 D2, ADR-400 A2,
+ *  ADR-403 D1a). */
+export interface ToteAddressIn {
+  truck_id: string;
+  entry_date: string;
+  /** A tote's bag id ("6800") or an OV's ("OV0012"). */
+  bag_id: string;
+  raw_address: string;
+  /** ADR-403 D1a. Packages in this tote going to THIS address. A drop of eight
+   *  outvotes a single package on another block, which is the signal a
+   *  per-address count threw away. Omit for 1. */
+  package_count?: number;
+  /** ADR-400 A2. REQUIRED when bag_id is an OV, and rejected for a tote. The
+   *  sort cannot cost a route without it, and guessing a middle size silently
+   *  mis-costs every unmeasured OV. */
+  ov_size?: 'XS' | 'S' | 'M' | 'L' | 'XL';
+}
+
+/** Adding an OV the sheet never listed (ADR-400 A6a). Minted here, addressed by
+ *  a separate call. `source` is SUGGESTED by the client from timing — the
+ *  workday start is known, so 3+ hours in is almost certainly a milk-run — and
+ *  CONFIRMED by the captain. The server never infers it. */
+export interface AddOVIn {
+  truck_assignment_id: string;
+  entry_date: string;
+  source: 'milk_run' | 'captain';
+  zone_label?: string | null;
+}
+
+/** One address a captain recorded against a tote or an OV. */
+export interface ToteAddressOut {
+  id: string;
+  bag_id: string;
+  raw_address: string | null;
+  normalised_address: string | null;
+  block_key: string | null;
+  /** The block key as a sentence, derived server-side (ADR-296 D5). Null when
+   *  the address is gone or no longer parses; show the raw key then. */
+  block_description: string | null;
+  entry_sequence: number;
+  entered_by_name: string | null;
+  /** False when the address could not be parsed into a block. The entry is
+   *  still stored and still sorts — visible and fixable beats vanished. */
+  geocoded: boolean;
+  bag_color: string | null;
+  bag_color_name: string | null;
+}
+
+/** A tote the BTR sheet says is aboard that nobody has addressed yet.
+ *  Enriched with colour and Amazon route because a flat id list is unusable at
+ *  25 totes — colour is how a tote is found in a physical stack. */
+export interface UnaddressedBagOut {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  amazon_route_name: string | null;
+}
+
+export interface ToteAddressListOut {
+  addresses: ToteAddressOut[];
+  disagreements: ToteDisagreementOut[];
+  unaddressed_bags: string[];
+  unaddressed: UnaddressedBagOut[];
+}
+
+/** One tote the BTR sheet says belongs on this truck (ADR-307 D1a). */
+export interface LoadRosterToteOut {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  /** Reference only (ADR-290 D7): which Amazon route the sheet listed it under.
+   *  NOT a grouping key — a driver cannot tell a tote's Amazon route by eye. */
+  amazon_route_name: string | null;
+  /** ADR-405. Where the station staged this bag, e.g. "H-9.1E". The DRIVER's
+   *  field: colour tells them WHICH tote, this tells them WHERE to walk. */
+  sort_zone: string | null;
+  checked: boolean;
+  checked_by_name: string | null;
+  checked_at: string | null;
+}
+
+/** What SHOULD be on the truck, and what the driver has confirmed. One call
+ *  answers both halves, because the question is a comparison: "the sheet says
+ *  25 totes — which do I actually have?" */
+export interface LoadRosterOut {
+  load_date: string;
+  truck_assignment_id: string;
+  btr_loading_zone: string | null;
+  /** True when no BTR sheet was imported: the tote list is UNKNOWABLE, which is
+   *  a different fact from "this truck has no totes". OVs are still returned —
+   *  a captain can add one with no sheet in sight (ADR-400 A5b). */
+  no_sheet?: boolean;
+  totes: LoadRosterToteOut[];
+  total: number;
+  checked_count: number;
+  /** Reported, never converted into a loss claim (ADR-307 D1b). */
+  unchecked_count: number;
+  /** ADR-400 A5a. Ordered zone-then-id: the driver's task is spatial. */
+  ovs: WorkforceOVOut[];
+  ov_total: number;
+  ov_unconfirmed_count: number;
+}
+
+/** A route held for this walker while they carry another (ADR-406 D2).
+ *  Shown as reserved and never as startable: the depart endpoint refuses a
+ *  route that is not `assigned`, so offering the action would only produce a
+ *  409. */
+export interface ReservedRouteOut {
+  route_id: string;
+  route_number: number;
+  tote_count: number;
+  /** Block descriptions, never addresses — `block_key` is not PII (ADR-219). */
+  block_keys: string[];
+}
+
+/** One tote on the walker's route. */
+export interface MyRouteToteOut {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  block_description: string | null;
+}
+
+/** The walker's own route (ADR-297). ONE shape whether or not a route exists —
+ *  `no_route_assigned` says which, so the client never guesses from an empty
+ *  field. */
+export interface MyRouteOut {
+  no_route_assigned: boolean;
+  /** ADR-406 D2. Waiting for this walker while they carry the one above. */
+  reserved_routes: ReservedRouteOut[];
+  route_id: string | null;
+  route_number: number | null;
+  status: string | null;
+  truck_name: string | null;
+  totes: MyRouteToteOut[];
+  block_keys: string[];
+  /** ADR-297 D5: THE parcel count. `package_count` counts addresses and is
+   *  deliberately absent from this payload. */
+  flex_package_count: number | null;
+  departed_at: string | null;
+  returned_at: string | null;
+}
+
+// ── Public data collection (ADR-415) ─────────────────────────────────────────
+// Hand-maintained to match backend/app/schemas/collection.py. There is no
+// codegen, so a field added there must be added here or the client silently
+// cannot see it.
+
+/** A collection campaign. The token VALUE is deliberately absent — the backend
+ *  returns it once at creation and never lists it. */
+export interface CollectionTokenSummary {
+  id: string;
+  company_id: string;
+  label: string;
+  daily_cap: number;
+  revoked_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+  created_by_name: string | null;
+  submission_count: number;
+}
+
+/** The create response. Deliberately NOT a CollectionTokenSummary: the POST
+ *  returns `CollectionTokenOut`, which is thinner (no company_id, no counts, no
+ *  revoked_at) and carries the one thing the listing never does — the secret,
+ *  returned exactly once and unreadable afterwards. */
+export interface CollectionTokenCreated {
+  id: string;
+  label: string;
+  daily_cap: number;
+  created_at: string;
+  token: string | null;
+}
+
+/** One building profile submitted from the public collection page. */
+export interface CollectedProfile {
+  id: string;
+  company_id: string;
+  token_id: string;
+  address: string;
+  building_type: string;
+  workload_class: string;
+  note: string | null;
+  opens_at: string | null;
+  closes_at: string | null;
+  break_start: string | null;
+  break_end: string | null;
+  troublesome: boolean;
+  collected_by: string | null;
+  collected_on: string;
+  submitted_at: string;
+  review_status: string;
 }

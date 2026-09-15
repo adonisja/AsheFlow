@@ -65,7 +65,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/dispatch',              label: 'Assignments',       icon: ClipboardCheck, roles: ['admin', 'dispatch'] },
   { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver', 'captain'] },
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },
-  { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
+  // ADR-398 D1: admin only. Management is frequently the SUBJECT of these
+  // records, and a reviewer who appears in the log they review is the wrong
+  // reviewer. The backend gate in audit.py moved in step.
+  { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   // ADR-277 D3: truck-scoped, alongside the company-wide list above. Field
   // roles + sign-off roles — the same union that gates the endpoint.
@@ -74,7 +77,10 @@ export const NAV_ITEMS: NavItem[] = [
   // records — "logistics role, does not walk blocks or assess difficulty".
   // Spreading it also silently drifted the nav gate away from the route
   // gate, which is what test_nav_and_route_gates_agree caught.
-  { path: '/my-truck-buildings',    label: 'My truck buildings', icon: Building2,     roles: ['admin', 'dispatch', 'management', 'captain', 'walker', 'trainer', 'trainee'] },
+  // ADR-398 D2 dropped `management` for the same reason `driver` was never
+  // here: management does not walk blocks. The company-wide /building-profiles
+  // list above is their surface.
+  { path: '/my-truck-buildings',    label: 'My truck buildings', icon: Building2,     roles: ['admin', 'dispatch', 'captain', 'walker', 'trainer', 'trainee'] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
   { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'] },
   // /dispatch-home has NO tab: it is dispatch's Dashboard landing
@@ -88,6 +94,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/gear',                  label: 'Gear',              icon: ShoppingBag,    roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/incidents',             label: 'Incidents',         icon: AlertTriangle,  roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/my-route',              label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'], feature: 'route_sort' },
+  // ADR-297/406. The workforce twin of the line above, on the OPPOSITE feature
+  // gate — a tenant has one or the other, never both, so the two never appear
+  // together. Its data is totes and blocks, not stops.
+  { path: '/my-workforce-route',    label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'], feature: 'workforce_sort' },
   { path: '/my-training',           label: 'My Training',       icon: ClipboardCheck, roles: ['trainee'] },
   { path: '/my-quiz',               label: 'Quiz',              icon: ClipboardCheck, roles: ['trainee'], when: c => c.hasActiveQuiz },
   { path: '/phase4-observation',    label: 'Phase 4',           icon: ClipboardCheck, roles: ['admin', 'trainer'], when: c => c.trainerPhase === 4 },
@@ -100,6 +110,16 @@ export const NAV_ITEMS: NavItem[] = [
   // ADR-273: cross-run algorithm telemetry used to justify a tenant-wide tuning
   // change. Management+admin only — dispatch is not management (ADR-242).
   { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'], feature: 'sort_metrics' },
+  // ADR-296/400. Where the day's geography enters the system: a captain opens
+  // each tote and records where it goes. Web never had this — mobile has had it
+  // since ADR-296 — and ADR-402 D4 makes the browser the field surface until an
+  // app ships, so a captain had no way to address a tote on their own phone.
+  { path: '/tote-addresses',        label: 'Tote Addresses',    icon: Package,        roles: ['admin', 'dispatch', 'management', 'captain', 'driver'], feature: 'workforce_sort' },
+  // ADR-291/302/402. The workforce sort — gated on `workforce_sort` so a
+  // full-mode tenant never sees it: there the manifest supplies the geography
+  // and this screen would be duplicate, contradictory work. Route leads only,
+  // matching the endpoint's own gate.
+  { path: '/build-routes',          label: 'Build Routes',      icon: Route,          roles: ['admin', 'dispatch', 'management', 'captain', 'driver'], feature: 'workforce_sort' },
   { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'], feature: 'route_sort' },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
   // /trainer-dashboard has NO nav tab. It is a trainer's Dashboard landing
