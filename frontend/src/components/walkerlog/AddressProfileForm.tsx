@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronRight, Trash2, AlertTriangle, Info } from 'lucide-react';
 import BuildingTypePicker from './BuildingTypePicker';
 import LabelScanner from './LabelScanner';
+import type { CheckResult } from '../../utils/collectionSubmit';
 import {
   BUILDING_CATEGORIES, BUILDING_TYPES, OTHER, SECURITY_DESK_PROTOCOL,
   TYPE_PROTOCOL, WORKLOAD_TAGS, doorKey, isIncompatible, workloadError,
@@ -26,16 +27,17 @@ const INPUT =
   'focus:outline-none focus:ring-2 focus:ring-primary/40';
 
 export default function AddressProfileForm({
-  profile, onChange, onAddressCommitted, onDelete, known, serverDuplicate, checking,
+  profile, onChange, onAddressCommitted, onDelete, known, verdict, checking,
 }: {
   profile: AddressProfile;
   /** Door keys already received by this campaign — see `alreadyKnown`. */
   known: Set<string>;
-  /** The campaign already has this door, per the server check on blur. The
-   *  value is the date it was collected ('' when unknown); null means no
-   *  duplicate, or not checked. Authoritative — `known` is only a local hint
-   *  that works offline. */
-  serverDuplicate: string | null;
+  /** What the campaign said about this address, or null when it has not been
+   *  settled yet. Gates the rest of the form (ADR-420): a collector enters the
+   *  door, clicks away, and the classification fields open once the campaign
+   *  has answered — so nobody fills in a profile for a door that turns out to
+   *  be closed. */
+  verdict: CheckResult | null;
   /** The server check is in flight for this profile. */
   checking: boolean;
   onChange: (p: AddressProfile) => void;
@@ -60,6 +62,11 @@ export default function AddressProfileForm({
    *  door this device has never submitted. It catches the case that actually
    *  recurs: the same collector revisiting a building they were already told
    *  about, which without the warning happens again every single day. */
+  /** Has the address been settled? An unlocked verdict (or `unknown`, meaning
+   *  offline or no campaign link) opens the rest of the form. A locked door
+   *  never gets here — the row is cleared on blur. */
+  const settled = verdict !== null && !(verdict.state === 'known' && verdict.locked);
+
   const alreadyKnown =
     profile.address.trim().length > 3 && known.has(doorKey(profile.address));
 
@@ -159,18 +166,27 @@ export default function AddressProfileForm({
 
                 Loud on purpose: a duplicate discovered here saves a trip, and
                 one missed costs somebody a walk to a door that was done. */}
-            {serverDuplicate !== null ? (
-              <div className="mt-1.5 rounded-lg border border-danger/50 bg-danger/10 px-2.5 py-2">
-                <p className="flex items-start gap-1.5 text-xs font-semibold text-danger">
+            {verdict?.state === 'known' ? (
+              <div className="mt-1.5 rounded-lg border border-warning/50 bg-warning/10 px-2.5 py-2">
+                {/* An invitation, not a rejection: a second look either
+                    confirms the first or disagrees, and both are informative.
+
+                    Says WHAT, never HOW MANY. "Yours will be the second and
+                    last" told a token holder the exact threshold that closes a
+                    door — the procedure rather than the outcome. A door at the
+                    limit never reaches this form anyway; the row is cleared on
+                    blur. */}
+                <p className="flex items-start gap-1.5 text-xs font-semibold text-warning">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>
-                    Already collected{serverDuplicate ? ` on ${serverDuplicate}` : ''}.
-                    Someone has profiled this door for this campaign.
+                    Already recorded
+                    {verdict.collected_on ? `, on ${verdict.collected_on}` : ''}.
+                    Another look is still useful.
                   </span>
                 </p>
-                <p className="mt-1 pl-5 text-[11px] text-danger/80">
-                  Skip it and move to the next address. Delete this entry unless
-                  you are deliberately correcting what is there.
+                <p className="mt-1 pl-5 text-[11px] text-warning/80">
+                  Fill it in as you find it. If it disagrees with what is there,
+                  that disagreement is the useful part.
                 </p>
               </div>
             ) : alreadyKnown && (
@@ -187,6 +203,25 @@ export default function AddressProfileForm({
               Type it as it appears. It is normalised later, not here.
             </p>
           </div>
+
+          {/* ── Everything below is gated on the address being settled ──────
+              ADR-420. The collector enters the door, clicks away, the campaign
+              is asked, and only then does the classification open.
+
+              Why gate rather than let people fill it in and reject on submit:
+              a door at the verification limit is closed, and discovering that
+              AFTER typing a building type, a workload and hours is the wasted
+              work this whole check exists to prevent. `unknown` (offline, or
+              no campaign link) opens the form too — a collector logging
+              locally must never be blocked by a check they cannot make. */}
+          {!settled ? (
+            <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
+              {checking
+                ? 'Checking the address…'
+                : 'Enter the address and tap outside the field to continue.'}
+            </p>
+          ) : (
+          <>
 
           <div>
             <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -390,11 +425,7 @@ export default function AddressProfileForm({
             </div>
           </details>
 
-          {!profile.address.trim() && (
-            <p className="flex items-start gap-1 text-[11px] text-warning">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-              An address with no building type is a note, not a profile.
-            </p>
+          </>
           )}
         </div>
       )}

@@ -36,6 +36,7 @@ from app.schemas.walker_day import (
     WalkerDaySubmitIn, WalkerDaySubmitOut,
 )
 from app.schemas.collection import (
+    VERIFICATION_LIMIT,
     CollectionCheckIn,
     CollectionCheckOut,
     CollectedProfileOut, CollectionSubmitIn, CollectionSubmitOut,
@@ -106,7 +107,37 @@ def submit_profiles(
     # path: every entry is an address the submitter just supplied (D4).
     duplicate_addresses: list[str] = []
 
+    # ADR-420. Doors already at the verification limit, counted once up front.
+    #
+    # The UI refuses a locked door on blur; this is what makes it a rule rather
+    # than a suggestion — /submit is public, so anything holding a token can
+    # post a batch the form would never have produced. One grouped query, not
+    # one per row: a batch of a hundred profiles should not be a hundred counts.
+    keys = [door_key(p.address)[:200] for p in body.profiles]
+    locked_keys = {
+        k for k, n in (
+            db.query(
+                CollectedAddressProfile.door_key,
+                sa_func.count(CollectedAddressProfile.id),
+            )
+            .filter(
+                CollectedAddressProfile.token_id == tok.id,
+                CollectedAddressProfile.door_key.in_(keys),
+            )
+            .group_by(CollectedAddressProfile.door_key)
+            .all()
+        )
+        if n >= VERIFICATION_LIMIT
+    }
+
     for p in body.profiles:
+        if door_key(p.address)[:200] in locked_keys:
+            # Counted as a duplicate rather than failing the batch: the rest of
+            # the submission is good, and the collector is told which addresses
+            # were already answered.
+            duplicate += 1
+            duplicate_addresses.append(p.address)
+            continue
         row = CollectedAddressProfile(
             company_id=tok.company_id,          # from the TOKEN (D2)
             token_id=tok.id,
@@ -209,18 +240,26 @@ def check_address(
         # honestly rather than running a query on an empty key.
         return CollectionCheckOut(known=False)
 
-    row = (
+    rows = (
         db.query(CollectedAddressProfile.collected_on)
         .filter(
             CollectedAddressProfile.token_id == tok.id,
             CollectedAddressProfile.door_key == key,
         )
         .order_by(CollectedAddressProfile.collected_on.desc())
-        .first()
+        # Bounded: the answer only needs to distinguish 0, 1 and "at the limit",
+        # so there is no reason to read an unbounded set to count it.
+        .limit(VERIFICATION_LIMIT + 1)
+        .all()
     )
-    if row is None:
+    if not rows:
         return CollectionCheckOut(known=False)
-    return CollectionCheckOut(known=True, collected_on=row[0])
+    return CollectionCheckOut(
+        known=True,
+        collected_on=rows[0][0],
+        count=len(rows),
+        locked=len(rows) >= VERIFICATION_LIMIT,
+    )
 
 
 @router.post("/submit-day", response_model=WalkerDaySubmitOut,

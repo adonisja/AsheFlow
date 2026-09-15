@@ -114,7 +114,9 @@ export async function submitProfiles(
  *  treat a network failure as "not collected".
  */
 export type CheckResult =
-  | { state: 'known'; collected_on: string | null }
+  /** The campaign has this door. `count` is how many observations, `locked`
+   *  whether that has reached the verification limit (ADR-420). */
+  | { state: 'known'; collected_on: string | null; count: number; locked: boolean }
   | { state: 'new' }
   | { state: 'unknown' };
 
@@ -132,9 +134,18 @@ export async function checkAddress(
       body: JSON.stringify({ token: token.trim(), address: address.trim() }),
     });
     if (!res.ok) return { state: 'unknown' };   // 404 token, 429, 5xx: all "cannot say"
-    const j = (await res.json()) as { known: boolean; collected_on: string | null };
+    const j = (await res.json()) as {
+      known: boolean; collected_on: string | null; count?: number; locked?: boolean;
+    };
     return j.known
-      ? { state: 'known', collected_on: j.collected_on }
+      ? {
+          state: 'known',
+          collected_on: j.collected_on,
+          // Defaults tolerate a server that predates the count, rather than
+          // rendering `undefined observations` at a collector.
+          count: j.count ?? 1,
+          locked: j.locked ?? true,
+        }
       : { state: 'new' };
   } catch {
     return { state: 'unknown' };                // offline
