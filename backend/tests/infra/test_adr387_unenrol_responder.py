@@ -28,7 +28,8 @@ def mod():
 
 
 def _event(*, sub="s-1", enabled=False, pool="us-east-2_TEST",
-           name="SetUserMFAPreference", settings_key="softwareTokenMfaSettings"):
+           name="SetUserMFAPreference", settings_key="softwareTokenMfaSettings",
+           error_code=None):
     detail = {
         "eventName": name,
         "eventID": "evt-1",
@@ -39,6 +40,11 @@ def _event(*, sub="s-1", enabled=False, pool="us-east-2_TEST",
     }
     if sub is not None:
         detail["additionalEventData"] = {"sub": sub}
+    if error_code:
+        # A FAILED call. CloudTrail logs it like any other, and it carries no
+        # additionalEventData because nothing was resolved (ADR-407).
+        detail["errorCode"] = error_code
+        detail.pop("additionalEventData", None)
     return {"detail": detail}
 
 
@@ -139,3 +145,54 @@ class TestContainmentOrderMatchesTheService:
             mod.handler(_event(), None)
         body = str(alert.call_args)
         assert "sensitive.person" not in body
+
+
+# ── ADR-407: a failed call is not an unenrolment ──────────────────────────────
+
+class TestFailedCallsAreIgnored:
+    """The health check probes this exact permission hourly by calling it
+    against a user that cannot exist, so the monitor was alarming on itself:
+    one email an hour for a day, 50 of 50 CloudTrail events being the probe.
+    """
+
+    def test_the_probes_own_event_is_ignored(self, mod):
+        with patch.object(mod, "_alert") as alert:
+            r = mod.handler(_event(error_code="UserNotFoundException"), None)
+        assert r["action"] == "ignored"
+        assert r["reason"] == "call_failed"
+        alert.assert_not_called()
+
+    def test_any_error_code_is_ignored_not_just_the_probes(self, mod):
+        """An AccessDeniedException is somebody attempting an unenrolment they
+        could not complete. Nothing changed, so nothing to contain — but D2
+        logs it at WARNING rather than dropping it."""
+        with patch.object(mod, "_alert") as alert:
+            r = mod.handler(_event(error_code="AccessDeniedException"), None)
+        assert r["action"] == "ignored"
+        assert r["errorCode"] == "AccessDeniedException"
+        alert.assert_not_called()
+
+    def test_a_real_unenrolment_is_still_contained(self, mod):
+        """The guard must not swallow the case the responder exists for. A
+        SUCCESSFUL call carries no errorCode."""
+        c = MagicMock()
+        c.list_users.return_value = {"Users": [{"Username": "walker.test"}]}
+        c.admin_list_devices.return_value = {"Devices": []}
+        with patch.object(mod.boto3, "client", return_value=c):
+            r = mod.handler(_event(enabled=False), None)
+        assert r["action"] == "contained", (
+            "a genuine unenrolment was ignored — the errorCode guard is too wide"
+        )
+
+    def test_a_missing_sub_on_a_SUCCESSFUL_call_still_alerts(self, mod):
+        """ADR-387's payload-shape tripwire, untouched.
+
+        A successful unenrolment whose `sub` is absent means the event shape
+        changed, and that is exactly when a human needs telling. The ADR-407
+        guard must catch only FAILED calls, never borrow this branch.
+        """
+        with patch.object(mod, "_alert") as alert:
+            r = mod.handler(_event(sub=None), None)
+        assert r["action"] == "alerted"
+        assert r["reason"] == "no_sub"
+        alert.assert_called_once()

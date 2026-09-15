@@ -206,3 +206,14 @@ backend/tests/routers/test_route_reassign_unassign.py
 backend/tests/services/test_stop_cutoff.py
 backend/asheflow_private/
 # <<< PROPRIETARY <<<
+
+# ── Local working files, never committed ─────────────────────────────────────
+# Operator-supplied BTR exports. A real one lives at
+# backend/tests/fixtures/btr_sheet_verified.xlsx as a test fixture (ADR-405);
+# copies dropped at the repo root are working files, and the pattern keeps the
+# next one from being staged by accident.
+NYCD_*.xlsx
+
+# Output from `claude-security` scans — timestamped directories of findings.
+# Local artifacts of a review, not part of the codebase.
+CLAUDE-SECURITY-*/

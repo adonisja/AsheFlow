@@ -23,11 +23,13 @@ from __future__ import annotations
 import logging
 import uuid as _uuid
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
@@ -36,7 +38,9 @@ from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.core.bag_colors import canonical_hex, color_name_for_hex
 from app.services.derive_block_key import describe_stored_block
-from app.models.btr_sheet import BTRBag, BTRSheet
+from app.models.btr_sheet import BTRBag, BTRSheet, BTRRoute, BTROVZone
+from app.models.workforce_ov import WorkforceOV, OV_SIZES
+from app.services.workforce_ov_mint import mint as mint_ov, is_ov_id
 from app.models.tote_address import ToteAddress
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route, RouteParticipant
@@ -64,15 +68,48 @@ _allow_read = RoleChecker(
 # ── request schemas (dim 9) ───────────────────────────────────────────────────
 
 class ToteAddressIn(BaseModel):
-    """One address a captain typed against one tote."""
+    """One address a captain typed against one tote, or against one OV."""
     model_config = ConfigDict(extra="forbid")
 
     truck_id: UUID
     entry_date: date
+    # A tote's bag id ("6800") or an OV's ("OV0012"). One field, because an OV
+    # takes an address exactly as a tote does — the namespaces cannot collide,
+    # since a bag id is bare digits once parse_bag_label strips the colour word.
     bag_id: str = Field(..., min_length=1, max_length=50)
     # A street address. Bounded because it lands in a String(300) column and is
     # attacker-controlled free text.
     raw_address: str = Field(..., min_length=3, max_length=300)
+
+    # ADR-403 D1a. Packages in this tote going to THIS address. `ge=1` matters:
+    # a zero would silently drop the block from the vote and a negative would
+    # subtract from it. Capped well above any real tote so a fat-fingered entry
+    # cannot swamp every other block.
+    package_count: int = Field(default=1, ge=1, le=500)
+
+    # ADR-400 A2. Required for an OV, forbidden for a tote — enforced in the
+    # validator below rather than by the type, because which one applies depends
+    # on another field.
+    ov_size: Optional[Literal["XS", "S", "M", "L", "XL"]] = None
+
+    @model_validator(mode="after")
+    def _size_matches_the_unit(self) -> "ToteAddressIn":
+        """An OV needs a size; a tote must not carry one.
+
+        Both directions are errors rather than one being ignored. A missing OV
+        size cannot be defaulted — `OV_HALF_SLOTS` spans 0 to 4 half-slots, so
+        guessing "M" silently mis-costs the route in whichever direction the
+        guess was wrong. A size on a tote would store a value nothing reads,
+        which is how a field acquires a second meaning later.
+        """
+        if is_ov_id(self.bag_id) and self.ov_size is None:
+            raise ValueError(
+                "ov_size is required for an OV: the sort cannot cost a route "
+                "without it."
+            )
+        if not is_ov_id(self.bag_id) and self.ov_size is not None:
+            raise ValueError("ov_size applies to an OV, not a tote.")
+        return self
 
 
 class CommitWorkforceSortIn(BaseModel):
@@ -80,8 +117,10 @@ class CommitWorkforceSortIn(BaseModel):
 
     truck_assignment_id: UUID
     route_date: date
-    # D7: the captain may knowingly exceed the capacity lock. Off by default so
-    # an overflow is always a deliberate act, never a silent side effect.
+    # DEPRECATED (ADR-400 A3). Overflow no longer needs permission — capacity
+    # measures rather than enforces, and `overflowed_routes` in the response
+    # reports it. Still ACCEPTED rather than removed so an older client sending
+    # it gets its sort rather than a 422 on an unexpected key (extra="forbid").
     allow_overflow: bool = False
 
     # ADR-302 D2a. Re-planning a route someone was told is theirs is an
@@ -245,6 +284,19 @@ class ToteAddressListOut(BaseModel):
     unaddressed: list["UnaddressedBagOut"] = []
 
 
+class RouteParticipantOut(BaseModel):
+    """One person on a route (ADR-212).
+
+    Exactly one `executor` — the walker, or the trainee in a training pair —
+    plus zero-or-more `supervisor` (their trainer). A pair is therefore two rows
+    on one route, which is what the captain sees on the floor and what the
+    flattened `assigned_to_name` cannot express.
+    """
+    employee_id: UUID
+    name: Optional[str] = None
+    role: str                        # executor | supervisor
+
+
 class WorkforceRouteOut(BaseModel):
     id: UUID
     route_number: int
@@ -260,6 +312,28 @@ class WorkforceRouteOut(BaseModel):
     # D11. NULL = not recorded yet; 0 = genuinely carried nothing. package_count
     # above counts captain-entered ADDRESSES, which is not a parcel count.
     flex_package_count: Optional[int] = None
+
+    # ADR-402 D2 — the mid-day view needs to say when a route left and came
+    # back. Both are stored on Route already and were simply never returned.
+    # Duration is DERIVED from the pair client-side: a stored duration would be
+    # a second source for a fact these two timestamps already fix.
+    departed_at: Optional[datetime] = None
+    returned_at: Optional[datetime] = None
+    # Every person on the route, not just the executor's flattened name.
+    participants: list[RouteParticipantOut] = []
+
+    # ADR-406 D1. "assigned" (take it now) or "reserved" (yours, but you are
+    # carrying something else). Null when nobody holds it. Derived at read time
+    # from whether the holder has a route out — never stored, because the flip
+    # from reserved to assigned happens when ANOTHER route closes and has no
+    # event of its own.
+    assignment_kind: Optional[str] = None
+
+    # `wave_number` is deliberately ABSENT (ADR-402 D3). It reads as a truck-wide
+    # cycle and is a monotonic counter of re-issues across the truck, so a
+    # walker's FIRST re-issue can be labelled wave 3. `AssignmentMember.trip_count`
+    # is the honest per-person measure. A field absent from the payload cannot be
+    # rendered by accident.
 
 
 class TruckDayTotalsOut(BaseModel):
@@ -299,10 +373,57 @@ class LoadRosterToteOut(BaseModel):
     # Reference only: which Amazon route the sheet listed it under. NOT a
     # grouping key — a driver cannot tell a tote's Amazon route by looking.
     amazon_route_name: Optional[str] = None
+    # ADR-405. Where the station staged this bag, e.g. "H-9.1E". The DRIVER's
+    # field: it answers "where do I walk to find it", which colour alone cannot.
+    # Null when the sheet predates the column or omits it.
+    sort_zone: Optional[str] = None
 
     checked: bool = False
     checked_by_name: Optional[str] = None
     checked_at: Optional[datetime] = None
+
+
+class WorkforceOVOut(BaseModel):
+    """One oversized package on this truck-day (ADR-400 A4)."""
+    ov_id: str
+    # A5a: the DRIVER's field. Where the station staged it, for the person
+    # loading the truck at 06:00. Null for a milk-run item, which never had one.
+    zone_label: Optional[str] = None
+    # Null until the captain measures it. The sort cannot cost the route without
+    # it, so it is asked for at address entry rather than guessed.
+    size: Optional[str] = None
+    source: str                       # sheet | milk_run | captain
+    # Null = expected from the sheet, not yet in hand. A presence fact, never a
+    # loss claim (A5c).
+    confirmed_at: Optional[datetime] = None
+    addressed: bool = False
+
+
+class AddOVIn(BaseModel):
+    """A6a. An OV that is on the truck but not on the sheet."""
+    model_config = ConfigDict(extra="forbid")
+
+    truck_assignment_id: UUID
+    entry_date: date
+    # A6c. The CLIENT suggests from timing — the workday start is known, so an
+    # OV added 3+ hours later is almost certainly a milk-run — and the captain
+    # confirms. The SERVER never infers: a guessed origin would be unauditable,
+    # since no later reader could tell an inference from a statement.
+    #
+    # "system" is reserved for automated creation and is rejected here: a
+    # human-facing endpoint must not be able to claim a row was machine-made.
+    source: Literal["milk_run", "captain"]
+    # Optional. A milk-run item has no station zone, and a captain adding one
+    # off the truck floor usually does not know it either.
+    zone_label: Optional[str] = Field(default=None, max_length=30)
+
+
+class SeedOVsOut(BaseModel):
+    """What seeding found, and what it added."""
+    expected: int          # OVs the sheet says belong on this truck
+    created: int           # newly minted this call
+    already_present: int   # already seeded — this endpoint is idempotent
+    no_sheet: bool = False
 
 
 class LoadRosterOut(BaseModel):
@@ -325,6 +446,20 @@ class LoadRosterOut(BaseModel):
     # colour and nothing else, so this is a presence count — not a claim about
     # what was lost.
     unchecked_count: int = 0
+
+    # ADR-400 A5. OVs are their own units, not bags, so they are a separate list
+    # rather than more entries in `totes` — a driver counting "25 totes" must not
+    # find OVs inflating that number.
+    #
+    # Ordered ZONE THEN ID: the driver's task is spatial. Every B-27.2Y item
+    # together, then B-27.3X, matching the walk through the station rather than
+    # the order the ids were minted.
+    ovs: list[WorkforceOVOut] = []
+    ov_total: int = 0
+    # Expected from the sheet, not yet in hand. Reported, never a loss claim —
+    # the same treatment `unchecked_count` gets for totes (ADR-307 D1b), and it
+    # never blocks the day close (A5c).
+    ov_unconfirmed_count: int = 0
 
     # True when no BTR sheet was imported: the tote list is then unknowable, and
     # an empty roster must not read as "the truck is empty".
@@ -358,6 +493,22 @@ class MyRouteToteOut(BaseModel):
     block_descriptions: list[str] = []
 
 
+class ReservedRouteOut(BaseModel):
+    """A route held for this walker, shown as reserved and never as startable.
+
+    The depart endpoint already refuses a route whose status is not `assigned`,
+    so a reserved route could not be started anyway — this keeps the SCREEN
+    honest about a rule the server enforces, rather than offering an action that
+    would 409.
+    """
+    route_id: UUID
+    route_number: int
+    tote_count: int
+    # Block descriptions, never addresses: `block_key` survives the ADR-219
+    # purge precisely because it is not PII (dim 7).
+    block_keys: list[str] = []
+
+
 class MyRouteOut(BaseModel):
     """The walker's own route for a day (ADR-297).
 
@@ -368,6 +519,10 @@ class MyRouteOut(BaseModel):
     which is the confusion RequireMode's 404 already occupies.
     """
     no_route_assigned: bool = False
+    # ADR-406 D2. Routes waiting for this walker while they carry the one above.
+    # Enough to know what is coming and where, without duplicating a full route
+    # view for something they cannot start yet.
+    reserved_routes: list["ReservedRouteOut"] = []
     route_id: Optional[UUID] = None
     route_number: Optional[int] = None
     status: Optional[str] = None
@@ -513,12 +668,45 @@ def add_tote_address(
         .count()
     ) + 1
 
+    # ADR-400 A2. An OV must EXIST before it can be addressed — seeded from the
+    # sheet or added by the captain — because its id is minted, not typed. A
+    # bare 404 would read as "wrong address"; this names the actual problem.
+    ov_row = None
+    if is_ov_id(payload.bag_id):
+        ov_row = (
+            db.query(WorkforceOV)
+            .filter(
+                WorkforceOV.company_id == caller.company_id,
+                WorkforceOV.truck_id == payload.truck_id,
+                WorkforceOV.entry_date == payload.entry_date,
+                WorkforceOV.ov_id == payload.bag_id,
+            )
+            .first()
+        )
+        if ov_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"{payload.bag_id} is not on this truck today. Add the OV "
+                    f"first, then give it an address."
+                ),
+            )
+        # One package, one address (A2). A tote takes several that vote on its
+        # block; an OV has nothing to vote about, so a second address is a
+        # mistake rather than more evidence.
+        if next_seq > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{payload.bag_id} already has an address.",
+            )
+
     row = ToteAddress(
         company_id=caller.company_id,
         truck_id=payload.truck_id,
         entry_date=payload.entry_date,
         bag_id=payload.bag_id,
         raw_address=payload.raw_address,
+        package_count=payload.package_count,
         normalised_address=resolved.normalised_address,
         block_key=resolved.block_key,
         lat=resolved.lat,
@@ -537,8 +725,50 @@ def add_tote_address(
         entered_by=caller.id,
         entered_by_name=(caller.name or "")[:100],
     )
+    # ADR-403 D1a. The OV's size lives on the OV, not on the address: an address
+    # row is identical for both units, and a size column there would be
+    # meaningless for the great majority of rows.
+    if ov_row is not None:
+        ov_row.size = payload.ov_size
+        # Addressing an OV means it is physically in hand, so confirm it if the
+        # driver never did. A5c keeps confirmation reportable rather than
+        # blocking, and this closes the case where a captain addresses an OV the
+        # driver forgot to tick off.
+        if ov_row.confirmed_at is None:
+            ov_row.confirmed_at = datetime.now(timezone.utc)
+            ov_row.confirmed_by = caller.id
+
     db.add(row)
-    db.flush()
+    # ADR-403 D2. `uq_tote_addresses_bag_address` forbids the same address twice
+    # for one tote, and the endpoint did not catch the violation — a captain
+    # double-tapping on a phone got a 500.
+    #
+    # It is REFUSED rather than counted. Under D1a a duplicate would otherwise be
+    # a way to weight the vote without saying so, and `package_count` is the
+    # honest way to express "several packages here".
+    try:
+        with db.begin_nested():
+            db.flush()
+    except IntegrityError:
+        existing = (
+            db.query(ToteAddress)
+            .filter(
+                ToteAddress.company_id == caller.company_id,
+                ToteAddress.truck_id == payload.truck_id,
+                ToteAddress.entry_date == payload.entry_date,
+                ToteAddress.bag_id == payload.bag_id,
+                ToteAddress.raw_address == payload.raw_address,
+            )
+            .first()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"That address is already recorded for {payload.bag_id}"
+                + (f" (entry {existing.entry_sequence})." if existing else ".")
+                + " Use the package count if several packages go there."
+            ),
+        )
     write_audit(
         db=db,
         company_id=str(caller.company_id),
@@ -835,17 +1065,27 @@ def commit_workforce_sort(
 
     # D7: a route over its lock is allowed but must be recorded. Computed from
     # what the sort produced rather than trusted from the client.
+    #
+    # ADR-400 A3 — capacity MEASURES, it does not ENFORCE. This block used to
+    # 409 unless the client re-sent with allow_overflow=true. That gate was
+    # never in D7, which asked only that overflow be *visible* (citing ADR-273:
+    # routes closing for unrecorded reasons are invisible in production).
+    #
+    # It is removed because a cart's stated capacity is an estimate of a
+    # physical object people routinely beat — a walker stacks above the cover,
+    # hangs a light bag off the handle, carries an envelope. Those are normal
+    # days. A confirmation nobody can meaningfully refuse gets clicked through
+    # every time, and that habit erodes the confirmations that do matter.
+    #
+    # The NUMBERS still matter, and matter more without the gate: slot_cost,
+    # capacity_limit and overflow_half_slots are the only record of what a
+    # walker actually carried versus what a cart nominally holds. An enforced
+    # cap produces no such data — every route sits under the limit by
+    # construction, and the variance worth learning from is exactly what the
+    # cap suppressed.
     overflowed = 0
     for r in result.routes:
         over = max(0, (r.slot_cost or 0) - (r.capacity_limit or 0))
-        if over and not payload.allow_overflow:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "This sort produces at least one route above its capacity limit. "
-                    "Re-send with allow_overflow=true to accept it."
-                ),
-            )
         if over:
             overflowed += 1
 
@@ -929,6 +1169,12 @@ def commit_workforce_sort(
     for route in created:
         db.refresh(route)
 
+    # ADR-402 D2. A freshly committed route has no participants yet, but the
+    # lookup is done rather than assumed: commit-sort RETAINS in_progress routes
+    # (ADR-302 D2), and a retained route very much has an executor.
+    parts = _participants(db, caller.company_id, created)
+    kinds = _assignment_kind(db, caller.company_id, created)   # ADR-406 D1
+
     return CommitWorkforceSortOut(
         routes=[
             WorkforceRouteOut(
@@ -937,6 +1183,9 @@ def commit_workforce_sort(
                 slot_cost=r.slot_cost, capacity_limit=r.capacity_limit,
                 overflow_half_slots=r.overflow_half_slots, status=r.status,
                 flex_package_count=r.flex_package_count,
+                departed_at=r.departed_at, returned_at=r.returned_at,
+                participants=parts.get(r.id, []),
+                assignment_kind=kinds.get(r.id),
             )
             for r in created
         ],
@@ -951,6 +1200,289 @@ def commit_workforce_sort(
             for d in built.disagreements
         ],
         overflowed_routes=overflowed,
+    )
+
+
+@router.post("/ovs/{entry_date}/{ov_id}/confirm", response_model=WorkforceOVOut)
+def confirm_ov(
+    entry_date: date,
+    ov_id: str,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """The OV the sheet expected is physically in hand (ADR-400 A5c).
+
+    Deliberately separate from address entry, though both touch the same row.
+    They are different people at different hours: the DRIVER confirms while
+    loading at the station, and the CAPTAIN addresses it later at the truck.
+    Folding confirmation into addressing would mean an OV could not be counted
+    as present until someone knew where it was going.
+
+    Re-confirmable rather than a one-way stamp with a 409. A confirmation
+    describes a current physical fact, and there is nothing to protect: no
+    downstream record is frozen by it, unlike `returned_at` or a Flex count. A
+    second tap re-stamps the time and the person, which is more useful than an
+    error.
+    """
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, entry_date, db)
+
+    ov = (
+        db.query(WorkforceOV)
+        .filter(
+            WorkforceOV.company_id == caller.company_id,
+            WorkforceOV.truck_id == ta.truck_id,
+            WorkforceOV.entry_date == entry_date,
+            WorkforceOV.ov_id == ov_id,
+        )
+        .first()
+    )
+    if ov is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{ov_id} is not on this truck today.",
+        )
+
+    ov.confirmed_at = datetime.now(timezone.utc)
+    ov.confirmed_by = caller.id
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_ov.confirm",
+        target_table="workforce_ovs",
+        target_id=str(ov.id),
+        detail={"ov_id": ov.ov_id, "zone_label": ov.zone_label},
+    )
+    db.commit()
+    db.refresh(ov)
+
+    addressed = (
+        db.query(ToteAddress.id)
+        .filter(
+            ToteAddress.company_id == caller.company_id,
+            ToteAddress.truck_id == ta.truck_id,
+            ToteAddress.entry_date == entry_date,
+            ToteAddress.bag_id == ov.ov_id,
+        )
+        .first()
+        is not None
+    )
+    return WorkforceOVOut(
+        ov_id=ov.ov_id, zone_label=ov.zone_label, size=ov.size,
+        source=ov.source, confirmed_at=ov.confirmed_at, addressed=addressed,
+    )
+
+
+def _ovs_for_truck_day(
+    db: Session, company_id: UUID, truck_id: UUID, entry_date: date,
+) -> list["WorkforceOVOut"]:
+    """Every OV on this truck-day, ordered the way a driver walks the station.
+
+    ZONE THEN ID (A5a). The driver's question is spatial — pull everything from
+    B-27.2Y, then move to B-27.3X — so grouping by zone matches the physical
+    task, and the id orders within a zone so two items on one shelf are
+    distinguishable. Minting order is irrelevant to anybody holding a package.
+
+    A zoneless OV (a milk-run item, which never had a station zone) sorts LAST
+    rather than first: an empty string would put unplaced items at the head of
+    the list the driver reads top-down at 06:00, which is exactly wrong.
+    """
+    rows = (
+        db.query(WorkforceOV)
+        .filter(
+            WorkforceOV.company_id == company_id,
+            WorkforceOV.truck_id == truck_id,
+            WorkforceOV.entry_date == entry_date,
+        )
+        .all()
+    )
+    # Sorted in Python, not SQL: "nulls last" differs between Postgres and the
+    # SQLite used in tests, and a list this size does not need the database.
+    rows.sort(key=lambda o: (o.zone_label is None, o.zone_label or "", o.ov_id))
+
+    addressed = {
+        a.bag_id
+        for a in db.query(ToteAddress.bag_id).filter(
+            ToteAddress.company_id == company_id,
+            ToteAddress.truck_id == truck_id,
+            ToteAddress.entry_date == entry_date,
+        ).all()
+    }
+    return [
+        WorkforceOVOut(
+            ov_id=o.ov_id,
+            zone_label=o.zone_label,
+            size=o.size,
+            source=o.source,
+            confirmed_at=o.confirmed_at,
+            addressed=o.ov_id in addressed,
+        )
+        for o in rows
+    ]
+
+
+@router.post("/ovs", response_model=WorkforceOVOut,
+             status_code=status.HTTP_201_CREATED)
+def add_ov(
+    payload: AddOVIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """Add an OV that the sheet did not list (ADR-400 A6a).
+
+    Two calls rather than one: this mints the id and creates the row, then the
+    captain addresses it through the normal address endpoint. Minting on the fly
+    during address entry was rejected — it would overload an endpoint that
+    otherwise only records addresses, and put id-generation in two places when
+    one of them already handles the race.
+
+    Confirmed on creation. Somebody is holding the package; there is nothing to
+    confirm later, unlike a sheet-seeded OV which exists as an expectation
+    before anyone has seen it.
+    """
+    ta = _assignment(db, caller, payload.truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, payload.entry_date, db)
+
+    ov = mint_ov(
+        db,
+        company_id=caller.company_id,
+        truck_id=ta.truck_id,
+        entry_date=payload.entry_date,
+        source=payload.source,
+        zone_label=payload.zone_label,
+        confirmed_at=datetime.now(timezone.utc),
+        confirmed_by=caller.id,
+    )
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_ov.add",
+        target_table="workforce_ovs",
+        target_id=str(ov.id),
+        detail={"ov_id": ov.ov_id, "source": payload.source,
+                "entry_date": payload.entry_date.isoformat()},
+    )
+    db.commit()
+    db.refresh(ov)
+
+    return WorkforceOVOut(
+        ov_id=ov.ov_id, zone_label=ov.zone_label, size=ov.size,
+        source=ov.source, confirmed_at=ov.confirmed_at, addressed=False,
+    )
+
+
+@router.post("/ovs/{entry_date}/seed", response_model=SeedOVsOut)
+def seed_ovs_from_sheet(
+    entry_date: date,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """Create the OV units the BTR sheet says belong on this truck (ADR-400 A2).
+
+    `BTROVZone` has been written at every BTR import since ADR-290 and read by
+    NOTHING. This is what reads it: "4 OVs at B-27.2Y" becomes four addressable
+    units, so a truck with forty OVs stops sorting as though it had none.
+
+    IDEMPOTENT on the truck-day. A re-import, a double tap, or a second captain
+    running it adds only what is missing — counted against the sheet's expected
+    total, not against a marker. There is no "seeded" flag to get out of sync.
+
+    Deliberately NOT automatic on BTR import: the sheet is imported by dispatch
+    before the truck is crewed, and an OV is scoped to a truck-day the captain
+    is standing at. Seeding at import would create rows for a truck-day that may
+    never happen.
+    """
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, entry_date, db)
+
+    sheet = (
+        db.query(BTRSheet)
+        .filter(
+            BTRSheet.company_id == caller.company_id,
+            BTRSheet.truck_id == ta.truck_id,
+            BTRSheet.sheet_date == entry_date,
+        )
+        .first()
+    )
+    if sheet is None:
+        # Same distinction the tote roster draws: "unknowable" is not "none".
+        return SeedOVsOut(expected=0, created=0, already_present=0, no_sheet=True)
+
+    # Every OV zone on every Amazon route on this sheet. Scoped on company_id at
+    # BOTH levels — the join alone would let another tenant's route drag its
+    # zones in if a sheet id were ever guessed (dim 1).
+    zones = (
+        db.query(BTROVZone)
+        .join(BTRRoute, BTRRoute.id == BTROVZone.btr_route_id)
+        .filter(
+            BTROVZone.company_id == caller.company_id,
+            BTRRoute.company_id == caller.company_id,
+            BTRRoute.btr_sheet_id == sheet.id,
+        )
+        .order_by(BTROVZone.zone_label.asc())
+        .all()
+    )
+    expected = sum(z.ov_count or 0 for z in zones)
+
+    existing = (
+        db.query(func.count(WorkforceOV.id))
+        .filter(
+            WorkforceOV.company_id == caller.company_id,
+            WorkforceOV.truck_id == ta.truck_id,
+            WorkforceOV.entry_date == entry_date,
+            WorkforceOV.source == "sheet",
+        )
+        .scalar()
+    ) or 0
+
+    # Count sheet-sourced rows only. A milk-run OV is an ARRIVAL, not part of the
+    # sheet's expectation (A5b) — counting it here would make the seed think it
+    # had already done its job and skip a genuinely missing unit.
+    to_create = max(0, expected - existing)
+    created = 0
+    if to_create:
+        # Walk the zones in order so the FIRST unseeded unit takes the FIRST
+        # zone. Re-running after a partial seed continues where it stopped
+        # rather than re-labelling what is already there.
+        slots: list[str] = []
+        for z in zones:
+            slots.extend([z.zone_label] * (z.ov_count or 0))
+        for zone_label in slots[existing:existing + to_create]:
+            mint_ov(
+                db,
+                company_id=caller.company_id,
+                truck_id=ta.truck_id,
+                entry_date=entry_date,
+                source="sheet",
+                zone_label=zone_label,
+            )
+            created += 1
+
+        write_audit(
+            db=db,
+            company_id=str(caller.company_id),
+            actor_id=str(caller.id),
+            action_type="workforce_ov.seed",
+            target_table="workforce_ovs",
+            target_id=str(ta.truck_id),
+            detail={"entry_date": entry_date.isoformat(), "created": created,
+                    "expected": expected},
+        )
+        db.commit()
+
+    return SeedOVsOut(
+        expected=expected,
+        created=created,
+        already_present=existing,
     )
 
 
@@ -996,10 +1528,20 @@ def load_roster(
     if sheet is None:
         # No sheet imported: the tote list is UNKNOWABLE, which is a different
         # fact from "this truck has no totes". The flag says which.
+        #
+        # OVs are still returned. `no_sheet` means the DRIVER has no signal to
+        # load against — it does not mean there are no OVs, because a captain
+        # can add one at any point (A5b) and those exist independently of any
+        # sheet. Returning an empty list here would report captain-added OVs as
+        # absent, which is a different lie from the one `no_sheet` tells.
+        ovs = _ovs_for_truck_day(db, caller.company_id, ta.truck_id, load_date)
         return LoadRosterOut(
             load_date=load_date,
             truck_assignment_id=ta.id,
             no_sheet=True,
+            ovs=ovs,
+            ov_total=len(ovs),
+            ov_unconfirmed_count=sum(1 for o in ovs if o.confirmed_at is None),
         )
 
     bags = (
@@ -1029,12 +1571,14 @@ def load_roster(
             bag_color=hexv,
             bag_color_name=color_name_for_hex(hexv),
             amazon_route_name=b.amazon_route_name,
+            sort_zone=b.sort_zone,
             checked=chk is not None,
             checked_by_name=chk.checked_by_name if chk else None,
             checked_at=chk.checked_at if chk else None,
         ))
 
     checked_count = sum(1 for t in totes if t.checked)
+    ovs = _ovs_for_truck_day(db, caller.company_id, ta.truck_id, load_date)
     return LoadRosterOut(
         load_date=load_date,
         truck_assignment_id=ta.id,
@@ -1043,6 +1587,9 @@ def load_roster(
         total=len(totes),
         checked_count=checked_count,
         unchecked_count=len(totes) - checked_count,
+        ovs=ovs,
+        ov_total=len(ovs),
+        ov_unconfirmed_count=sum(1 for o in ovs if o.confirmed_at is None),
     )
 
 
@@ -1230,19 +1777,36 @@ def my_route(
     caller id: a captain who also walks a route is a real case, and the
     truck-wide view is a separate concern (`GET /workforce/routes/{date}`).
     """
-    route = (
+    # ADR-406 D2. This was `.order_by(route_number).first()` with NO status
+    # filter, which is two live bugs:
+    #
+    #   - a walker who finished route 2 and was given route 7 saw ROUTE 2, a
+    #     completed route, because it sorts lower;
+    #   - a walker OUT on route 7 with route 4 assigned saw ROUTE 4, not the one
+    #     in their hands.
+    #
+    # Route number reflects sort order, not sequence of work. So: live statuses
+    # only, and in_progress first — what they are physically carrying wins over
+    # anything merely assigned.
+    mine = (
         db.query(Route)
         .join(RouteParticipant, RouteParticipant.route_id == Route.id)
         .filter(
             Route.company_id == caller.company_id,
             Route.route_date == entry_date,
+            Route.status.in_(("assigned", "in_progress")),
             RouteParticipant.company_id == caller.company_id,
             RouteParticipant.employee_id == caller.id,
             RouteParticipant.role == "executor",
         )
         .order_by(Route.route_number.asc())
-        .first()
+        .all()
     )
+    in_progress = [r for r in mine if r.status == "in_progress"]
+    assigned = [r for r in mine if r.status == "assigned"]
+    route = (in_progress or assigned or [None])[0]
+    # Everything else they hold is waiting on this one (D1a caps it at one).
+    reserved = [r for r in mine if route is not None and r.id != route.id]
     if route is None:
         # D6: a real state, not an error. Same shape, flag set.
         return MyRouteOut(no_route_assigned=True)
@@ -1327,6 +1891,15 @@ def my_route(
         flex_package_count=route.flex_package_count,
         departed_at=route.departed_at,
         returned_at=route.returned_at,
+        reserved_routes=[
+            ReservedRouteOut(
+                route_id=r.id,
+                route_number=r.route_number,
+                tote_count=len(r.tote_ids or []),
+                block_keys=list(r.block_keys or []),
+            )
+            for r in reserved
+        ],
     )
 
 
@@ -1366,6 +1939,8 @@ def list_workforce_routes(
         .all()
     )
     names = _participant_names(db, caller.company_id, routes)
+    parts = _participants(db, caller.company_id, routes)      # ADR-402 D2
+    kinds = _assignment_kind(db, caller.company_id, routes)   # ADR-406 D1
 
     return [
         WorkforceRouteOut(
@@ -1381,6 +1956,9 @@ def list_workforce_routes(
             assigned_to=None,
             assigned_to_name=names.get(r.id),
             flex_package_count=r.flex_package_count,
+            departed_at=r.departed_at, returned_at=r.returned_at,
+            participants=parts.get(r.id, []),
+            assignment_kind=kinds.get(r.id),
         )
         for r in routes
     ]
@@ -1451,6 +2029,8 @@ def depart_route(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number,
         tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
@@ -1459,6 +2039,9 @@ def depart_route(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=None, assigned_to_name=names.get(route.id),
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -1543,6 +2126,8 @@ def close_route(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number,
         tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
@@ -1551,6 +2136,9 @@ def close_route(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=None, assigned_to_name=names.get(route.id),
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -1614,28 +2202,43 @@ def assign_walker(
     #
     # Scoped to the same route_date: yesterday's unclosed route is a data-hygiene
     # problem, not a reason to block today's assignment.
-    busy = (
+    # ADR-406 D0. This asked "is this WALKER out on anything" and refused if so.
+    # Two different fears were tangled in that one question: reassigning the
+    # route someone is CARRYING (a real hazard, and they cannot see it happen),
+    # and giving them a DIFFERENT route for later (strands nobody, because
+    # nothing has moved). Only the first deserves refusing, and the
+    # `status == "in_progress"` check above already covers it from the other
+    # direction — so narrowing here opens no gap.
+    #
+    # What the walker's other work still constrains is the RESERVATION CAP.
+    held = (
         db.query(Route.route_number)
         .join(RouteParticipant, RouteParticipant.route_id == Route.id)
         .filter(
             Route.company_id == caller.company_id,
             Route.route_date == route.route_date,
             Route.id != route.id,
-            Route.departed_at.isnot(None),
-            Route.returned_at.is_(None),
+            Route.status == "assigned",
             RouteParticipant.company_id == caller.company_id,
             RouteParticipant.employee_id == walker.id,
             RouteParticipant.role == "executor",
         )
-        .first()
+        .order_by(Route.route_number.asc())
+        .all()
     )
-    if busy is not None:
-        # Names the route: "this walker is busy" is useless without "...on 4".
+    # D1a — at most ONE route waiting. Enforced here, not in the UI: a
+    # client-side limit is a suggestion that survives until someone calls the
+    # API directly, or two captains assign at the same moment.
+    #
+    # "route 7 is yours" is a promise, and four promises are a backlog nobody
+    # reads — which is the whole reason a reservation is worth showing.
+    if held:
+        numbers = ", ".join(str(r.route_number) for r in held)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"{walker.name} is still out on route {busy.route_number}. "
-                f"Close that route first, or assign this one to someone else."
+                f"{walker.name} already has route {numbers} waiting. A walker "
+                f"can hold one route at a time plus one more."
             ),
         )
 
@@ -1669,6 +2272,11 @@ def assign_walker(
     db.commit()
     db.refresh(route)
 
+    # ADR-402 D2. Re-read after the assign so the row reflects the participant
+    # this call just created, rather than the state before it.
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1
+
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
         block_keys=list(route.block_keys or []), package_count=route.package_count,
@@ -1676,6 +2284,9 @@ def assign_walker(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=walker.id, assigned_to_name=walker.name,
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -1748,6 +2359,8 @@ def record_flex_package_count(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
         block_keys=list(route.block_keys or []), package_count=route.package_count,
@@ -1755,6 +2368,9 @@ def record_flex_package_count(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to_name=names.get(route.id),
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -1849,6 +2465,115 @@ def route_lookup(
         candidates=candidates,
         escalate=not candidates,
     )
+
+
+def _assignment_kind(
+    db: Session, company_id: UUID, routes: list[Route],
+) -> dict[UUID, str]:
+    """route_id -> "assigned" | "reserved", for routes someone holds (ADR-406 D1).
+
+    A reserved route is not a fourth status. It is what an `assigned` route LOOKS
+    LIKE while its walker is carrying something else:
+
+        walker has an in_progress route  ->  their assigned route is RESERVED
+        walker has none                  ->  it is ASSIGNED, take it now
+
+    Derived, never stored, because the flip has no event of its own. Closing the
+    in-progress route stamps `returned_at`, and the same row now reads
+    `assigned` because the condition that made it reserved is gone. A stored
+    value would need a writer on every close, and a close that forgot would
+    leave a route reserved for a walker standing free at the truck.
+
+    NOT ordered by route number. An earlier draft made the lowest-numbered route
+    "next", which would tell a walker out with route 7 that route 4 was theirs to
+    start. Route number reflects sort order, not sequence of work.
+    """
+    assigned = [r for r in routes if r.status == "assigned"]
+    if not assigned:
+        return {}
+
+    # Who holds each assigned route.
+    holder = {
+        rid: emp
+        for rid, emp in db.query(RouteParticipant.route_id, RouteParticipant.employee_id)
+        .filter(
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.route_id.in_([r.id for r in assigned]),
+            RouteParticipant.role == "executor",
+        )
+        .all()
+    }
+    if not holder:
+        return {}
+
+    # Which of those people are physically out. ADR-300 D2b's pair, read here
+    # rather than in the assign guard: departed and not yet returned.
+    dates = {r.route_date for r in assigned}
+    out = {
+        emp
+        for (emp,) in db.query(RouteParticipant.employee_id)
+        .join(Route, Route.id == RouteParticipant.route_id)
+        .filter(
+            Route.company_id == company_id,
+            Route.route_date.in_(dates),
+            Route.departed_at.isnot(None),
+            Route.returned_at.is_(None),
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.employee_id.in_(set(holder.values())),
+            RouteParticipant.role == "executor",
+        )
+        .all()
+    }
+    return {
+        r.id: ("reserved" if holder.get(r.id) in out else "assigned")
+        for r in assigned
+        if r.id in holder
+    }
+
+
+def _participants(
+    db: Session, company_id: UUID, routes: list[Route],
+) -> dict[UUID, list["RouteParticipantOut"]]:
+    """route_id -> every participant, executor AND supervisor (ADR-402 D2).
+
+    The sibling `_participant_names` returns only the executor, which is right
+    for a one-line summary and wrong for the mid-day view: a training pair is a
+    trainee executing with a trainer supervising, and showing only the executor
+    hides half of who is on that route.
+
+    Scoped on `company_id` for BOTH tables — the RouteParticipant filter and the
+    Employee join — because an unscoped join here would surface another tenant's
+    employee name against this tenant's route (dim 1).
+    """
+    if not routes:
+        return {}
+    rows = (
+        db.query(
+            RouteParticipant.route_id,
+            RouteParticipant.employee_id,
+            RouteParticipant.role,
+            Employee.name,
+        )
+        .join(
+            Employee,
+            (Employee.id == RouteParticipant.employee_id)
+            & (Employee.company_id == company_id),
+        )
+        .filter(
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.route_id.in_([r.id for r in routes]),
+        )
+        .all()
+    )
+    out: dict[UUID, list[RouteParticipantOut]] = {}
+    for route_id, employee_id, role, name in rows:
+        out.setdefault(route_id, []).append(
+            RouteParticipantOut(employee_id=employee_id, name=name, role=role)
+        )
+    # Executor first, then supervisors — the person who ran it leads the row.
+    for v in out.values():
+        v.sort(key=lambda p: (p.role != "executor", p.name or ""))
+    return out
 
 
 def _participant_names(db: Session, company_id: UUID, routes: list[Route]) -> dict:

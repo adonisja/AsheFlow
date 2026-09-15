@@ -12,7 +12,10 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
-allow_mgmt = RoleChecker(["management", "admin"])
+# ADR-398 D1: admin only. Management appears IN this log as the subject of
+# privileged changes; a reviewer who shows up in the record they review is
+# the wrong reviewer. The nav gate in navConfig.ts moved in step.
+allow_admin = RoleChecker(["admin"])
 
 
 @router.get("/")
@@ -24,7 +27,7 @@ def get_audit_log(
     end_date: Optional[date] = Query(None),
     pg: Pagination = Depends(),
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_mgmt),
+    _: dict = Depends(allow_admin),
     db: Session = Depends(get_db),
 ):
     """Return audit log entries scoped to the caller's company. Management and admin only."""

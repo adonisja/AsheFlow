@@ -1,14 +1,23 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Shield, Building2, LogOut, UserCircle2, ShieldAlert } from 'lucide-react';
+import { Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck, ClipboardList } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
+import MfaNudgeBanner from '../MfaNudgeBanner';
 
 const NAV = [
   { to: '/superadmin/companies', label: 'Companies',  icon: Building2  },
   // ADR-340 — the heartbeat (ADR-337) detects a revoked credential within ten
   // minutes and wrote it to a board nobody could reach. This is the reader.
   { to: '/superadmin/alerts',    label: 'Alerts',     icon: ShieldAlert },
+  // ADR-394 — creating a second super admin and resetting a locked-out account
+  // both existed only as AWS CLI commands in a runbook: unaudited, untested and
+  // unavailable to anyone without AWS credentials.
+  { to: '/superadmin/staff',     label: 'Staff',      icon: ShieldCheck },
+  // ADR-415 — the public collection page submits into a quarantine table that
+  // had no reader. Super admin, not platform staff: the rows are customer
+  // delivery addresses, and ADR-343 D4 keeps PII off every platform_support path.
+  { to: '/superadmin/collection', label: 'Collected', icon: ClipboardList },
   { to: '/superadmin/account',   label: 'My Account', icon: UserCircle2 },
 ];
 
@@ -74,6 +83,17 @@ export default function SuperAdminLayout() {
 
       {/* Page content */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* ADR-396 — this shell deliberately omits the tenant-scoped pieces of
+            the main Layout (NotificationBanner, CommandPalette, FeedbackModal),
+            all of which resolve the caller through an Employee row a super admin
+            does not have. The MFA banner is NOT one of those: it reads only
+            `mfaStatus` from AuthContext and applies to every human with an
+            account.
+
+            It matters most here. ADR-377 puts super_admin on the PRIVILEGED tier
+            with no grace period, so this is the one role that must enrol before
+            first use -- and it was the one role never told to. */}
+        <MfaNudgeBanner />
         <Outlet />
       </main>
     </div>

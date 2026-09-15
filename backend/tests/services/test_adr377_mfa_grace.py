@@ -317,7 +317,14 @@ class TestBothClientsCallItAndAgreeOnTheShape:
         """Mobile has no shared types file, so it declares its own copy. Two
         copies drift; this fails when they do."""
         def fields(text, marker):
-            body = text.split(marker)[1].split("};")[0]
+            # Stop at the first closing brace in column 0. Splitting on "};"
+            # only worked while MfaStatus happened to be the LAST declaration in
+            # types.ts: a web `interface` ends with a bare "}", so once anything
+            # was appended below it the parser read on into the next type and
+            # reported its fields as MfaStatus drift (2026-09-08). Mobile's
+            # `export type ... = { };` form always terminated correctly, which is
+            # why only the web side was fragile.
+            body = self.re.split(r"^\}", text.split(marker)[1], maxsplit=1, flags=self.re.M)[0]
             return set(self.re.findall(r"^\s*(\w+)\??:", body, self.re.M))
 
         web = fields(self.TYPES.read_text(), "export interface MfaStatus {")
@@ -330,7 +337,14 @@ class TestBothClientsCallItAndAgreeOnTheShape:
         from app.routers.employees import get_my_mfa_status
 
         def fields(text, marker):
-            body = text.split(marker)[1].split("};")[0]
+            # Stop at the first closing brace in column 0. Splitting on "};"
+            # only worked while MfaStatus happened to be the LAST declaration in
+            # types.ts: a web `interface` ends with a bare "}", so once anything
+            # was appended below it the parser read on into the next type and
+            # reported its fields as MfaStatus drift (2026-09-08). Mobile's
+            # `export type ... = { };` form always terminated correctly, which is
+            # why only the web side was fragile.
+            body = self.re.split(r"^\}", text.split(marker)[1], maxsplit=1, flags=self.re.M)[0]
             return set(self.re.findall(r"^\s*(\w+)\??:", body, self.re.M))
 
         with patch("app.services.mfa_status.is_enrolled", return_value=True):

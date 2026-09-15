@@ -35,6 +35,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.street_segment import StreetSegment
+# ADR-409 D4. The SAME degradation guard the building-intelligence client uses:
+# PlaceType is one product with two datasets (ADR-237 D6), so both halves must
+# fail the same way. Importing it rather than defining a second copy keeps the
+# behaviour in one place when the transport becomes remote.
+from sqlalchemy.exc import InterfaceError, OperationalError
+from app.library.client import _degrades_to
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +114,20 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             # would blank it out on the next sort. Same reasoning as the
             # topology comment above, which is why it sits here rather than in
             # a second writer.
+            # ADR-408 D3d. These were ABSENT from this set_ entirely, so a
+            # column left null at insert stayed null forever: a segment first
+            # seen as a connector got a street name and no block key, and every
+            # later package-driven upsert of the same segment skipped the gap.
+            # That is the mechanism behind the zero overlap between the two
+            # populations — 357 rows with a block key and no name, 222 with a
+            # name and no key, and none with both.
+            #
+            # COALESCE for the same reason as the span below: a partial lookup
+            # must fill a gap it finds, never blank out an answer already there.
+            "block_key":           func.coalesce(
+                stmt.excluded.block_key, StreetSegment.block_key),
+            "street_name":         func.coalesce(
+                stmt.excluded.street_name, StreetSegment.street_name),
             "low_house_number":    func.coalesce(
                 stmt.excluded.low_house_number, StreetSegment.low_house_number),
             "high_house_number":   func.coalesce(
@@ -131,6 +151,7 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
     return len(payload)
 
 
+@_degrades_to(set)
 def known_segment_ids(db: Session, segment_ids: Iterable[str]) -> set[str]:
     """Which of these segments are already mapped (so we can skip re-fetching)."""
     ids = [str(s) for s in segment_ids if s]
@@ -218,6 +239,7 @@ def walk_connectors(
     return upsert_segments(db, found)
 
 
+@_degrades_to(dict)
 def load_node_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str]]:
     """LION NODE adjacency for misroute detection (ADR-238 D4b).
 
@@ -261,6 +283,7 @@ def load_node_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, se
     return adj
 
 
+@_degrades_to(dict)
 def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str]]:
     """Segment adjacency from the map: two segments are adjacent iff they share a
     LION node (ADR-196).
@@ -301,6 +324,7 @@ def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str
     return adj
 
 
+@_degrades_to(None)
 def by_segment_id(db: Session, segment_id: str):
     """One segment by its LION id, or None.
 
@@ -315,3 +339,4 @@ def by_segment_id(db: Session, segment_id: str):
         .filter(StreetSegment.segment_id == segment_id)
         .first()
     )
+

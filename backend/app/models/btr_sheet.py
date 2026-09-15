@@ -137,6 +137,18 @@ class BTRBag(Base):
                                nullable=False, index=True)
 
     bag_id            = Column(String(50), nullable=False, index=True)   # "5270"
+    # ADR-405. Where the station staged THIS bag — "H-9.1E". Per bag, not per
+    # route: two bags on one Amazon route routinely sit in different zones.
+    # Distinct from the route's OV Sort Zones, which locate the loose OVs.
+    #
+    # The DRIVER's field, like an OV's zone_label (ADR-400 A5a): it answers
+    # "where do I walk to find this tote" at 06:00 and is history by the time a
+    # captain addresses it. NOT a routing signal — it is a shelf in Amazon's
+    # warehouse and says nothing about where the packages go (cf. ADR-290 D7).
+    #
+    # Nullable although present in all 339 bags of the verified sample: a sheet
+    # is an external file, and a column that disappears must not fail an import.
+    sort_zone         = Column(String(30), nullable=True)
     # Resolved hex from bag_colors.BAG_COLOR_HEX. Null for an unknown or absent
     # colour word — clients render a neutral pill (ADR-230).
     bag_color         = Column(String(10), nullable=True)

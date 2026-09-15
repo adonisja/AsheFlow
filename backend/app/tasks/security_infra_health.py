@@ -195,6 +195,19 @@ def _check_containment_permissions(region: str, pool_id: str) -> list[str]:
             UserPoolId=pool_id, Username=PROBE_USER)),
         ("AdminListDevices", lambda: client.admin_list_devices(
             UserPoolId=pool_id, Username=PROBE_USER, Limit=1)),
+        # Added by the ADR-395 drift check, which found these unprobed:
+        # admin_get_user backs the ADR-392 read-back that confirms a factor is
+        # actually gone, and admin_forget_device is the device half of
+        # containment. Losing either grant fails only when a human clicks Reset.
+        ("AdminGetUser", lambda: client.admin_get_user(
+            UserPoolId=pool_id, Username=PROBE_USER)),
+        # The device key must be WELL-FORMED. Cognito validates its shape before
+        # any permission or user lookup, so a nonsense string returns
+        # InvalidParameterException and never reaches the check -- a permanent
+        # false alarm. Measured: this shape returns ResourceNotFoundException.
+        ("AdminForgetDevice", lambda: client.admin_forget_device(
+            UserPoolId=pool_id, Username=PROBE_USER,
+            DeviceKey=f"{region}_00000000-0000-0000-0000-000000000000")),
     ]
 
     for action, call in probes:
@@ -205,8 +218,11 @@ def _check_containment_permissions(region: str, pool_id: str) -> list[str]:
             problems.append(f"{action}: probe user unexpectedly exists")
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
-            if code == "UserNotFoundException":
-                continue  # permitted, and nothing was changed
+            if code in ("UserNotFoundException", "ResourceNotFoundException"):
+                # Permitted, and nothing was changed. AdminForgetDevice reports
+                # a missing DEVICE rather than a missing user, so both codes mean
+                # the same thing here: IAM allowed the call.
+                continue
             if code in ("AccessDeniedException", "NotAuthorizedException"):
                 problems.append(
                     f"{action}: {code} — containment cannot run (ADR-389)")

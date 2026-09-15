@@ -29,6 +29,9 @@ import DriverSurveys from './pages/DriverSurveys';
 import AnchorPoints from './pages/AnchorPoints';
 import CrewStatus from './pages/CrewStatus';
 import CaptainDashboard from './pages/CaptainDashboard';
+import WorkforceSort from './pages/WorkforceSort';
+import ToteAddresses from './pages/ToteAddresses';
+import MyWorkforceRoute from './pages/MyWorkforceRoute';
 import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
@@ -51,6 +54,8 @@ import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
 import CompanyDetail from './pages/superadmin/CompanyDetail';
 import PlatformAlerts from './pages/superadmin/PlatformAlerts';
+import PlatformStaff from './pages/superadmin/PlatformStaff';
+import CollectionData from './pages/superadmin/CollectionData';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
   const { companyId } = useParams<{ companyId: string }>();
@@ -407,10 +412,11 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* ADR-398 D1: admin only — nav, this gate and audit.py agree. */}
             <Route
               path="/audit"
               element={
-                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AuditLog />
                 </ProtectedRoute>
               }
@@ -440,6 +446,13 @@ function App() {
               }
             />
             <Route path="/captain-dashboard" element={<ProtectedRoute allowedRoles={['captain', 'admin']}><CaptainDashboard /></ProtectedRoute>} />
+            {/* ADR-291/402 — workforce route building. The page itself checks
+                hasFeature('workforce_sort') and explains itself in full mode
+                rather than 404ing, since a full-mode admin may follow a link. */}
+            {/* ADR-296/400 — the workforce sort's INPUT. Same gate as
+                /build-routes: both are route-lead work on one truck-day. */}
+            <Route path="/tote-addresses" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><ToteAddresses /></ProtectedRoute>} />
+            <Route path="/build-routes" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><WorkforceSort /></ProtectedRoute>} />
             <Route
               path="/crew-status"
               element={
@@ -454,8 +467,9 @@ function App() {
                 exist and should land somewhere useful instead of a 404. */}
             <Route path="/package-lookup" element={<Navigate to="/field-packages" replace />} />
             {/* ADR-246 — field-added package oversight + manual assignment.
-                Dispatch-readable BY DESIGN: GET /audit is management+admin, so
-                pointing dispatch at the audit log would not actually work. */}
+                Dispatch-readable BY DESIGN: GET /audit is admin-only since
+                ADR-398 D1, so pointing dispatch at the audit log would not
+                actually work. */}
             <Route
               path="/field-packages"
               element={
@@ -512,7 +526,7 @@ function App() {
             <Route
               path="/my-truck-buildings"
               element={
-                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'dispatch', 'admin', 'captain']}>
                   <TruckBuildingsPage />
                 </ProtectedRoute>
               }
@@ -559,6 +573,18 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* ADR-297/406 — workforce mode's walker view. A separate page,
+                not a branch inside MyRoute: the unit of work is the tote, not
+                the stop, so a shared screen would spend its time hiding half of
+                itself. */}
+            <Route
+              path="/my-workforce-route"
+              element={
+                <ProtectedRoute allowedRoles={['walker', 'trainee']}>
+                  <MyWorkforceRoute />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/my-route"
               element={
@@ -588,6 +614,8 @@ function App() {
             <Route path="/superadmin/companies" element={<Companies />} />
             <Route path="/superadmin/companies/:companyId" element={<CompanyDetailWithKey />} />
             <Route path="/superadmin/alerts" element={<PlatformAlerts />} />
+            <Route path="/superadmin/staff" element={<PlatformStaff />} />
+            <Route path="/superadmin/collection" element={<CollectionData />} />
             <Route path="/superadmin/account" element={<Account />} />
             <Route path="/superadmin" element={<Navigate to="/superadmin/companies" replace />} />
           </Route>

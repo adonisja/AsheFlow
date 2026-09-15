@@ -1,0 +1,383 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { ShieldCheck, UserPlus, RefreshCw, KeyRound } from 'lucide-react';
+import axiosClient from '../../api/axiosClient';
+import SectionHeader from '../../components/ui/SectionHeader';
+import ErrorBanner from '../../components/ui/ErrorBanner';
+import { SkeletonCard } from '../../components/ui/Skeleton';
+import { errorText } from '../../utils/errorText';
+import { useConfirm } from '../../hooks/useConfirm';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+
+/** Platform staff, and the MFA reset that had no caller (ADR-394, ADR-389).
+ *
+ *  Two controls that previously existed only as AWS CLI commands in a runbook:
+ *
+ *  - Creating a second super admin. ADR-389's mitigation for the circular
+ *    lockout is "keep two", and that was unaudited, untested, and unavailable to
+ *    anyone without AWS credentials.
+ *  - `POST /platform/mfa/reset`, which shipped with no UI. It is the only path
+ *    by which a locked-out ADMIN can be rescued, because the tenant-scoped
+ *    endpoint resolves the CALLER through an Employee row that a super admin
+ *    does not have.
+ */
+
+interface StaffRow {
+  username: string;
+  email: string;
+  /** The person's actual name. Empty for accounts created outside this UI --
+   *  `adon` predates it and has neither name nor email attribute. */
+  name: string;
+  group: string;
+  /** The group is recorded but NOT granted: the account must enrol a factor
+   *  before it can be activated (ADR-397). It holds no privilege meanwhile. */
+  pending?: boolean;
+  status: string;
+}
+
+const GROUPS = [
+  { value: 'super_admin', label: 'Super admin',
+    hint: 'Full platform access, including creating other staff.' },
+  { value: 'platform_support', label: 'Platform support',
+    hint: 'Read-only. Can diagnose a tenant issue without changing anything.' },
+];
+
+export default function PlatformStaff() {
+  const [rows, setRows] = useState<StaffRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [group, setGroup] = useState('super_admin');
+
+  /* Mirrors _derive_platform_username on the server. A preview only -- the
+     server derives the real one and may append a collision suffix, which the
+     hint says. Kept simple deliberately: duplicating the suffix logic here would
+     be a second source of truth for something the server decides. */
+  const previewUsername = (() => {
+    const parts = name.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const clean = (p: string) => p.replace(/[^a-z0-9]/g, '');
+    const first = parts.length ? clean(parts[0]) : '';
+    const last = parts.length > 1 ? clean(parts[parts.length - 1]) : '';
+    return last ? `${first}.${last}` : first;
+  })();
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<StaffRow | null>(null);
+
+  const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [resetUser, setResetUser] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetMsg, setResetMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axiosClient.get('/platform/staff');
+      setRows(res.data);
+    } catch (err) {
+      setError(errorText(err, 'Could not load platform staff.'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    setError(null);
+    setCreated(null);
+    try {
+      const res = await axiosClient.post('/platform/staff', {
+        email: email.trim(), name: name.trim(), group,
+      });
+      setCreated(res.data);
+      setEmail(''); setName('');
+      await load();
+    } catch (err) {
+      setError(errorText(err, 'Could not create the account.'));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  /** ADR-397 — grant the recorded group, once the account has a factor. */
+  const handleActivate = async (username: string) => {
+    setActivatingId(username);
+    setError(null);
+    try {
+      await axiosClient.post(`/platform/staff/${username}/activate`);
+      await load();
+    } catch (err: any) {
+      // A 409 means they have not enrolled yet, which is the expected answer
+      // rather than a fault: surface the server's own wording.
+      setError(err?.response?.data?.detail
+        ?? errorText(err, 'Could not activate the account.'));
+    } finally {
+      setActivatingId(null);
+    }
+  };
+
+  const handleReset = async () => {
+    const target = resetUser.trim();
+    if (!target) return;
+    const ok = await confirm({
+      title: 'Reset two-factor authentication',
+      message: `Clear ${target}'s MFA factor, end every session and forget every remembered device? They will set it up again at their next sign-in.`,
+      confirmLabel: 'Reset',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setResetting(true);
+    setResetMsg(null);
+    try {
+      const res = await axiosClient.post('/platform/mfa/reset', { username: target });
+      setResetMsg({
+        ok: true,
+        text: `Cleared. Signed out, ${res.data.devices_forgotten} device(s) forgotten.`,
+      });
+      setResetUser('');
+    } catch (err: any) {
+      // 502 means containment ran but did NOT fully complete. The operator must
+      // not read it as done -- the account may still be locked out (ADR-392).
+      setResetMsg({
+        ok: false,
+        text: err?.response?.status === 502
+          ? 'Did not fully complete. Check the account and try again.'
+          : errorText(err, 'Could not reset two-factor authentication.'),
+      });
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  // Pending accounts are excluded deliberately: the group is recorded, not
+  // granted, so such an account cannot rescue anyone and must not silence the
+  // "only one super admin" warning (ADR-389).
+  const superAdmins = rows.filter(r => r.group === 'super_admin' && !r.pending);
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader
+        eyebrow="Platform"
+        title={
+          <span className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-primary" />
+            Platform staff
+          </span>
+        }
+        description="Who can administer the platform, and account recovery"
+        actions={
+          <button onClick={() => void load()} disabled={loading}
+                  className="btn-secondary text-sm flex items-center gap-2 disabled:opacity-50">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        }
+      />
+
+      <ErrorBanner message={error} />
+
+      {/* A single super admin is a single point of failure: if that
+          authenticator is lost, recovery needs raw AWS credentials because the
+          account cannot be reset from inside the product (ADR-389). */}
+      {!loading && superAdmins.length < 2 && (
+        <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
+          <p className="text-sm font-medium">Only one super admin</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            If that authenticator is lost, recovering it needs AWS credentials.
+            Add a second super admin on a different device.
+          </p>
+        </div>
+      )}
+
+      {loading ? <SkeletonCard /> : (
+        <div className="card">
+          <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
+            <h3 className="section-title">Current staff</h3>
+            <p className="text-xs text-muted-foreground">
+              {superAdmins.length} super admin{superAdmins.length === 1 ? '' : 's'}
+              {' · '}
+              {rows.length - superAdmins.length} support
+            </p>
+          </div>
+          {rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No platform staff found.</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {rows.map(r => (
+                <li key={`${r.group}:${r.username}`}
+                    className="flex items-center justify-between gap-4 py-3 flex-wrap">
+                  <div className="min-w-0 flex items-center gap-3">
+                    {/* Initial, so a list of accounts is scannable by shape
+                        rather than by reading every row. */}
+                    <span className="w-8 h-8 rounded-full bg-accent flex items-center justify-center
+                                     text-xs font-semibold uppercase shrink-0">
+                      {(r.name || r.username).charAt(0)}
+                    </span>
+                    <div className="min-w-0">
+                      {/* Lead with the person, fall back to the login. */}
+                      <p className="text-sm font-medium truncate">
+                        {r.name || r.username}
+                      </p>
+                      {/* The sign-in identifier, shown only when it adds
+                          something. For an account created here username IS the
+                          email, so printing both would repeat the same string --
+                          and `adon` has neither attribute, so it would repeat the
+                          username. Either way it reads as a bug. */}
+                      {r.name && (
+                        <p className="text-xs text-muted-foreground truncate">{r.username}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* FORCE_CHANGE_PASSWORD means they have never signed in, so
+                        they are not yet a working rescuer (ADR-394). */}
+                    {r.pending ? (
+                      <>
+                        <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
+                          Awaiting 2FA setup
+                        </span>
+                        {/* The grant is refused server-side until a factor
+                            exists, so this can be offered unconditionally: the
+                            409 explains why rather than the button lying. */}
+                        <button
+                          onClick={() => void handleActivate(r.username)}
+                          disabled={activatingId === r.username}
+                          className="text-xs font-medium px-2.5 py-1 rounded-lg border border-primary
+                                     text-primary hover:bg-primary/5 transition-colors disabled:opacity-50"
+                        >
+                          {activatingId === r.username ? 'Activating…' : 'Activate'}
+                        </button>
+                      </>
+                    ) : r.status === 'FORCE_CHANGE_PASSWORD' && (
+                      <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
+                        Not signed in yet
+                      </span>
+                    )}
+                    <span className="text-xs bg-accent rounded-md px-2 py-1">
+                      {r.group === 'super_admin' ? 'Super admin' : 'Platform support'}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div className="card">
+        <h3 className="section-title mb-1 flex items-center gap-2">
+          <UserPlus className="w-4 h-4 text-muted-foreground" /> Add platform staff
+        </h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          They receive a temporary password by email, then set a permanent one and
+          add an authenticator app before they can sign in.
+        </p>
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Email</label>
+              <input type="email" required value={email} className="input-field"
+                     onChange={e => setEmail(e.target.value)} autoComplete="off" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Name</label>
+              <input type="text" required maxLength={255} value={name}
+                     className="input-field" onChange={e => setName(e.target.value)} />
+              {/* The username is DERIVED from the name (ADR-396), so show what it
+                  will be. Otherwise the operator learns their colleague's
+                  sign-in identifier only after the account exists. */}
+              {name.trim() && (
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Signs in as <code className="font-mono">{previewUsername}</code>
+                  {' '}(a number is added if that is taken)
+                </p>
+              )}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Role</label>
+            <div className="space-y-2">
+              {GROUPS.map(g => (
+                <label key={g.value}
+                       className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                         group === g.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent'
+                       }`}>
+                  <input type="radio" name="group" value={g.value} className="mt-1"
+                         checked={group === g.value}
+                         onChange={() => setGroup(g.value)} />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{g.label}</span>
+                    <span className="block text-xs text-muted-foreground">{g.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <button type="submit" disabled={creating}
+                  className="btn-primary text-sm disabled:opacity-50">
+            {creating ? 'Creating…' : 'Create account'}
+          </button>
+        </form>
+
+        {created && (
+          <div className="mt-4 rounded-lg border border-success/30 bg-success/10 p-4">
+            <p className="text-sm font-medium">Created {created.email}</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              A temporary password has been emailed. They cannot sign in until they
+              set a permanent password and add an authenticator app.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h3 className="section-title mb-1 flex items-center gap-2">
+          <KeyRound className="w-4 h-4 text-muted-foreground" /> Reset two-factor authentication
+        </h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          For an account that has lost its authenticator. Clears the factor, ends
+          every session and forgets every remembered device. A privileged account
+          must also be removed from its group temporarily before it can sign in
+          again. See the lockout runbook.
+        </p>
+        <div className="flex gap-3 flex-wrap items-start">
+          <div className="flex-1 min-w-[220px]">
+            <input type="text" value={resetUser} placeholder="e.g. walker.test"
+                   className="input-field w-full" autoComplete="off"
+                   onChange={e => setResetUser(e.target.value)} />
+            {/* The username, not the email. The two differ for anyone who
+                registered (firstname.lastname vs their email), and getting it
+                wrong returns a confusing "not found" (ADR-380 F7). */}
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Their Cognito username, which may differ from their email.
+            </p>
+          </div>
+          {/* Neutral until a name is entered. A red button greyed to 50% reads
+              as "broken and dangerous" rather than "fill in the field". */}
+          <button onClick={() => void handleReset()}
+                  disabled={resetting || !resetUser.trim()}
+                  className={`text-sm px-4 py-2 min-h-[44px] rounded-lg font-medium transition-colors ${
+                    resetUser.trim() && !resetting
+                      ? 'bg-danger text-white hover:bg-danger/90'
+                      : 'bg-muted text-muted-foreground cursor-not-allowed'
+                  }`}>
+            {resetting ? 'Resetting…' : 'Reset'}
+          </button>
+        </div>
+        {resetMsg && (
+          <p className={`text-sm mt-3 ${resetMsg.ok ? 'text-success' : 'text-danger'}`}>
+            {resetMsg.text}
+          </p>
+        )}
+      </div>
+
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+    </div>
+  );
+}
