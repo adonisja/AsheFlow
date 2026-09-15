@@ -64,7 +64,11 @@ export async function submitProfiles(
       profiles: usable.map((p) => ({
         address: p.address.trim(),
         building_type: p.building_type,
-        workload_class: p.workload_class,
+        // `building_category` is NOT sent: the server derives it from the type
+        // (ADR-418), and the request schema forbids unrecognised keys, so
+        // sending it would 422 the whole batch.
+        has_security_desk: p.has_security_desk,
+        workloads: p.workloads,
         note: p.note || null,
         opens_at: p.opens_at || null,
         closes_at: p.closes_at || null,

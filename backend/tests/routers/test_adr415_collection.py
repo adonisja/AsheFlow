@@ -88,8 +88,11 @@ class TestTheTrustBoundaryIsTyped:
 
     def _ok(self, **over):
         base = {
+            # ADR-418 shape: a leaf type, and workloads as a non-empty SET.
+            # `building_category` is absent on purpose — the server derives it,
+            # and the schema forbids extras, so sending it is a 422.
             "address": "433 W 32 ST", "building_type": "walkup",
-            "workload_class": "high_touch", "collected_on": "2026-09-15",
+            "workloads": ["door_to_door"], "collected_on": "2026-09-15",
         }
         base.update(over)
         return base
@@ -338,3 +341,85 @@ class TestTheDuplicateCheckIsNotAnOracle:
             assert door_key(a) == door_key(b), f"{a!r} and {b!r} are one door"
         for a, b in differ:
             assert door_key(a) != door_key(b), f"{a!r} and {b!r} are different doors"
+
+
+class TestTheBuildingTaxonomy:
+    """ADR-418. Category is derived, security is a flag, workload is a set."""
+
+    def _ok(self, **over):
+        base = {
+            "address": "433 W 32 ST", "building_type": "walkup",
+            "workloads": ["door_to_door"], "collected_on": "2026-09-15",
+        }
+        base.update(over)
+        return base
+
+    def test_the_category_cannot_be_supplied_by_the_client(self):
+        """Two independently supplied fields drift. A row claiming
+        residential/loading_dock is worse than a lookup."""
+        from app.schemas.collection import CollectedProfileIn
+        with pytest.raises(ValidationError, match="[Ee]xtra"):
+            CollectedProfileIn(**self._ok(building_category="commercial"))
+
+    def test_every_type_derives_exactly_one_category(self):
+        from app.schemas.building_taxonomy import BUILDING_TYPES, category_for
+        for t in BUILDING_TYPES:
+            assert category_for(t) in {"residential", "commercial", "unknown"}
+
+    def test_the_unknown_sentinel_survives(self):
+        """address_inventory.py and place_geometry.py write "unknown" for a
+        building nobody has visited. If a taxonomy change dropped it, every
+        un-observed building would silently become a real type."""
+        from app.schemas.building_taxonomy import (
+            BUILDING_TYPES, LEGACY_TYPE_MAP, UNKNOWN_TYPE,
+        )
+        assert UNKNOWN_TYPE in BUILDING_TYPES
+        assert LEGACY_TYPE_MAP[UNKNOWN_TYPE] == UNKNOWN_TYPE
+
+    def test_workloads_must_say_something(self):
+        """An empty list was indistinguishable from "not filled in"."""
+        from app.schemas.collection import CollectedProfileIn
+        with pytest.raises(ValidationError):
+            CollectedProfileIn(**self._ok(workloads=[]))
+
+    def test_not_applicable_cannot_be_combined(self):
+        """"None apply, and also bulk drop" is not a thing anyone can mean."""
+        from app.schemas.collection import CollectedProfileIn
+        with pytest.raises(ValidationError):
+            CollectedProfileIn(**self._ok(workloads=["not_applicable", "bulk_drop"]))
+
+    def test_multiple_workloads_are_kept_in_order(self):
+        """The doorman high-rise: genuinely two things, which the old single
+        workload_class could not represent."""
+        from app.schemas.collection import CollectedProfileIn
+        got = CollectedProfileIn(**self._ok(workloads=["bulk_drop", "high_rise"]))
+        assert got.workloads == ["bulk_drop", "high_rise"]
+
+    def test_duplicate_tags_collapse_without_reordering(self):
+        from app.schemas.collection import CollectedProfileIn
+        got = CollectedProfileIn(**self._ok(workloads=["high_rise", "bulk_drop", "high_rise"]))
+        assert got.workloads == ["high_rise", "bulk_drop"]
+
+    def test_the_security_desk_is_a_flag_not_a_type(self):
+        """biz_security forced a false choice: a loading dock WITH a security
+        desk had to be filed as one or the other."""
+        from app.schemas.building_taxonomy import BUILDING_TYPES, LEGACY_TYPE_MAP
+        from app.schemas.collection import CollectedProfileIn
+        assert "biz_security" not in BUILDING_TYPES
+        assert LEGACY_TYPE_MAP["biz_security"] == "storefront_front_door"
+        got = CollectedProfileIn(**self._ok(
+            building_type="loading_dock", has_security_desk=True))
+        assert got.has_security_desk is True
+
+    def test_every_legacy_value_maps_onto_the_new_taxonomy(self):
+        """The migration reads this map. A legacy value with no target would
+        leave a row holding a type the schema now rejects."""
+        from app.schemas.building_taxonomy import BUILDING_TYPES, LEGACY_TYPE_MAP
+        for old, new in LEGACY_TYPE_MAP.items():
+            assert new in BUILDING_TYPES, f"{old!r} maps to unknown type {new!r}"
+
+    def test_every_type_has_a_protocol(self):
+        """The protocol is what the walker is told to do at the door. A type
+        without one shows a blank where the instruction should be."""
+        from app.schemas.building_taxonomy import BUILDING_TYPE_PROTOCOL, BUILDING_TYPES
+        assert set(BUILDING_TYPES) == set(BUILDING_TYPE_PROTOCOL)

@@ -39,6 +39,7 @@ from app.schemas.collection import (
 )
 from app.services.audit import write_audit
 from app.services.door_key import door_key
+from app.schemas.building_taxonomy import category_for
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/collection", tags=["collection"])
@@ -107,7 +108,15 @@ def submit_profiles(
             token_id=tok.id,
             address=p.address,
             building_type=p.building_type,
-            workload_class=p.workload_class,
+            # DERIVED, never from the body (ADR-418): a client-supplied category
+            # could contradict its own type.
+            building_category=category_for(p.building_type),
+            has_security_desk=p.has_security_desk,
+            workloads=p.workloads,
+            # Kept in step for the readers that still expect one value. The
+            # first tag is the collector's own primary choice, which is a
+            # better single answer than re-deriving one from building_type.
+            workload_class=p.workloads[0],
             note=p.note,
             opens_at=p.opens_at,
             closes_at=p.closes_at,
