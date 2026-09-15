@@ -31,7 +31,7 @@ import LabelScanner from '../components/walkerlog/LabelScanner';
 import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
-  emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile, knownAddresses, rememberKnown, doorKey} from '../utils/addressProfile';
+  emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress} from '../utils/addressProfile';
 import {
   checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles,
 } from '../utils/collectionSubmit';
@@ -566,6 +566,20 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  a second row, so the re-key still has to happen — just not mid-word.
    */
   const rekeyProfile = useCallback(async (p: AddressProfile) => {
+    // STANDARDISE FIRST, then everything downstream uses the canonical form.
+    //
+    // The field is rewritten in place so the collector sees what will actually
+    // be stored — "433 West 32 St" becomes "433 W 32 ST", which is the shape
+    // GeoClient returns and the rest of the system already writes. Without
+    // this the duplicate check still matched (it folds both spellings to one
+    // key), but two collectors saw two different strings for one door and had
+    // no reason to believe they had hit the same building.
+    const canon = p.address.trim() ? canonicalAddress(p.address) : '';
+    if (canon && canon !== p.address) {
+      p = { ...p, address: canon };
+      setProfiles((ps) => ps.map((x) => (x.id === p.id ? p : x)));
+    }
+
     const want = p.address.trim() ? profileId(p.date, p.address) : p.id;
 
     let settled = p;

@@ -310,6 +310,47 @@ export function doorKey(address: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+/** The address as it will be STORED and shown back to the collector.
+ *
+ *  Targets the form GeoClient returns, because that is what this address
+ *  eventually becomes: `{house} {firstStreetNameNormalized}`, which in the
+ *  real data reads `10 W 33 ST`, `330 5 AVE`, `2 E 33 ST`. Uppercase,
+ *  abbreviated direction and street type, ordinal suffix dropped, unit gone.
+ *
+ *  WHY NOT JUST SHOW `doorKey`. That is the comparison key — lowercase, and it
+ *  deliberately mangles anything if doing so helps two spellings collide. This
+ *  is a display value a person reads back and a geocoder will accept, so it
+ *  keeps the same rules and presents them the way the rest of the system
+ *  already writes addresses.
+ *
+ *  Unit/floor noise is stripped for the same reason the backend strips it
+ *  before calling GeoClient: a street param carrying "APT 4A" fails to match,
+ *  which silently broke ~90% of geocodes once already. The tokens are the same
+ *  list as `_NOISE_PATTERN` in derive_block_key.py.
+ */
+const _NOISE = /\b(attn|attention|apt|unit|ground|floor|fl|host|suite|ste|basement|bsmt|lobby|rear|front)\b/i;
+
+export function canonicalAddress(address: string): string {
+  // Cut at the first unit/floor token and keep the head, exactly as
+  // strip_address_noise does server-side.
+  let s = address.split(_NOISE)[0].trim().replace(/,+$/, '');
+  s = s.replace(/[.,#]/g, ' ');
+  s = s.replace(/\b(\d+)(st|nd|rd|th)\b/gi, '$1');          // 33rd -> 33
+  s = s.replace(/\b(north|south|east|west)\b/gi, (m) => m[0]); // West -> W
+  const TYPES: [RegExp, string][] = [
+    [/\b(street|st)\b/gi,       'ST'],
+    [/\b(avenue|ave|av)\b/gi,   'AVE'],
+    [/\b(boulevard|blvd)\b/gi,  'BLVD'],
+    [/\b(road|rd)\b/gi,         'RD'],
+    [/\b(place|pl)\b/gi,        'PL'],
+    [/\b(drive|dr)\b/gi,        'DR'],
+    [/\b(lane|ln)\b/gi,         'LN'],
+    [/\b(parkway|pkwy)\b/gi,    'PKWY'],
+  ];
+  for (const [re, canon] of TYPES) s = s.replace(re, canon);
+  return s.replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
 const KNOWN_KEY = 'walkerlog.knownAddresses';
 
 /** Door keys the server reported as already-received, remembered per browser.
