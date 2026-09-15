@@ -183,7 +183,7 @@ export default function CollectionData() {
       <SectionHeader
         eyebrow="Platform"
         title="Collected addresses"
-        description="Building profiles submitted from the public collection page. Read-only — nothing here changes routing."
+        description="Building profiles submitted from the public collection page. Read-only; nothing here changes routing."
         actions={
           <button
             onClick={() => { void loadTokens(); void loadProfiles(activeToken); }}
@@ -202,7 +202,7 @@ export default function CollectionData() {
         <div className="rounded-xl border border-warning/50 bg-warning/10 p-4 space-y-2">
           <p className="inline-flex items-center gap-1.5 text-sm font-semibold text-warning">
             <AlertTriangle className="w-4 h-4" />
-            Copy this link now — it is not shown again
+            Copy this link now. It is not shown again.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <code className="min-w-0 flex-1 break-all rounded-lg border border-border bg-card px-3 py-2 font-mono text-xs">
@@ -322,7 +322,7 @@ export default function CollectionData() {
                     {!dead && (
                       <button
                         onClick={() => void revoke(t)}
-                        title="Revoke — submissions stop immediately"
+                        title="Revoke. Submissions stop immediately."
                         className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
                       >
                         <Ban className="w-3.5 h-3.5" />
