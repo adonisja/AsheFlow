@@ -9,38 +9,66 @@ from pydantic import BaseModel, ConfigDict, Field
 
 WORKLOAD_CLASSES = frozenset({"bulk_drop", "high_touch", "standard", "high_wait"})
 
-BUILDING_TYPES = frozenset({
-    "mailroom", "receptionist", "doorman", "walkup", "elevator",
-    "biz_front", "biz_freight", "biz_security", "biz_loading_dock",
-})
+# ADR-422. ONE taxonomy, defined in building_taxonomy.py and re-exported here.
+#
+# This module used to hold a second, older frozenset — the nine `biz_`-prefixed
+# values ADR-418 replaced. ADR-418 migrated the DATA and the collection schemas
+# and left this one behind, so `building_profiles` ended up holding values its
+# own write path rejected: every stored row reads `unknown`, and
+# `if body.building_type not in BUILDING_TYPES` in building_profiles.py would
+# have refused it. Six of the nine old values are no longer valid anywhere.
+#
+# Re-exported rather than deleted because two routers and their tests import
+# these names; the alias keeps the import sites working while there is only one
+# definition to keep current.
+from app.schemas.building_taxonomy import (  # noqa: E402
+    BUILDING_TYPE_PROTOCOL,
+    BUILDING_TYPES,
+    LEGACY_TYPE_MAP,
+)
 
+__all__ = [
+    "BUILDING_TYPES",
+    "BUILDING_TYPE_PROTOCOL",
+    "WORKLOAD_CLASSES",
+    "derive_workload_class",
+]
+
+# What a type implies about effort, for the callers that still need ONE value.
+#
+# ADR-418 made workload a collected SET on the collection path, because
+# deriving it is a guess dressed as data. The production profile model still
+# carries a single `workload_class` and a captain override, so the derivation
+# stays for those writers — but it is now explicit that this is a DEFAULT being
+# derived, not an observation.
 _BUILDING_TYPE_TO_WORKLOAD: dict[str, str] = {
-    "mailroom":          "bulk_drop",
-    "receptionist":      "bulk_drop",
-    "doorman":           "bulk_drop",
-    "walkup":            "high_touch",
-    "elevator":          "standard",
-    "biz_front":         "standard",
-    "biz_freight":       "high_wait",
-    "biz_security":      "high_touch",
-    "biz_loading_dock":  "bulk_drop",
-}
-
-BUILDING_TYPE_PROTOCOL: dict[str, str] = {
-    "mailroom":          "Photo of packages in mail room.",
-    "receptionist":      "Get the receptionist's name.",
-    "doorman":           "Hand to doorman. Get name if required.",
-    "walkup":            "Photo at front door.",
-    "elevator":          "Photo at front door.",
-    "biz_front":         "Photo at front door or get receptionist's name.",
-    "biz_freight":       "Photo at front door or get receptionist's name.",
-    "biz_security":      "Bring ID. Photo at front door.",
-    "biz_loading_dock":  "Photo at loading dock or get mail clerk's name.",
+    "walkup":                 "high_touch",
+    "elevator":               "standard",
+    "doorman_reception":      "bulk_drop",
+    "mailroom":               "bulk_drop",
+    "lockers":                "bulk_drop",
+    "public_housing":         "high_touch",
+    "storefront_reception":   "bulk_drop",
+    "storefront_front_door":  "standard",
+    "freight":                "high_wait",
+    "loading_dock":           "bulk_drop",
+    "loading_dock_mailroom":  "bulk_drop",
+    # Not observed yet, so the safest default: it makes no claim about effort
+    # that a sort could act on wrongly.
+    "unknown":                "standard",
 }
 
 
 def derive_workload_class(building_type: str) -> str:
-    return _BUILDING_TYPE_TO_WORKLOAD[building_type]
+    """The default workload for a type. A DEFAULT, not an observation.
+
+    Accepts a legacy value so an old payload or a stale client does not 500 —
+    it maps through LEGACY_TYPE_MAP first. Unknown values fall back to
+    "standard" rather than raising: this is called inside write paths where a
+    KeyError would abort a request over a field that has a sane default.
+    """
+    t = LEGACY_TYPE_MAP.get(building_type, building_type)
+    return _BUILDING_TYPE_TO_WORKLOAD.get(t, "standard")
 
 
 # ── BuildingProfile schemas ───────────────────────────────────────────────────

@@ -114,12 +114,23 @@ class TestTheTrustBoundaryIsTyped:
             CollectedProfileIn(**self._ok(**over))
 
     def test_the_enums_are_the_SAME_objects_the_sort_pipeline_reads(self):
-        # Not a copy. A value this endpoint accepted that the rest of the system
-        # rejects would sit in the table looking like data and promote into
-        # nothing.
+        """Identity, not overlap.
+
+        This used to name three literals — and two of them (`doorman`,
+        `biz_loading_dock`) were values ADR-418 removed, so the test kept
+        passing against a SECOND frozenset in location_profile.py that the
+        production router still validated against. Every stored row read
+        `unknown`, which that router would have rejected (ADR-422).
+
+        Asserting the objects are identical is the property the docstring
+        always claimed: a literal list can drift from the definition while
+        still passing, an identity check cannot.
+        """
+        from app.schemas import building_taxonomy
         from app.schemas.location_profile import BUILDING_TYPES, WORKLOAD_CLASSES
-        for t in ("walkup", "doorman", "biz_loading_dock"):
-            assert t in BUILDING_TYPES
+        assert BUILDING_TYPES is building_taxonomy.BUILDING_TYPES, (
+            "location_profile must re-export the taxonomy, not redefine it"
+        )
         for w in ("high_touch", "bulk_drop", "high_wait", "standard"):
             assert w in WORKLOAD_CLASSES
 

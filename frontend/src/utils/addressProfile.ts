@@ -47,6 +47,33 @@ export const BUILDING_TYPES = [
 
 export type BuildingType = typeof BUILDING_TYPES[number]['value'];
 
+/** Label for a stored building_type, including values the taxonomy no longer
+ *  offers.
+ *
+ *  ADR-422. Three pages each kept their own `BUILDING_TYPE_LABELS` map of the
+ *  pre-ADR-418 values, and they had already drifted from each other ("Business
+ *  – Freight" vs "Business — freight"). Worse, six of the nine were values the
+ *  server now rejects, so the bulk-import template shipped a `biz_security`
+ *  example that would 422.
+ *
+ *  One map, and it keeps the legacy names so an old row still reads as
+ *  something rather than as a raw enum value. */
+const LEGACY_TYPE_LABELS: Record<string, string> = {
+  receptionist:     'Receptionist (legacy)',
+  doorman:          'Doorman (legacy)',
+  biz_front:        'Business, front desk (legacy)',
+  biz_freight:      'Business, freight (legacy)',
+  biz_security:     'Business, security (legacy)',
+  biz_loading_dock: 'Business, loading dock (legacy)',
+  unknown:          'Not yet observed',
+};
+
+export function buildingTypeLabel(value: string): string {
+  return BUILDING_TYPES.find((b) => b.value === value)?.label
+    ?? LEGACY_TYPE_LABELS[value]
+    ?? value;
+}
+
 /** Workload is a SET and is COLLECTED, not derived.
  *
  *  It used to be computed from building type, which is a guess dressed as

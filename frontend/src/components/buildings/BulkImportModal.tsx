@@ -10,17 +10,19 @@
  * a silently shortened list is the failure this design exists to avoid.
  */
 import { useState } from 'react';
+import { BUILDING_TYPES as TAXONOMY } from '../../utils/addressProfile';
 import { Upload, X, AlertTriangle, CheckCircle2, Copy } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import { errorText } from '../../utils/errorText';
 import type { BulkProfilePreview, BulkProfileResult } from '../../api/types';
 
-const TEMPLATE = 'address,building_type\n433 W 32 St,elevator\n1 Penn Plaza,biz_security\n';
+// ADR-422. The template used to ship `biz_security`, a value the server has
+// rejected since ADR-418 — so the example row in the downloadable template
+// would 422 on import. Built from the taxonomy now, so it cannot say something
+// the server will refuse.
+const TEMPLATE = `address,building_type\n433 W 32 St,elevator\n1 Penn Plaza,${TAXONOMY[0].value}\n`;
 
-const BUILDING_TYPES = [
-  'mailroom', 'receptionist', 'doorman', 'walkup', 'elevator',
-  'biz_front', 'biz_freight', 'biz_security', 'biz_loading_dock',
-];
+const BUILDING_TYPE_VALUES = TAXONOMY.map((b) => b.value);
 
 export default function BulkImportModal({
   onClose,
@@ -117,7 +119,7 @@ export default function BulkImportModal({
 
             <details className="text-xs text-muted-foreground">
               <summary className="cursor-pointer">Valid building types</summary>
-              <p className="mt-1 font-mono">{BUILDING_TYPES.join(', ')}</p>
+              <p className="mt-1 font-mono">{BUILDING_TYPE_VALUES.join(', ')}</p>
             </details>
           </div>
         )}
