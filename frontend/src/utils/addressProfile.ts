@@ -38,11 +38,11 @@ export const BUILDING_TYPES = [
   { value: 'lockers',           label: 'Lockers',              category: 'residential' },
   { value: 'public_housing',    label: 'Public housing',       category: 'residential' },
   // Commercial
-  { value: 'storefront_reception',  label: 'Store front: reception',   category: 'commercial' },
+  { value: 'storefront_reception',  label: 'Store front: receptionist', category: 'commercial' },
   { value: 'storefront_front_door', label: 'Store front: front door',  category: 'commercial' },
   { value: 'freight',               label: 'Freight',                  category: 'commercial' },
-  { value: 'loading_dock',          label: 'Loading dock / service',   category: 'commercial' },
-  { value: 'loading_dock_mailroom', label: 'Loading dock: mailroom',   category: 'commercial' },
+  { value: 'loading_dock',          label: 'Loading dock / service entrance', category: 'commercial' },
+  { value: 'loading_dock_mailroom', label: 'Loading dock: mailroom',    category: 'commercial' },
 ] as const;
 
 export type BuildingType = typeof BUILDING_TYPES[number]['value'];
@@ -54,9 +54,11 @@ export type BuildingType = typeof BUILDING_TYPES[number]['value'];
  *  doorman building that is also 20+ floors is genuinely both bulk drop and
  *  high-rise, which one value could not say.
  *
- *  `not_applicable` exists so "none of these" is something the collector
- *  SAID, distinguishable from a field they never reached — which is why an
- *  empty selection is an error rather than a silent blank. */
+ *  `other` exists so "none of these fit" is something the collector SAID,
+ *  distinguishable from a field they never reached — which is why an empty
+ *  selection is an error rather than a silent blank. It carries text (ADR-419):
+ *  recording that the four tags were wrong is only useful alongside what is
+ *  right. */
 export const WORKLOAD_TAGS = [
   { value: 'bulk_drop',      label: 'Bulk drop',     hint: 'drop off many packages at once' },
   { value: 'door_to_door',   label: 'Door-to-door',  hint: "each package to the customer's door" },
@@ -97,7 +99,7 @@ export function workloadError(
   // bearing, not defensive noise. Without it the whole page threw on mount
   // for anyone with an existing profile.
   if (!tags || tags.length === 0) {
-    return 'Pick at least one workload, or “None of these apply”.';
+    return 'Pick at least one workload, or “Other”.';
   }
   if (tags.includes(OTHER) && !(other || '').trim()) {
     return 'Say what the other workload is.';
@@ -154,7 +156,7 @@ export interface AddressProfile {
   has_security_desk: boolean;
   /** Which workloads apply. A SET, and collected rather than derived: a
    *  doorman building that is also 20+ floors is genuinely both. Empty is
-   *  invalid — `['not_applicable']` is how "none apply" is said. */
+   *  invalid — `['other']` plus its text is how "none of these fit" is said. */
   workloads: WorkloadTag[];
   /** What the `other` tag means. Required when it is picked, empty otherwise. */
   workload_other: string;
@@ -220,8 +222,8 @@ export const isUsable = (p: AddressProfile): boolean =>
   p.address.trim().length > 0
   && p.building_type !== ''
   // ADR-418: workload is collected, not derived, so an unanswered workload is
-  // an incomplete profile. `['not_applicable']` satisfies this — saying "none
-  // apply" is an answer; leaving it blank is not.
+  // an incomplete profile. `['other']` with its text satisfies this — saying
+  // "none of these fit, it is X" is an answer; leaving it blank is not.
   && workloadError(p.workloads) === null;
 
 

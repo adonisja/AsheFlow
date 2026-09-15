@@ -91,11 +91,16 @@ export default function BuildingTypePicker({ value, onChange }: {
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="flex w-full items-center gap-2 rounded-lg border border-primary bg-primary/10 px-3 py-2.5 text-left text-sm font-medium text-primary"
+          className="flex w-full items-start gap-2 rounded-lg border border-primary bg-primary/10 px-3 py-2.5 text-left text-sm font-medium text-primary"
         >
-          <Check className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{selected.label}</span>
-          <span className="shrink-0 text-[11px] font-normal opacity-70">change</span>
+          <Check className="mt-0.5 h-4 w-4 shrink-0" />
+          {/* WRAPS, never truncates. "Loading dock / service entrance" lost its
+              last word to an ellipsis, which is the half that distinguishes it
+              from "Loading dock: mailroom" — a truncated label here is worse
+              than a taller row, because the row exists to tell you what you
+              picked. */}
+          <span className="min-w-0 flex-1">{selected.label}</span>
+          <span className="mt-0.5 shrink-0 text-[11px] font-normal opacity-70">change</span>
         </button>
       )}
 
