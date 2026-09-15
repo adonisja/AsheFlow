@@ -382,22 +382,63 @@ class TestTheBuildingTaxonomy:
         with pytest.raises(ValidationError):
             CollectedProfileIn(**self._ok(workloads=[]))
 
-    def test_not_applicable_cannot_be_combined(self):
-        """"None apply, and also bulk drop" is not a thing anyone can mean."""
+    def test_other_must_come_with_its_text(self):
+        """ADR-419. "The four tags do not fit" records that they were wrong
+        without recording what is right."""
         from app.schemas.collection import CollectedProfileIn
-        with pytest.raises(ValidationError):
-            CollectedProfileIn(**self._ok(workloads=["not_applicable", "bulk_drop"]))
+        with pytest.raises(ValidationError, match="say what it is"):
+            CollectedProfileIn(**self._ok(workloads=["other"]))
+        ok = CollectedProfileIn(**self._ok(
+            workloads=["other"], workload_other="rooftop drone pad"))
+        assert ok.workload_other == "rooftop drone pad"
+
+    def test_text_without_the_other_tag_is_rejected(self):
+        """Orphaned text is a value nothing would ever read."""
+        from app.schemas.collection import CollectedProfileIn
+        with pytest.raises(ValidationError, match="only meaningful"):
+            CollectedProfileIn(**self._ok(workload_other="stray"))
+
+    @pytest.mark.parametrize("tag", ["high_rise", "bulk_drop"])
+    def test_a_walkup_cannot_be_a_highrise_or_a_bulk_drop(self, tag):
+        """ADR-419. A walk-up has no elevator, which caps the floors and forces
+        every package up the stairs one at a time. Enforced server-side because
+        /collection/submit is public — the disabled checkbox is the
+        explanation, this is the guarantee."""
+        from app.schemas.collection import CollectedProfileIn
+        with pytest.raises(ValidationError, match="cannot also be"):
+            CollectedProfileIn(**self._ok(building_type="walkup", workloads=[tag]))
+
+    @pytest.mark.parametrize("tag", ["door_to_door", "high_wait"])
+    def test_a_walkup_can_still_be_the_compatible_ones(self, tag):
+        from app.schemas.collection import CollectedProfileIn
+        got = CollectedProfileIn(**self._ok(building_type="walkup", workloads=[tag]))
+        assert got.workloads == [tag]
+
+    def test_an_elevator_building_may_be_a_highrise(self):
+        """The rule is about walk-ups specifically, not about high_rise."""
+        from app.schemas.collection import CollectedProfileIn
+        got = CollectedProfileIn(**self._ok(building_type="elevator", workloads=["high_rise"]))
+        assert got.workloads == ["high_rise"]
+
+    def test_public_housing_is_a_residential_type(self):
+        from app.schemas.building_taxonomy import BUILDING_TYPES, category_for
+        assert "public_housing" in BUILDING_TYPES
+        assert category_for("public_housing") == "residential"
 
     def test_multiple_workloads_are_kept_in_order(self):
         """The doorman high-rise: genuinely two things, which the old single
         workload_class could not represent."""
         from app.schemas.collection import CollectedProfileIn
-        got = CollectedProfileIn(**self._ok(workloads=["bulk_drop", "high_rise"]))
+        # `elevator`, not the default `walkup`: a walk-up is neither of these
+        # (ADR-419), so the default type would fail for the wrong reason.
+        got = CollectedProfileIn(**self._ok(
+            building_type="elevator", workloads=["bulk_drop", "high_rise"]))
         assert got.workloads == ["bulk_drop", "high_rise"]
 
     def test_duplicate_tags_collapse_without_reordering(self):
         from app.schemas.collection import CollectedProfileIn
-        got = CollectedProfileIn(**self._ok(workloads=["high_rise", "bulk_drop", "high_rise"]))
+        got = CollectedProfileIn(**self._ok(
+            building_type="elevator", workloads=["high_rise", "bulk_drop", "high_rise"]))
         assert got.workloads == ["high_rise", "bulk_drop"]
 
     def test_the_security_desk_is_a_flag_not_a_type(self):

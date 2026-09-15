@@ -113,6 +113,7 @@ def submit_profiles(
             building_category=category_for(p.building_type),
             has_security_desk=p.has_security_desk,
             workloads=p.workloads,
+            workload_other=p.workload_other,
             # Kept in step for the readers that still expect one value. The
             # first tag is the collector's own primary choice, which is a
             # better single answer than re-deriving one from building_type.

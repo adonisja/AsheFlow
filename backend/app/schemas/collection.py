@@ -12,9 +12,9 @@ from datetime import date, time
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.building_taxonomy import BUILDING_TYPES, validate_workloads
+from app.schemas.building_taxonomy import BUILDING_TYPES, OTHER, validate_workloads
 
 
 class CollectedProfileIn(BaseModel):
@@ -36,6 +36,11 @@ class CollectedProfileIn(BaseModel):
     # send the same tag a thousand times.
     workloads: list[str] = Field(..., min_length=1, max_length=5)
 
+    # ADR-419. Required when `other` is picked and forbidden otherwise — see
+    # the model validator. Bounded like every other free-text field at this
+    # trust boundary.
+    workload_other: Optional[str] = Field(None, max_length=200)
+
     note:         Optional[str]  = Field(None, max_length=2000)
     opens_at:     Optional[time] = None
     closes_at:    Optional[time] = None
@@ -55,12 +60,33 @@ class CollectedProfileIn(BaseModel):
             raise ValueError(f"Unknown building_type: {v!r}")
         return v
 
+    @model_validator(mode="after")
+    def _workloads_agree_with_the_type(self):
+        """Cross-field rules, which a per-field validator cannot see.
+
+        Two of them:
+          - A walk-up is neither a high-rise nor a bulk drop (ADR-419). Checked
+            here because it needs BOTH fields.
+          - `other` means the four tags do not fit, so it must come with the
+            text that says what does; and text without the tag is a value no
+            reader would ever look at.
+        """
+        validate_workloads(self.workloads, self.building_type)
+
+        has_other = OTHER in self.workloads
+        text = (self.workload_other or "").strip()
+        if has_other and not text:
+            raise ValueError("Pick 'other' and say what it is.")
+        if text and not has_other:
+            raise ValueError("workload_other is only meaningful with the 'other' tag.")
+        return self
+
     @field_validator("workloads")
     @classmethod
     def _known_workloads(cls, v: list[str]) -> list[str]:
-        # Rejects unknown tags, an empty list, and `not_applicable` combined
-        # with a real tag — the last one because "none apply, and also bulk
-        # drop" is not a thing a collector can mean.
+        # Shape only. The rules that need another field (walk-up exclusivity,
+        # `other` requiring its text) are in the model validator above, which
+        # runs after every field is populated.
         validate_workloads(v)
         # De-duplicated but ORDER PRESERVED: the set of tags is what matters,
         # and sorting would discard the order the collector picked them in for
@@ -188,6 +214,7 @@ class CollectedProfileOut(BaseModel):
     building_category: str
     has_security_desk: bool
     workloads:         list[str]
+    workload_other:    Optional[str]
     workload_class:    str
     note:           Optional[str]
     opens_at:       Optional[time]

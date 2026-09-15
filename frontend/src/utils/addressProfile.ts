@@ -36,6 +36,7 @@ export const BUILDING_TYPES = [
   { value: 'doorman_reception', label: 'Doorman / Reception',  category: 'residential' },
   { value: 'mailroom',          label: 'Mailroom',             category: 'residential' },
   { value: 'lockers',           label: 'Lockers',              category: 'residential' },
+  { value: 'public_housing',    label: 'Public housing',       category: 'residential' },
   // Commercial
   { value: 'storefront_reception',  label: 'Store front: reception',   category: 'commercial' },
   { value: 'storefront_front_door', label: 'Store front: front door',  category: 'commercial' },
@@ -63,15 +64,33 @@ export const WORKLOAD_TAGS = [
   { value: 'high_wait',      label: 'High wait',     hint: 'queues, sign-in, dock areas' },
 ] as const;
 
-/** Kept separate from WORKLOAD_TAGS so it renders apart from the real ones —
- *  it is an answer about the others, not a peer of them. */
-export const NOT_APPLICABLE = 'not_applicable';
+/** Separate from WORKLOAD_TAGS because it is an answer ABOUT the others, and
+ *  because it carries text: picking it without saying what it is records that
+ *  the four tags were wrong without recording what is right. */
+export const OTHER = 'other';
 
-export type WorkloadTag = typeof WORKLOAD_TAGS[number]['value'] | typeof NOT_APPLICABLE;
+export type WorkloadTag = typeof WORKLOAD_TAGS[number]['value'] | typeof OTHER;
+
+/** Tags that cannot be true of a given building type.
+ *
+ *  A walk-up is defined by having no elevator, which caps the floors and forces
+ *  every package up the stairs one at a time — so it is neither a high-rise nor
+ *  a bulk drop. Mirrors INCOMPATIBLE_WITH_TYPE in building_taxonomy.py; the
+ *  client disables the boxes, the server rejects the pair. */
+export const INCOMPATIBLE_WITH_TYPE: Record<string, readonly string[]> = {
+  walkup: ['high_rise', 'bulk_drop'],
+};
+
+export const isIncompatible = (buildingType: string, tag: string): boolean =>
+  (INCOMPATIBLE_WITH_TYPE[buildingType] ?? []).includes(tag);
 
 /** Mirrors validate_workloads() on the server. Returns an error string, or
  *  null when the selection is valid. */
-export function workloadError(tags: string[] | undefined): string | null {
+export function workloadError(
+  tags: string[] | undefined,
+  buildingType?: string,
+  other?: string,
+): string | null {
   // `tags` is typed as an array but arrives from IndexedDB, where a profile
   // saved before ADR-418 has no `workloads` key at all. TypeScript cannot see
   // that — stored data predates the type — so the undefined check is load
@@ -80,8 +99,18 @@ export function workloadError(tags: string[] | undefined): string | null {
   if (!tags || tags.length === 0) {
     return 'Pick at least one workload, or “None of these apply”.';
   }
-  if (tags.includes(NOT_APPLICABLE) && tags.length > 1) {
-    return '“None of these apply” cannot be combined with another workload.';
+  if (tags.includes(OTHER) && !(other || '').trim()) {
+    return 'Say what the other workload is.';
+  }
+  if (buildingType) {
+    const clash = tags.filter((t) => isIncompatible(buildingType, t));
+    if (clash.length > 0) {
+      const label = BUILDING_TYPES.find((b) => b.value === buildingType)?.label ?? buildingType;
+      const names = clash
+        .map((t) => WORKLOAD_TAGS.find((w) => w.value === t)?.label ?? t)
+        .join(' or ');
+      return `A ${label.toLowerCase()} cannot also be ${names.toLowerCase()}.`;
+    }
   }
   return null;
 }
@@ -127,6 +156,8 @@ export interface AddressProfile {
    *  doorman building that is also 20+ floors is genuinely both. Empty is
    *  invalid — `['not_applicable']` is how "none apply" is said. */
   workloads: WorkloadTag[];
+  /** What the `other` tag means. Required when it is picked, empty otherwise. */
+  workload_other: string;
   /** Free text in the collector's words — the backend's raw_note. */
   note: string;
   /** Operating hours, "HH:MM" or ''. Feeds the reattempt bundler upstream. */
@@ -158,6 +189,7 @@ export function hydrateProfile(p: AddressProfile): AddressProfile {
   return {
     ...p,
     workloads: p.workloads ?? [],
+    workload_other: p.workload_other ?? '',
     has_security_desk: p.has_security_desk ?? false,
   };
 }
@@ -172,6 +204,7 @@ export const emptyProfile = (date: string, address = ''): AddressProfile => ({
   building_type: '',
   has_security_desk: false,
   workloads: [],
+  workload_other: '',
   note: '',
   opens_at: '', closes_at: '', break_start: '', break_end: '',
   troublesome: false,
@@ -196,7 +229,7 @@ export const isUsable = (p: AddressProfile): boolean =>
  *  import maps straight across without a translation table. */
 export const PROFILE_COLUMNS = [
   'normalised_address', 'building_category', 'building_type',
-  'has_security_desk', 'workloads',
+  'has_security_desk', 'workloads', 'workload_other',
   'raw_note', 'opens_at', 'closes_at', 'break_start', 'break_end',
   'troublesome', 'collected_by', 'collected_on', 'updated_at',
 ] as const;
@@ -230,6 +263,7 @@ export function profilesToCSV(profiles: AddressProfile[]): string {
       // cell, and a comma there survives the file but trips every naive
       // splitter downstream.
       p.workloads.join('|'),
+      p.workload_other,
       p.note,
       p.opens_at, p.closes_at, p.break_start, p.break_end,
       // "true"/"false" rather than 1/0: unambiguous in every importer, and

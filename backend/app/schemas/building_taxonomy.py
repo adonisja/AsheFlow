@@ -44,7 +44,11 @@ _RESIDENTIAL_TYPES = {
     "elevator",
     "doorman_reception",   # doorman and receptionist do the same job at the door
     "mailroom",
-    "lockers",             # NEW: parcel lockers are their own delivery flow
+    "lockers",             # parcel lockers are their own delivery flow
+    # Public housing is its own delivery reality, not a walk-up or an elevator
+    # building that happens to be public: multiple buildings behind one address,
+    # numbered entrances, and access rules that differ from private stock.
+    "public_housing",
 }
 
 _COMMERCIAL_TYPES = {
@@ -89,32 +93,52 @@ WORKLOAD_TAGS = frozenset({
     "door_to_door",    # each package to the customer's own door
     "high_rise",       # 20+ floors
     "high_wait",       # queues, sign-in, dock waits
-    "not_applicable",  # an explicit "none of these", not a blank
+    "other",           # something the four above do not describe; needs text
 })
 
-NOT_APPLICABLE = "not_applicable"
+OTHER = "other"
+
+# Combinations that cannot both be true of one door.
+#
+# A walk-up is defined by the absence of an elevator, which caps it at a handful
+# of floors and forces every package up the stairs individually. It is therefore
+# neither a high-rise nor a bulk drop, and a row claiming otherwise is a
+# mis-click rather than an observation.
+#
+# Enforced on BOTH sides. The client disables the boxes, which is the good
+# experience; the server rejects the pair, which is the actual guarantee —
+# /collection/submit is public, so anything holding a token can post whatever
+# it likes.
+INCOMPATIBLE_WITH_TYPE: dict[str, frozenset[str]] = {
+    "walkup": frozenset({"high_rise", "bulk_drop"}),
+}
 
 
-def validate_workloads(tags: list[str]) -> None:
-    """A profile must SAY something about workload.
+def validate_workloads(tags: list[str], building_type: str | None = None) -> None:
+    """A profile must SAY something about workload, and not contradict itself.
 
-    An empty list used to be indistinguishable from "not filled in". Requiring
-    an explicit `not_applicable` makes the difference visible in the data, which
-    is the whole reason the tag exists.
+    An empty list is indistinguishable from "not filled in", so it is rejected:
+    `other` (with text) is how a collector says the four tags do not fit.
+
+    `building_type` is optional so the function is still usable where the type
+    is not to hand, but the caller that has it SHOULD pass it — that is the only
+    place the walk-up rules can be checked.
     """
     if not tags:
         raise ValueError(
             "At least one workload must be selected. "
-            "Use 'not_applicable' if none apply."
+            "Use 'other' if none of them fit."
         )
     unknown = sorted(set(tags) - WORKLOAD_TAGS)
     if unknown:
         raise ValueError(f"Unknown workload tags: {unknown}")
-    if NOT_APPLICABLE in tags and len(tags) > 1:
-        raise ValueError(
-            "'not_applicable' means none apply; it cannot be combined "
-            "with another workload."
-        )
+
+    if building_type:
+        clash = sorted(INCOMPATIBLE_WITH_TYPE.get(building_type, frozenset()) & set(tags))
+        if clash:
+            raise ValueError(
+                f"{building_type!r} cannot also be {', '.join(clash)}."
+            )
 
 
 # ── Migration mapping ────────────────────────────────────────────────────────
@@ -148,6 +172,7 @@ BUILDING_TYPE_PROTOCOL: dict[str, str] = {
     "doorman_reception":      "Hand to doorman or receptionist. Get a name if required.",
     "mailroom":               "Photo of packages in the mail room.",
     "lockers":                "Scan into the locker bank. Photo of the locker number.",
+    "public_housing":         "Check the building and entrance number. Photo at the door.",
     "storefront_reception":   "Get the receptionist's name.",
     "storefront_front_door":  "Photo at front door or get the receptionist's name.",
     "freight":                "Use the freight entrance. Photo at the door.",
@@ -156,4 +181,4 @@ BUILDING_TYPE_PROTOCOL: dict[str, str] = {
     UNKNOWN_TYPE:             "Not yet observed. Record what you find.",
 }
 
-SECURITY_DESK_PROTOCOL = "Bring ID. This door has a security desk."
+SECURITY_DESK_PROTOCOL = "Requires photo ID."
