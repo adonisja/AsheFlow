@@ -96,6 +96,31 @@ export default function Dropdown({
     listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [cursor, open]);
 
+  /** Open upward when there is not enough room below.
+   *
+   *  The panel used to always drop down. That was invisible while an ancestor
+   *  card clipped it; once the clipping was removed the real behaviour showed
+   *  — a picker near the bottom of a phone screen opened past the fold, so the
+   *  last options could only be reached by scrolling the page while a menu was
+   *  open. Measured on the Workload picker: the list's bottom sat below
+   *  innerHeight with four options in it.
+   *
+   *  Decided at open time from the trigger's position, not on every scroll: a
+   *  menu that flips while you are reaching for an option moves the target
+   *  under your finger. */
+  const [dropUp, setDropUp] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const r = boxRef.current?.getBoundingClientRect();
+    if (!r) return;
+    // 18rem panel cap + the search row + a little breathing room.
+    const need = Math.min(340, 288 + (searchable ? 44 : 0)) + 12;
+    const below = window.innerHeight - r.bottom;
+    // Only flip when above is genuinely roomier — otherwise stay down, which
+    // is what people expect.
+    setDropUp(below < need && r.top > below);
+  }, [open, searchable]);
+
   const choose = (o: DropdownOption) => {
     if (o.disabled) return;
     onChange(o.value);
@@ -136,7 +161,7 @@ export default function Dropdown({
       </button>
 
       {open && (
-        <div className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} z-40 mt-1.5 ${widthClass} min-w-[12rem] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-lg overflow-hidden`}>
+        <div className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} ${dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'} z-40 ${widthClass} min-w-[12rem] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-lg overflow-hidden`}>
           {searchable && (
             <div className="relative border-b border-border">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />

@@ -1656,7 +1656,11 @@ function RouteCard({ route, open, onToggle, onDelete, onPatch, pool, crew, previ
   const status = !route.route_start ? 'pending' : !route.route_end ? 'running' : 'done';
 
   return (
-    <div className={`card overflow-hidden transition-shadow ${status === 'running' ? 'ring-1 ring-primary/30' : ''}`}>
+    /* NO overflow-hidden — it clips the tote dropdown inside ToteList the
+       same way it clipped the building-type list on the Addresses tab. A
+       clipping box cannot be escaped with z-index. Nothing here scrolls;
+       the padding keeps the corners clean on its own. */
+    <div className={`card transition-shadow ${status === 'running' ? 'ring-1 ring-primary/30' : ''}`}>
       <div className="flex items-center gap-3 p-4">
         <button onClick={onToggle} className="p-1 rounded-md hover:bg-muted shrink-0" type="button" aria-expanded={open}>
           {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
