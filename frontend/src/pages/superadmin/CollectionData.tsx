@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Download, AlertTriangle,
 } from 'lucide-react';
@@ -8,7 +8,8 @@ import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { errorText } from '../../utils/errorText';
 import type {
-  CollectedProfile, CollectionTokenCreated, CollectionTokenSummary,
+  CollectedProfile, CollectedWalkerDay, CollectedWalkerDayDetail,
+  CollectionTokenCreated, CollectionTokenSummary,
 } from '../../api/types';
 
 /**
@@ -60,10 +61,57 @@ function toCSV(rows: CollectedProfile[]): string {
   return out.join('\n');
 }
 
+/** One row per ADDRESS on a route, not one per day.
+ *
+ *  The grain is deliberate: the comparison this data exists for is
+ *  "which walker carried which address", so a row per day would need unpacking
+ *  before it could be compared against the sort output. Day-level facts repeat
+ *  down the rows, which is what makes the file joinable.
+ */
+const DAY_COLUMNS = [
+  'walker_name', 'collected_on', 'arrival_time', 'departure_time',
+  'route_id', 'route_start', 'route_end', 'difficulty',
+  'bag_id', 'address', 'sort_zone', 'stop',
+  'rts_count', 'ov_count', 'revision', 'submitted_at',
+] as const;
+
+function daysToCSV(rows: CollectedWalkerDayDetail[]): string {
+  const out = [DAY_COLUMNS.join(',')];
+  for (const d of rows) {
+    for (const r of d.payload.routes ?? []) {
+      const rts = r.rts?.length ?? 0;
+      const ovs = r.ovs?.length ?? 0;
+      // A route with no totes still gets a row: it happened, and dropping it
+      // would make the route count in this file disagree with the listing.
+      const totes = r.totes?.length ? r.totes : [{ bag_id: '', addresses: [] as string[] }];
+      for (const t of totes) {
+        const addrs = t.addresses?.length ? t.addresses : [''];
+        for (const a of addrs) {
+          out.push([
+            d.walker_name, d.collected_on, d.arrival_time ?? '', d.departure_time ?? '',
+            r.route_id, r.route_start, r.route_end, r.difficulty,
+            t.bag_id, a,
+            ('sort_zone' in t ? t.sort_zone : '') ?? '', ('stop' in t ? t.stop : '') ?? '',
+            rts, ovs, d.revision, d.submitted_at,
+          ].map(q).join(','));
+        }
+      }
+    }
+  }
+  return out.join('\n');
+}
+
 export default function CollectionData() {
   const [tokens, setTokens] = useState<CollectionTokenSummary[]>([]);
   const [profiles, setProfiles] = useState<CollectedProfile[]>([]);
   const [activeToken, setActiveToken] = useState<string | null>(null);
+  /** Which dataset is on screen. The two campaigns collect different things —
+   *  addresses describe a door, days describe a shift — so they get two views
+   *  rather than one merged table whose columns are half empty either way. */
+  const [dataset, setDataset] = useState<'addresses' | 'days'>('addresses');
+  const [days, setDays] = useState<CollectedWalkerDay[]>([]);
+  /** The expanded day, fetched on demand. The listing carries counts only. */
+  const [openDay, setOpenDay] = useState<CollectedWalkerDayDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingRows, setLoadingRows] = useState(false);
   const [error, setError] = useState('');
@@ -110,8 +158,43 @@ export default function CollectionData() {
     }
   }, []);
 
+  const loadDays = useCallback(async (tokenId: string | null) => {
+    setLoadingRows(true);
+    try {
+      const { data } = await axiosClient.get<CollectedWalkerDay[]>('/collection/walker-days', {
+        params: tokenId ? { token_id: tokenId, limit: 1000 } : { limit: 1000 },
+      });
+      setDays(data);
+      setError('');
+    } catch (e) {
+      setError(errorText(e, 'Could not load collected days.'));
+    } finally {
+      setLoadingRows(false);
+    }
+  }, []);
+
+  /** One day in full. Fetched on expand rather than with the listing: forty
+   *  days with every tote and address inline is a large response for a table
+   *  that only shows counts. */
+  const expandDay = useCallback(async (id: string) => {
+    if (openDay?.id === id) { setOpenDay(null); return; }
+    try {
+      const { data } = await axiosClient.get<CollectedWalkerDayDetail>(
+        `/collection/walker-days/${id}`);
+      setOpenDay(data);
+      setError('');
+    } catch (e) {
+      setError(errorText(e, 'Could not load that day.'));
+    }
+  }, [openDay]);
+
   useEffect(() => { void loadTokens(); }, [loadTokens]);
-  useEffect(() => { void loadProfiles(activeToken); }, [activeToken, loadProfiles]);
+  useEffect(() => {
+    // Only the visible dataset is fetched. Loading both on every campaign
+    // click would double the traffic to show one table.
+    if (dataset === 'addresses') void loadProfiles(activeToken);
+    else void loadDays(activeToken);
+  }, [activeToken, dataset, loadProfiles, loadDays]);
 
   const createToken = async () => {
     if (!label.trim()) { setError('Give the campaign a name first.'); return; }
@@ -159,14 +242,38 @@ export default function CollectionData() {
     }
   };
 
-  const download = () => {
-    const blob = new Blob([toCSV(profiles)], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
+  const save = (name: string, body: string) => {
+    const url = URL.createObjectURL(new Blob([body], { type: 'text/csv' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `collected-addresses-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const [downloading, setDownloading] = useState(false);
+
+  const download = async () => {
+    if (dataset === 'addresses') {
+      save('collected-addresses', toCSV(profiles));
+      return;
+    }
+    // The day CSV is one row per ADDRESS, so it needs every payload — and the
+    // listing deliberately carries none. Fetched here, on an explicit export,
+    // rather than eagerly on every page load: this is the one moment the cost
+    // buys something.
+    setDownloading(true);
+    try {
+      const full = await Promise.all(days.map((d) =>
+        axiosClient.get<CollectedWalkerDayDetail>(`/collection/walker-days/${d.id}`)
+          .then((r) => r.data)));
+      save('collected-walker-days', daysToCSV(full));
+      setError('');
+    } catch (e) {
+      setError(errorText(e, 'Could not build the day export.'));
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const activeLabel = useMemo(
@@ -343,18 +450,133 @@ export default function CollectionData() {
                 {activeLabel ?? 'All campaigns'}
               </h2>
               <p className="text-[11px] text-muted-foreground">
-                {profiles.length} address{profiles.length === 1 ? '' : 'es'} collected
+                {dataset === 'addresses'
+                  ? `${profiles.length} address${profiles.length === 1 ? '' : 'es'} collected`
+                  : `${days.length} walker day${days.length === 1 ? '' : 's'} collected`}
               </p>
             </div>
-            {profiles.length > 0 && (
-              <button onClick={download} className="btn-secondary text-sm inline-flex items-center gap-1.5">
-                <Download className="w-4 h-4" /> CSV
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {/* Two datasets, two views. Addresses describe a door and days
+                  describe a shift, so one merged table would be half empty
+                  whichever row you were looking at. */}
+              <div className="flex rounded-lg bg-muted p-0.5 text-sm">
+                {(['addresses', 'days'] as const).map((k) => (
+                  <button
+                    key={k}
+                    onClick={() => { setDataset(k); setOpenDay(null); }}
+                    className={`rounded-md px-2.5 py-1 ${
+                      dataset === k ? 'bg-card shadow-sm font-medium' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {k === 'addresses' ? 'Addresses' : 'Days'}
+                  </button>
+                ))}
+              </div>
+              {((dataset === 'addresses' && profiles.length > 0)
+                || (dataset === 'days' && days.length > 0)) && (
+                <button onClick={() => void download()} className="btn-secondary text-sm inline-flex items-center gap-1.5">
+                  <Download className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
+                  {downloading ? 'Building…' : 'CSV'}
+                </button>
+              )}
+            </div>
           </div>
 
           {loadingRows ? (
             <SkeletonCard />
+          ) : dataset === 'days' ? (
+            days.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No days submitted yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th className="py-2 pr-3 font-semibold">Walker</th>
+                      <th className="py-2 pr-3 font-semibold">Date</th>
+                      <th className="py-2 pr-3 font-semibold">Shift</th>
+                      <th className="py-2 pr-3 font-semibold">Routes</th>
+                      <th className="py-2 pr-3 font-semibold">Totes</th>
+                      <th className="py-2 pr-3 font-semibold">RTS</th>
+                      <th className="py-2 font-semibold">Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {days.map((d) => (
+                      <Fragment key={d.id}>
+                        <tr
+                          onClick={() => void expandDay(d.id)}
+                          className="cursor-pointer border-b border-border/50 align-top hover:bg-muted/50"
+                        >
+                          <td className="py-2 pr-3 font-medium">{d.walker_name}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">{d.collected_on}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
+                            {d.arrival_time || '—'}–{d.departure_time || '—'}
+                          </td>
+                          <td className="py-2 pr-3">{d.route_count}</td>
+                          <td className="py-2 pr-3">{d.tote_count}</td>
+                          <td className="py-2 pr-3">{d.rts_count}</td>
+                          <td className="py-2 whitespace-nowrap text-muted-foreground">
+                            {fmt(d.submitted_at)}
+                            {/* A revision above 1 means the day was re-sent.
+                                Worth showing: it separates a corrected day
+                                from a first submission without a diff. */}
+                            {d.revision > 1 && (
+                              <span className="ml-1 rounded bg-muted px-1 text-[10px]">
+                                rev {d.revision}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                        {openDay?.id === d.id && (
+                          <tr className="border-b border-border/50 bg-muted/30">
+                            <td colSpan={7} className="px-3 py-3">
+                              <div className="space-y-3">
+                                {(openDay.payload.routes ?? []).map((r) => (
+                                  <div key={r.route_id} className="rounded-lg border border-border bg-card p-2.5">
+                                    <p className="text-xs font-semibold">
+                                      Route {r.route_id}
+                                      <span className="ml-2 font-normal text-muted-foreground">
+                                        {r.route_start || '—'}–{r.route_end || '—'}
+                                        {r.difficulty && ` · ${r.difficulty}`}
+                                      </span>
+                                    </p>
+                                    {r.notes && (
+                                      <p className="mt-1 text-[11px] text-muted-foreground">{r.notes}</p>
+                                    )}
+                                    {(r.totes ?? []).map((t, i) => (
+                                      <div key={`${t.bag_id}-${i}`} className="mt-1.5 text-[11px]">
+                                        <span className="font-medium">{t.bag_id || '(no bag id)'}</span>
+                                        {t.stop && <span className="text-muted-foreground"> · {t.stop}</span>}
+                                        {t.addresses?.length > 0 && (
+                                          <span className="text-muted-foreground">
+                                            {' — '}{t.addresses.join('; ')}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ))}
+                                    {(r.rts ?? []).length > 0 && (
+                                      <p className="mt-1.5 text-[11px] text-warning">
+                                        RTS: {r.rts.map((x) => `${x.tba || '?'} (${x.code || '?'})`).join(', ')}
+                                      </p>
+                                    )}
+                                    {(r.ovs ?? []).length > 0 && (
+                                      <p className="mt-1 text-[11px] text-muted-foreground">
+                                        OVs: {r.ovs.map((o) => `${o.ov_id || '?'}${o.size ? ` ${o.size}` : ''}`).join(', ')}
+                                      </p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
           ) : profiles.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing submitted yet.

@@ -32,7 +32,9 @@ import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
   emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile, knownAddresses, rememberKnown, doorKey} from '../utils/addressProfile';
-import { checkAddress, submitConfigured, submitProfiles } from '../utils/collectionSubmit';
+import {
+  checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles,
+} from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
 /** Manual walker/route tracker — a research instrument, not an operational page.
@@ -162,6 +164,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
     () => localStorage.getItem('walkerlog.collectToken') ?? '',
   );
   const [sending, setSending] = useState(false);
+  const [sendingDays, setSendingDays] = useState(false);
   /** Door keys the campaign has already received, as reported by the server on
    *  this device's own submissions. Seeded from localStorage so the warning
    *  survives a reload. */
@@ -732,6 +735,39 @@ export default function WalkerLog({ dataset = 'routes' }: {
   }, [date, unclaimed, commitUnclaimed, refreshSidebar, day, openDay, flash]);
 
   // ── Export / import ────────────────────────────────────────────────────
+  /** Sends the logged days for the SELECTED DATE.
+   *
+   *  The date, not everything ever logged. A collector sends the day they just
+   *  finished; pushing every past day on each tap would re-send work already
+   *  received, and while the server upserts (so nothing duplicates), it would
+   *  bump every revision and make "what changed" unreadable.
+   *
+   *  Local storage is NOT cleared on success — the submission is a copy sent
+   *  onward, not a handoff, so a server that later loses the batch does not
+   *  take the only record with it. */
+  const sendDays = useCallback(async () => {
+    const worth = dayList.filter(dayWorthSending);
+    if (worth.length === 0) {
+      setError('Nothing to send. A day needs a walker and at least one route.');
+      return;
+    }
+    setSendingDays(true);
+    setError('');
+    try {
+      const r = await submitDays(collectToken.trim(), worth);
+      localStorage.setItem('walkerlog.collectToken', collectToken.trim());
+      flash(
+        `Sent ${r.accepted} day${r.accepted === 1 ? '' : 's'}`
+        + (r.replaced ? `, updated ${r.replaced}` : '')
+        + '.',
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send.');
+    } finally {
+      setSendingDays(false);
+    }
+  }, [dayList, collectToken, flash]);
+
   const exportAll = async (fmt: 'json' | 'csv' | 'xlsx') => {
     const all = await listAll();
     const allUnclaimed = (await listAllUnclaimed()).filter((u) => u.routes.length > 0);
@@ -1287,6 +1323,46 @@ export default function WalkerLog({ dataset = 'routes' }: {
               </ul>
             )}
           </div>
+
+          {/* Sending is OPTIONAL and additive (ADR-415 D5), and hidden entirely
+              when no collection server is configured so a purely local
+              deployment never shows a control that cannot work.
+
+              Sends THIS DATE only. A collector sends the day they just
+              finished; pushing every past day on each tap would re-send work
+              already received and bump every revision, making "what changed"
+              unreadable on the other end. Past days are still reachable — the
+              date picker above moves to one and this sends that. */}
+          {submitConfigured() && dayList.some(dayWorthSending) && (
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Collection link
+                </label>
+                <input
+                  value={collectToken}
+                  onChange={(e) => setCollectToken(e.target.value)}
+                  placeholder="Paste the code you were given"
+                  className={`${TEXT_INPUT} mt-1 font-mono text-xs`}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void sendDays()}
+                disabled={sendingDays || !collectToken.trim()}
+                className="btn-primary w-full text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
+              >
+                {sendingDays
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
+                  : <><Upload className="w-4 h-4" /> Send {dayList.filter(dayWorthSending).length} day{dayList.filter(dayWorthSending).length === 1 ? '' : 's'}</>}
+              </button>
+              <p className="text-[11px] text-muted-foreground">
+                {date}. Your entries stay on this device either way. Sending is
+                a copy, not a handoff, and re-sending updates rather than
+                duplicating.
+              </p>
+            </div>
+          )}
         </aside>
 
         <div className="space-y-6">
