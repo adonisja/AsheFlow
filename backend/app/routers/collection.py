@@ -29,8 +29,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import RoleChecker, get_caller_employee, get_super_admin
 from app.api.ratelimit import limiter
 from app.database import get_db
-from app.models.collection import CollectedAddressProfile, CollectionToken
+from app.models.collection import CollectedAddressProfile, CollectedWalkerDay, CollectionToken
 from app.models.employee import Employee
+from app.schemas.walker_day import (
+    CollectedWalkerDayDetail, CollectedWalkerDayOut,
+    WalkerDaySubmitIn, WalkerDaySubmitOut,
+)
 from app.schemas.collection import (
     CollectionCheckIn,
     CollectionCheckOut,
@@ -219,6 +223,128 @@ def check_address(
     return CollectionCheckOut(known=True, collected_on=row[0])
 
 
+@router.post("/submit-day", response_model=WalkerDaySubmitOut,
+             status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("30/minute")
+def submit_walker_days(
+    request: Request,
+    body: WalkerDaySubmitIn,
+    db: Session = Depends(get_db),
+):
+    """Accept a batch of logged walker days (ADR-417 D3-D5).
+
+    202, not 201: a submission for later review, not a resource the caller can
+    go and look at. There is no read on this path, for the same reason there is
+    none on /submit — see ADR-415 D4.
+
+    UPSERTS on (token, collected_on, walker_name). A resubmission REPLACES the
+    day rather than adding a second one: the field connection drops mid-submit
+    often enough that a retry has to be safe, and the page already models one
+    row per walker per date locally, so last-write-wins is what the collector
+    sees. `revision` counts the overwrites so a reader can tell a corrected day
+    from a first submission.
+    """
+    tok = _resolve_token(db, body.token)
+
+    # Same daily ceiling as addresses, counted in the same unit: one row is one
+    # day's work by one walker. A leaked token that could not write addresses
+    # but could write unlimited days would not be bounded at all.
+    today = date.today()
+    used = (
+        db.query(sa_func.count(CollectedWalkerDay.id))
+        .filter(
+            CollectedWalkerDay.token_id == tok.id,
+            CollectedWalkerDay.collected_on == today,
+        )
+        .scalar()
+        or 0
+    )
+    if used + len(body.days) > tok.daily_cap:
+        raise HTTPException(
+            status_code=429,
+            detail="Daily collection limit reached for this link.",
+        )
+
+    accepted = 0
+    replaced = 0
+
+    for d in body.days:
+        # `.model_dump(mode="json")` and not the model object: a JSONB column
+        # handed a Pydantic object stores a Python repr, not JSON. `mode="json"`
+        # so the nested `date` becomes a string rather than a date instance
+        # psycopg cannot serialise inside a dict.
+        payload = d.model_dump(mode="json")
+
+        routes = d.routes
+        counts = dict(
+            route_count=len(routes),
+            tote_count=sum(len(r.totes) for r in routes),
+            rts_count=sum(len(r.rts) for r in routes),
+        )
+
+        existing = (
+            db.query(CollectedWalkerDay)
+            .filter(
+                CollectedWalkerDay.token_id == tok.id,
+                CollectedWalkerDay.collected_on == d.collected_on,
+                CollectedWalkerDay.walker_name == d.walker_name,
+            )
+            .first()
+        )
+
+        if existing is not None:
+            existing.arrival_time   = d.arrival_time or None
+            existing.departure_time = d.departure_time or None
+            existing.payload        = payload
+            existing.revision       = (existing.revision or 1) + 1
+            existing.submitted_at   = datetime.now(timezone.utc)
+            for k, v in counts.items():
+                setattr(existing, k, v)
+            replaced += 1
+        else:
+            db.add(CollectedWalkerDay(
+                company_id=tok.company_id,      # from the TOKEN, never the body
+                token_id=tok.id,
+                walker_name=d.walker_name,
+                collected_on=d.collected_on,
+                arrival_time=d.arrival_time or None,
+                departure_time=d.departure_time or None,
+                payload=payload,
+                **counts,
+            ))
+            accepted += 1
+
+        try:
+            # Per-row flush so one bad day does not discard the batch, and so a
+            # concurrent submit of the same day surfaces here rather than at
+            # commit.
+            db.flush()
+        except IntegrityError:
+            # Two devices submitting the same walker-day at once: the loser
+            # re-reads and overwrites, which is the same last-write-wins rule
+            # the sequential path applies.
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="That day was submitted concurrently. Send it again.",
+            )
+
+    if accepted or replaced:
+        write_audit(
+            db,
+            action_type="collection.submit_day",
+            target_table="collected_walker_days",
+            target_id=str(tok.id),
+            company_id=str(tok.company_id),
+            # No actor_id: there is no account behind this, and inventing one
+            # would make the audit log claim something untrue.
+            detail={"label": tok.label, "accepted": accepted, "replaced": replaced},
+        )
+    db.commit()
+
+    return WalkerDaySubmitOut(accepted=accepted, replaced=replaced)
+
+
 # ── Operator side — authenticated ────────────────────────────────────────────
 
 @router.post("/tokens", response_model=CollectionTokenOut, status_code=status.HTTP_201_CREATED)
@@ -364,6 +490,63 @@ def list_tokens(
         row.submission_count = counts.get(t.id, 0)
         out.append(row)
     return out
+
+
+@router.get("/walker-days", status_code=status.HTTP_200_OK)
+@limiter.limit("60/minute")
+def list_collected_days(
+    request: Request,
+    company_id: str | None = Query(None),
+    token_id: str | None = Query(None),
+    collected_on: date | None = Query(None, description="Single collection date."),
+    walker: str | None = Query(None, max_length=100, description="Exact walker name."),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _super: dict = Depends(get_super_admin),
+) -> list[CollectedWalkerDayOut]:
+    """Logged walker days, newest first. Counts only, no payloads.
+
+    SUPER ADMIN, not platform staff. These rows carry real coworkers' names and
+    ADR-343 D4 keeps personal data off every cross-tenant support path.
+
+    The payload is excluded deliberately: a page of forty days with every tote
+    and address inline is a large response for a listing that only needs the
+    counts. Use /walker-days/{id} for one day in full.
+    """
+    q = db.query(CollectedWalkerDay)
+    if company_id:
+        q = q.filter(CollectedWalkerDay.company_id == company_id)
+    if token_id:
+        q = q.filter(CollectedWalkerDay.token_id == token_id)
+    if collected_on:
+        q = q.filter(CollectedWalkerDay.collected_on == collected_on)
+    if walker:
+        q = q.filter(CollectedWalkerDay.walker_name == walker)
+
+    rows = (
+        q.order_by(CollectedWalkerDay.collected_on.desc(),
+                   CollectedWalkerDay.submitted_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [CollectedWalkerDayOut.model_validate(r) for r in rows]
+
+
+@router.get("/walker-days/{day_id}", status_code=status.HTTP_200_OK)
+@limiter.limit("60/minute")
+def get_collected_day(
+    request: Request,
+    day_id: str,
+    db: Session = Depends(get_db),
+    _super: dict = Depends(get_super_admin),
+) -> CollectedWalkerDayDetail:
+    """One logged day, payload included."""
+    row = db.query(CollectedWalkerDay).filter(CollectedWalkerDay.id == day_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such collected day.")
+    return CollectedWalkerDayDetail.model_validate(row)
 
 
 @router.get("/profiles", status_code=status.HTTP_200_OK)

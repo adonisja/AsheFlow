@@ -221,13 +221,31 @@ class TestTheRouterIsActuallyMounted:
     def test_the_only_reads_are_the_super_admin_ones(self):
         """A GET on a collection path is allowed only where a super-admin gate
         stands in front of it. Any other one is a public read of customer
-        addresses."""
-        from app.main import app
-        allowed = {"/api/v1/collection/tokens", "/api/v1/collection/profiles"}
-        spec = app.openapi()
-        for path, ops in spec["paths"].items():
-            if "/collection" in path and "get" in ops:
-                assert path in allowed, f"{path} exposes an unexpected read"
+        addresses.
+
+        Checks the GATE, not a hardcoded list of paths. An allowlist has to be
+        edited every time a read is added, and the edit is the moment the
+        question stops being asked — the reviewer updates the set and moves on.
+        Resolving the dependency means a new read passes only if it is actually
+        gated, and a read that loses its gate fails even though its path is
+        unchanged.
+        """
+        import inspect
+        from app.api.deps import get_super_admin
+        from app.routers.collection import router
+
+        for r in router.routes:
+            if "GET" not in getattr(r, "methods", set()):
+                continue
+            gates = [
+                p.default.dependency
+                for p in inspect.signature(r.endpoint).parameters.values()
+                if getattr(p.default, "dependency", None) is not None
+            ]
+            assert get_super_admin in gates, (
+                f"{r.path} is a read on the collection router with no "
+                f"super-admin gate"
+            )
 
 
 class TestThePlatformOwnerCanReadWhatArrived:
