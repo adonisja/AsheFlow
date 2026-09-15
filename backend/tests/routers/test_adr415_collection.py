@@ -278,3 +278,63 @@ class TestThePlatformOwnerCanReadWhatArrived:
         params = inspect.signature(list_collected_profiles).parameters
         assert "limit" in params and "offset" in params
         assert params["limit"].default.default == 200
+
+
+class TestTheDuplicateCheckIsNotAnOracle:
+    """ADR-417 D7. A read on the public path, narrowed so it cannot enumerate."""
+
+    def test_the_request_takes_one_address_never_a_list(self):
+        """A list parameter would make this a bulk oracle: paste a thousand
+        addresses, learn the campaign's coverage in one call."""
+        from app.schemas.collection import CollectionCheckIn
+        assert CollectionCheckIn.model_fields["address"].annotation is str
+        with pytest.raises(ValidationError):
+            CollectionCheckIn(token="k" * 32, address=["a", "b"])
+
+    def test_the_response_is_existence_and_a_date_and_nothing_else(self):
+        """No id, no building type, no collector — those would make this a read
+        of the record rather than a check for its existence."""
+        from app.schemas.collection import CollectionCheckOut
+        assert set(CollectionCheckOut.model_fields) == {"known", "collected_on"}
+
+    def test_the_check_is_scoped_to_the_callers_own_campaign(self):
+        """A token must reveal only what that campaign collected. Without the
+        token_id filter, one token would answer for the whole table."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.check_address)
+        assert "CollectedAddressProfile.token_id == tok.id" in src, \
+            "the check must be scoped to the token's own campaign"
+
+    def test_an_inactive_token_is_rejected_before_any_lookup(self):
+        """_resolve_token raises 404 for missing/revoked/expired, so /check
+        cannot be used to probe token liveness more cheaply than /submit."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.check_address)
+        assert src.index("_resolve_token") < src.index("door_key(body.address)"), \
+            "the token must be resolved before the address is folded or queried"
+
+    def test_the_fold_matches_the_client(self):
+        """doorKey() in addressProfile.ts and door_key() here implement one
+        rule in two languages. These vectors are the contract between them —
+        add a case to BOTH when either moves."""
+        from app.services.door_key import door_key
+        same = [
+            ("380 W 33 ST", "380 West 33rd Street"),
+            ("380 w 33 st", "  380 W. 33 St.  "),
+            ("12 Fifth Ave", "12 Fifth Avenue"),
+            ("500 E 14TH ST APT 3B", "500 East 14th Street"),
+            ("45 Park Pl", "45 Park Place"),
+        ]
+        differ = [
+            ("380 W 33 ST", "380 E 33 ST"),
+            ("380 W 33 ST", "381 W 33 ST"),
+            ("380 W 33 ST", "380 W 34 ST"),
+            ("12 Fifth Ave", "12 Fifth St"),
+            ("100 Main St", "200 Main St"),
+        ]
+        for a, b in same:
+            assert door_key(a) == door_key(b), f"{a!r} and {b!r} are one door"
+        for a, b in differ:
+            assert door_key(a) != door_key(b), f"{a!r} and {b!r} are different doors"
