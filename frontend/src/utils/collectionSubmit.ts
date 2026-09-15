@@ -24,6 +24,11 @@ export const submitConfigured = (): boolean => API.length > 0;
 export interface SubmitResult {
   accepted: number;
   duplicate: number;
+  /** Addresses in THIS batch the campaign had already received — typically
+   *  from another collector, since your own are blocked before they are sent.
+   *  Echoed back so the page can warn about them next time rather than letting
+   *  someone walk to the same door twice. */
+  duplicate_addresses: string[];
 }
 
 /** POSTs a batch of profiles.
@@ -83,5 +88,7 @@ export async function submitProfiles(
     // information-disclosure surface, and the collector cannot act on it anyway.
     throw new Error('Could not send. Your entries are still saved on this device.');
   }
-  return (await res.json()) as SubmitResult;
+  const out = (await res.json()) as SubmitResult;
+  // Tolerate a server that predates the echo rather than crashing the page.
+  return { ...out, duplicate_addresses: out.duplicate_addresses ?? [] };
 }

@@ -31,8 +31,7 @@ import LabelScanner from '../components/walkerlog/LabelScanner';
 import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
-  emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile,
-} from '../utils/addressProfile';
+  emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile, knownAddresses, rememberKnown, doorKey} from '../utils/addressProfile';
 import { submitConfigured, submitProfiles } from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
@@ -162,6 +161,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
     () => localStorage.getItem('walkerlog.collectToken') ?? '',
   );
   const [sending, setSending] = useState(false);
+  /** Door keys the campaign has already received, as reported by the server on
+   *  this device's own submissions. Seeded from localStorage so the warning
+   *  survives a reload. */
+  const [known, setKnown] = useState<Set<string>>(() => knownAddresses());
   /** True when this date was explicitly cleared — suppresses the bundled
    *  fixture so a clear actually sticks. */
   const [cleared, setCleared] = useState(false);
@@ -542,11 +545,20 @@ export default function WalkerLog({ dataset = 'routes' }: {
       setError(`${p.address.trim()} is already recorded. Edit that entry instead.`);
       return;
     }
+    // A door profiled on an EARLIER date is not a clash — re-observing a
+    // building later is new information — but it is worth saying so, because
+    // the usual reason to type it again is not knowing it was done.
+    const earlier = (await allProfiles()).find(
+      (x) => x.date !== p.date && doorKey(x.address) === doorKey(p.address),
+    );
+    if (earlier) {
+      flash(`Heads up: this door was already profiled on ${earlier.date}.`);
+    }
     await deleteProfile(p.id);
     const moved = { ...p, id: want };
     setProfiles((ps) => ps.map((x) => (x.id === p.id ? moved : x)));
     await putProfile(moved);
-  }, [profiles]);
+  }, [profiles, flash]);
 
   const removeProfile = useCallback(async (id: string) => {
     const p = profiles.find((x) => x.id === id);
@@ -593,6 +605,12 @@ export default function WalkerLog({ dataset = 'routes' }: {
     try {
       const r = await submitProfiles(collectToken.trim(), ready);
       localStorage.setItem('walkerlog.collectToken', collectToken.trim());
+      // Remember what the server said was already there, so the next person to
+      // type one of these addresses is warned BEFORE walking to it.
+      if (r.duplicate_addresses.length > 0) {
+        rememberKnown(r.duplicate_addresses);
+        setKnown(knownAddresses());
+      }
       flash(
         `Sent ${r.accepted}${r.duplicate ? ` (${r.duplicate} already received)` : ''}.`,
       );
@@ -919,6 +937,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
                   onChange={(next) => void commitProfile(next)}
                   onAddressCommitted={(next) => void rekeyProfile(next)}
                   onDelete={() => void removeProfile(p.id)}
+                  known={known}
                 />
               ))}
             </div>

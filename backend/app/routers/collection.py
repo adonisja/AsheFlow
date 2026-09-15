@@ -94,6 +94,9 @@ def submit_profiles(
 
     accepted = 0
     duplicate = 0
+    # Which of THIS request's addresses the campaign already had. Not a read
+    # path: every entry is an address the submitter just supplied (D4).
+    duplicate_addresses: list[str] = []
 
     for p in body.profiles:
         row = CollectedAddressProfile(
@@ -121,6 +124,7 @@ def submit_profiles(
         except IntegrityError:
             db.rollback()
             duplicate += 1
+            duplicate_addresses.append(p.address)
 
     if accepted:
         write_audit(
@@ -136,7 +140,11 @@ def submit_profiles(
     db.commit()
 
     # D4 — receipt only. No ids, no echo of stored content.
-    return CollectionSubmitOut(accepted=accepted, duplicate=duplicate)
+    return CollectionSubmitOut(
+        accepted=accepted,
+        duplicate=duplicate,
+        duplicate_addresses=duplicate_addresses,
+    )
 
 
 # ── Operator side — authenticated ────────────────────────────────────────────

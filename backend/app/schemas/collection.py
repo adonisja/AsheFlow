@@ -77,12 +77,25 @@ class CollectionSubmitIn(BaseModel):
 class CollectionSubmitOut(BaseModel):
     """What the submitter is told.
 
-    Deliberately thin. It confirms receipt and nothing else — no ids, no echo of
-    what was stored, no indication of what else is in the table. A public
-    endpoint's response is an information-disclosure surface (ADR-415 D4).
+    Deliberately thin. It confirms receipt and nothing else — no ids, no listing,
+    no lookup, no indication of what else is in the table. A public endpoint's
+    response is an information-disclosure surface (ADR-415 D4).
+
+    `duplicate_addresses` is the one echo, and it is NOT a read path. It returns
+    only addresses present in THIS request that the campaign had already
+    received — data the submitter supplied and already holds. It supports no
+    enumeration: you cannot learn whether an address is known without already
+    knowing the address and submitting a complete profile for it, which costs a
+    row against the daily cap.
+
+    It exists because the alternative is worse for privacy, not better. Without
+    it a collector re-profiles a building someone else already did, discovers
+    this from a bare count after the typing is done, and keeps doing it —
+    every wasted visit being another person standing at a real door.
     """
     accepted:  int
     duplicate: int
+    duplicate_addresses: list[str] = []
 
 
 class CollectionTokenCreate(BaseModel):

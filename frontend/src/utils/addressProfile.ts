@@ -149,3 +149,65 @@ export function profilesToCSV(profiles: AddressProfile[]): string {
   }
   return rows.join('\n');
 }
+
+// ── Addresses the campaign already had ───────────────────────────────────────
+
+/** Loose key for "is this the same doorway", used ONLY for warning about
+ *  duplicates — never for storage, never sent to the server.
+ *
+ *  The stored address stays exactly as typed (GeoClient normalises later,
+ *  ADR-277), but a warning that only fires on an exact string match is nearly
+ *  useless in the field: "380 W 33 ST" and "380 West 33rd Street" are one
+ *  building and two strings. This folds the handful of variations people
+ *  actually type — directions, street types, ordinal suffixes, punctuation —
+ *  so the warning fires when it should.
+ *
+ *  Deliberately lossy. A false positive costs a dismissible warning; a false
+ *  negative costs someone a walk to a door that was already done. */
+export function doorKey(address: string): string {
+  let s = address.toLowerCase();
+  s = s.replace(/[.,#]/g, ' ');
+  s = s.replace(/\b(\d+)(st|nd|rd|th)\b/g, '$1');           // 33rd -> 33
+  s = s.replace(/\b(north|south|east|west)\b/g, (m) => m[0]); // west -> w
+  s = s.replace(/\b(street|st)\b/g, 'st');
+  s = s.replace(/\b(avenue|ave|av)\b/g, 'ave');
+  s = s.replace(/\b(boulevard|blvd)\b/g, 'blvd');
+  s = s.replace(/\b(road|rd)\b/g, 'rd');
+  s = s.replace(/\b(place|pl)\b/g, 'pl');
+  s = s.replace(/\b(drive|dr)\b/g, 'dr');
+  s = s.replace(/\b(lane|ln)\b/g, 'ln');
+  s = s.replace(/\b(parkway|pkwy)\b/g, 'pkwy');
+  s = s.replace(/\b(apartment|apt|unit|suite|ste)\b.*$/, ''); // unit is not the door
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+const KNOWN_KEY = 'walkerlog.knownAddresses';
+
+/** Door keys the server reported as already-received, remembered per browser.
+ *
+ *  THIS IS NOT A CACHE OF THE DATABASE. It holds only addresses this device
+ *  submitted and was told were duplicates — never a listing, never anything
+ *  fetched. There is no public read path (ADR-415 D4) and this does not create
+ *  one: the set cannot grow except by submitting an address you already typed.
+ *
+ *  localStorage, not IndexedDB: it is a small set of short strings, and losing
+ *  it degrades a warning rather than losing data. */
+export function knownAddresses(): Set<string> {
+  try {
+    const raw = localStorage.getItem(KNOWN_KEY);
+    return new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();          // private window, cleared storage, bad JSON
+  }
+}
+
+export function rememberKnown(addresses: string[]): void {
+  if (addresses.length === 0) return;
+  try {
+    const set = knownAddresses();
+    for (const a of addresses) set.add(doorKey(a));
+    localStorage.setItem(KNOWN_KEY, JSON.stringify([...set]));
+  } catch {
+    /* storage unavailable — the warning simply stays local-only */
+  }
+}
