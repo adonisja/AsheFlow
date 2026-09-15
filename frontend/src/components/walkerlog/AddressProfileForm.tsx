@@ -3,7 +3,8 @@ import { ChevronDown, ChevronRight, Trash2, AlertTriangle, Info } from 'lucide-r
 import Dropdown from './Dropdown';
 import LabelScanner from './LabelScanner';
 import {
-  BUILDING_TYPES, TYPE_PROTOCOL, WORKLOAD_CLASSES, deriveWorkload, doorKey,
+  BUILDING_CATEGORIES, BUILDING_TYPES, NOT_APPLICABLE, SECURITY_DESK_PROTOCOL,
+  TYPE_PROTOCOL, WORKLOAD_TAGS, doorKey, workloadError,
   type AddressProfile,
 } from '../../utils/addressProfile';
 
@@ -63,7 +64,13 @@ export default function AddressProfileForm({
     profile.address.trim().length > 3 && known.has(doorKey(profile.address));
 
   const typeLabel = BUILDING_TYPES.find((b) => b.value === profile.building_type)?.label;
-  const workLabel = WORKLOAD_CLASSES.find((w) => w.value === profile.workload_class)?.label;
+  /** Workloads for the collapsed header. Joined rather than truncated to one:
+   *  the whole point of the multi-select is that a door can be two things, and
+   *  a summary showing only the first would hide exactly that. */
+  const workLabel = profile.workloads
+    .map((t) => WORKLOAD_TAGS.find((w) => w.value === t)?.label
+      ?? (t === NOT_APPLICABLE ? 'n/a' : t))
+    .join(', ');
 
   return (
     /* NO overflow-hidden. It clipped every dropdown inside the form: a
@@ -187,50 +194,106 @@ export default function AddressProfileForm({
                 value={profile.building_type}
                 placeholder="What is at the door?"
                 ariaLabel="Building type"
-                onChange={(v) => set({
-                  building_type: v as AddressProfile['building_type'],
-                  // Only fills an EMPTY workload — re-picking the type must not
-                  // silently discard a deliberate override.
-                  workload_class: profile.workload_class || deriveWorkload(v),
-                })}
-                options={BUILDING_TYPES.map((b) => ({ value: b.value, label: b.label }))}
+                onChange={(v) => set({ building_type: v as AddressProfile['building_type'] })}
+                /* Grouped by category, which is the first cut a walker makes:
+                   a residential walk-up and a commercial store front are
+                   different jobs. The category is NOT stored from here — the
+                   server derives it from the type, so the two can never
+                   disagree. */
+                options={BUILDING_CATEGORIES.flatMap((c) => [
+                  ...BUILDING_TYPES
+                    .filter((b) => b.category === c.value)
+                    .map((b) => ({ value: b.value, label: b.label, group: c.label })),
+                ])}
               />
             </div>
+
+            {/* A FLAG, not a type. The old taxonomy had `biz_security` as its
+                own building type, which forced a false choice: a loading dock
+                WITH a security desk had to be filed as one or the other. A
+                security desk is an attribute of the door, so it sits beside
+                the type rather than competing with it. */}
+            <label className="mt-2 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={profile.has_security_desk}
+                onChange={(e) => set({ has_security_desk: e.target.checked })}
+                className="h-4 w-4 rounded border-border accent-primary"
+              />
+              <span>Security desk</span>
+            </label>
+
             {profile.building_type && TYPE_PROTOCOL[profile.building_type] && (
               <p className="mt-1 flex items-start gap-1 text-[11px] text-muted-foreground">
                 <Info className="mt-0.5 h-3 w-3 shrink-0" />
                 {TYPE_PROTOCOL[profile.building_type]}
+                {profile.has_security_desk && ` ${SECURITY_DESK_PROTOCOL}`}
               </p>
             )}
           </div>
 
           <div>
-            <div className="flex items-baseline justify-between gap-2">
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Workload
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Workload <span className="normal-case tracking-normal">(all that apply)</span>
+            </label>
+
+            {/* CHECKBOXES, not a dropdown, and no prefill from building type.
+                The old version derived one value from the type and let it be
+                overridden — a guess dressed as data, right often enough to be
+                believed. A doorman building that is also 20+ floors is
+                genuinely both bulk drop and high-rise, which one value could
+                not say. */}
+            <div className="mt-1 space-y-1">
+              {WORKLOAD_TAGS.map((w) => (
+                <label key={w.value} className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={profile.workloads.includes(w.value)}
+                    onChange={(e) => set({
+                      workloads: e.target.checked
+                        // Ticking a real tag clears "none of these" — the two
+                        // are contradictory, and making the user untick it
+                        // first is friction with no purpose.
+                        ? [...profile.workloads.filter((t) => t !== NOT_APPLICABLE), w.value]
+                        : profile.workloads.filter((t) => t !== w.value),
+                    })}
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="min-w-0">
+                    {w.label}
+                    <span className="block text-[11px] text-muted-foreground">{w.hint}</span>
+                  </span>
+                </label>
+              ))}
+
+              {/* Separated by a rule: this is an answer ABOUT the others, not a
+                  peer of them. Ticking it clears the rest. */}
+              <label className="mt-1 flex items-start gap-2 border-t border-border pt-1.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={profile.workloads.includes(NOT_APPLICABLE)}
+                  onChange={(e) => set({
+                    workloads: e.target.checked ? [NOT_APPLICABLE] : [],
+                  })}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary"
+                />
+                <span className="min-w-0">
+                  None of these apply
+                  <span className="block text-[11px] text-muted-foreground">
+                    an answer, not a blank
+                  </span>
+                </span>
               </label>
-              {profile.building_type
-                && profile.workload_class !== deriveWorkload(profile.building_type) && (
-                <button
-                  type="button"
-                  onClick={() => set({ workload_class: deriveWorkload(profile.building_type) })}
-                  className="text-[11px] text-muted-foreground hover:text-foreground"
-                >
-                  overridden · reset
-                </button>
-              )}
             </div>
-            <div className="mt-1">
-              <Dropdown
-                value={profile.workload_class}
-                placeholder="How much work is it?"
-                ariaLabel="Workload class"
-                onChange={(v) => set({ workload_class: v })}
-                options={WORKLOAD_CLASSES.map((w) => ({
-                  value: w.value, label: w.label, description: w.hint,
-                }))}
-              />
-            </div>
+
+            {/* Shown once the address exists, so a brand-new empty row does not
+                open already scolding the collector. */}
+            {profile.address.trim() && workloadError(profile.workloads) && (
+              <p className="mt-1 flex items-start gap-1 text-[11px] font-medium text-warning">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                {workloadError(profile.workloads)}
+              </p>
+            )}
           </div>
 
           <details className="text-sm">

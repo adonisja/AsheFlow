@@ -14,44 +14,97 @@
  *  actually observe.
  */
 
+/** The building taxonomy (ADR-418).
+ *
+ *  Mirrors `backend/app/schemas/building_taxonomy.py`. Hand-maintained — there
+ *  is no codegen — so a type added there must be added here or the collector
+ *  cannot record it.
+ *
+ *  `category` groups the options in the picker. It is NOT sent: the server
+ *  derives it from the type, because two independently supplied fields drift
+ *  and a row claiming residential/loading_dock is worse than no row.
+ */
+export const BUILDING_CATEGORIES = [
+  { value: 'residential', label: 'Residential' },
+  { value: 'commercial',  label: 'Commercial' },
+] as const;
+
 export const BUILDING_TYPES = [
-  { value: 'walkup',           label: 'Walk-up',                    workload: 'high_touch' },
-  { value: 'elevator',         label: 'Elevator building',          workload: 'standard' },
-  { value: 'doorman',          label: 'Doorman',                    workload: 'bulk_drop' },
-  { value: 'receptionist',     label: 'Receptionist',               workload: 'bulk_drop' },
-  { value: 'mailroom',         label: 'Mailroom',                   workload: 'bulk_drop' },
-  { value: 'biz_front',        label: 'Business — front door',      workload: 'standard' },
-  { value: 'biz_freight',      label: 'Business — freight entrance', workload: 'high_wait' },
-  { value: 'biz_security',     label: 'Business — security desk',   workload: 'high_touch' },
-  { value: 'biz_loading_dock', label: 'Business — loading dock',    workload: 'bulk_drop' },
+  // Residential
+  { value: 'walkup',            label: 'Walk-up',              category: 'residential' },
+  { value: 'elevator',          label: 'Elevator',             category: 'residential' },
+  { value: 'doorman_reception', label: 'Doorman / Reception',  category: 'residential' },
+  { value: 'mailroom',          label: 'Mailroom',             category: 'residential' },
+  { value: 'lockers',           label: 'Lockers',              category: 'residential' },
+  // Commercial
+  { value: 'storefront_reception',  label: 'Store front: reception',   category: 'commercial' },
+  { value: 'storefront_front_door', label: 'Store front: front door',  category: 'commercial' },
+  { value: 'freight',               label: 'Freight',                  category: 'commercial' },
+  { value: 'loading_dock',          label: 'Loading dock / service',   category: 'commercial' },
+  { value: 'loading_dock_mailroom', label: 'Loading dock: mailroom',   category: 'commercial' },
 ] as const;
 
 export type BuildingType = typeof BUILDING_TYPES[number]['value'];
 
-export const WORKLOAD_CLASSES = [
-  { value: 'bulk_drop',  label: 'Bulk drop',  hint: 'hand off many at once' },
-  { value: 'standard',   label: 'Standard',   hint: 'normal door-to-door' },
-  { value: 'high_touch', label: 'High touch', hint: 'stairs, many doors' },
-  { value: 'high_wait',  label: 'High wait',  hint: 'queue, dock, sign-in' },
+/** Workload is a SET and is COLLECTED, not derived.
+ *
+ *  It used to be computed from building type, which is a guess dressed as
+ *  data: right often enough to be believed, wrong often enough to mislead. A
+ *  doorman building that is also 20+ floors is genuinely both bulk drop and
+ *  high-rise, which one value could not say.
+ *
+ *  `not_applicable` exists so "none of these" is something the collector
+ *  SAID, distinguishable from a field they never reached — which is why an
+ *  empty selection is an error rather than a silent blank. */
+export const WORKLOAD_TAGS = [
+  { value: 'bulk_drop',      label: 'Bulk drop',     hint: 'drop off many packages at once' },
+  { value: 'door_to_door',   label: 'Door-to-door',  hint: "each package to the customer's door" },
+  { value: 'high_rise',      label: 'High-rise',     hint: '20+ floors' },
+  { value: 'high_wait',      label: 'High wait',     hint: 'queues, sign-in, dock areas' },
 ] as const;
+
+/** Kept separate from WORKLOAD_TAGS so it renders apart from the real ones —
+ *  it is an answer about the others, not a peer of them. */
+export const NOT_APPLICABLE = 'not_applicable';
+
+export type WorkloadTag = typeof WORKLOAD_TAGS[number]['value'] | typeof NOT_APPLICABLE;
+
+/** Mirrors validate_workloads() on the server. Returns an error string, or
+ *  null when the selection is valid. */
+export function workloadError(tags: string[] | undefined): string | null {
+  // `tags` is typed as an array but arrives from IndexedDB, where a profile
+  // saved before ADR-418 has no `workloads` key at all. TypeScript cannot see
+  // that — stored data predates the type — so the undefined check is load
+  // bearing, not defensive noise. Without it the whole page threw on mount
+  // for anyone with an existing profile.
+  if (!tags || tags.length === 0) {
+    return 'Pick at least one workload, or “None of these apply”.';
+  }
+  if (tags.includes(NOT_APPLICABLE) && tags.length > 1) {
+    return '“None of these apply” cannot be combined with another workload.';
+  }
+  return null;
+}
 
 /** What a walker is expected to do at this door. Verbatim from the backend's
  *  BUILDING_TYPE_PROTOCOL — shown as a reminder while profiling, so the person
  *  entering it knows what the classification will mean downstream. */
 export const TYPE_PROTOCOL: Record<string, string> = {
-  mailroom:         'Photo of packages in mail room.',
-  receptionist:     "Get the receptionist's name.",
-  doorman:          'Hand to doorman. Get name if required.',
-  walkup:           'Photo at front door.',
-  elevator:         'Photo at front door.',
-  biz_front:        "Photo at front door or get receptionist's name.",
-  biz_freight:      "Photo at front door or get receptionist's name.",
-  biz_security:     'Bring ID. Photo at front door.',
-  biz_loading_dock: "Photo at loading dock or get mail clerk's name.",
+  walkup:                 'Photo at front door.',
+  elevator:               'Photo at front door.',
+  doorman_reception:      'Hand to doorman or receptionist. Get a name if required.',
+  mailroom:               'Photo of packages in the mail room.',
+  lockers:                'Scan into the locker bank. Photo of the locker number.',
+  storefront_reception:   "Get the receptionist's name.",
+  storefront_front_door:  "Photo at front door or get the receptionist's name.",
+  freight:                'Use the freight entrance. Photo at the door.',
+  loading_dock:           "Photo at the loading dock or get the clerk's name.",
+  loading_dock_mailroom:  'Deliver through the dock to the mail room. Get a name.',
 };
 
-export const deriveWorkload = (t: string): string =>
-  BUILDING_TYPES.find((b) => b.value === t)?.workload ?? 'standard';
+/** Added to the protocol when the door has a security desk. It is a flag
+ *  rather than a type, so its instruction is additive too. */
+export const SECURITY_DESK_PROTOCOL = 'Bring ID. This door has a security desk.';
 
 export interface AddressProfile {
   /** `${date}|${address lowercased}` — one profile per address per collection
@@ -66,9 +119,14 @@ export interface AddressProfile {
    *  nothing. */
   address: string;
   building_type: BuildingType | '';
-  /** Defaults from building_type, overridable: the mapping is a default, and a
-   *  notoriously slow doorman is high_wait regardless of the door. */
-  workload_class: string;
+  /** Does this door have a security desk? A FLAG, not a type — the old
+   *  `biz_security` forced a false choice, so a loading dock with a security
+   *  desk had to be filed as one or the other. */
+  has_security_desk: boolean;
+  /** Which workloads apply. A SET, and collected rather than derived: a
+   *  doorman building that is also 20+ floors is genuinely both. Empty is
+   *  invalid — `['not_applicable']` is how "none apply" is said. */
+  workloads: WorkloadTag[];
   /** Free text in the collector's words — the backend's raw_note. */
   note: string;
   /** Operating hours, "HH:MM" or ''. Feeds the reattempt bundler upstream. */
@@ -84,6 +142,26 @@ export interface AddressProfile {
   updated_at: string;
 }
 
+/** Fills in fields added after a profile was stored.
+ *
+ *  IndexedDB has no migrations: a record written last week has last week's
+ *  shape, and the compiler happily assumes otherwise. Everything that reads
+ *  profiles out of storage passes them through here, so the gap is closed in
+ *  ONE place rather than with optional chaining scattered at every use.
+ *
+ *  ADR-418 added `workloads` and `has_security_desk`. An older profile carried
+ *  a single derived `workload_class`, which is NOT migrated into `workloads`:
+ *  it was computed from the building type, never observed, and promoting a
+ *  guess to a collected answer is exactly what that ADR set out to stop. Such
+ *  a profile reads as incomplete and asks the collector for a real answer. */
+export function hydrateProfile(p: AddressProfile): AddressProfile {
+  return {
+    ...p,
+    workloads: p.workloads ?? [],
+    has_security_desk: p.has_security_desk ?? false,
+  };
+}
+
 export const profileId = (date: string, address: string): string =>
   `${date}|${address.trim().toLowerCase()}`;
 
@@ -92,7 +170,8 @@ export const emptyProfile = (date: string, address = ''): AddressProfile => ({
   date,
   address,
   building_type: '',
-  workload_class: '',
+  has_security_desk: false,
+  workloads: [],
   note: '',
   opens_at: '', closes_at: '', break_start: '', break_end: '',
   troublesome: false,
@@ -105,13 +184,19 @@ export const emptyProfile = (date: string, address = ''): AddressProfile => ({
  *  An address alone is not a profile — it is a note to self. The building type
  *  is the field every downstream consumer needs, so that is the bar. */
 export const isUsable = (p: AddressProfile): boolean =>
-  p.address.trim().length > 0 && p.building_type !== '';
+  p.address.trim().length > 0
+  && p.building_type !== ''
+  // ADR-418: workload is collected, not derived, so an unanswered workload is
+  // an incomplete profile. `['not_applicable']` satisfies this — saying "none
+  // apply" is an answer; leaving it blank is not.
+  && workloadError(p.workloads) === null;
 
 
 /** Columns for the profile CSV. Named to match `BuildingProfile` so a later
  *  import maps straight across without a translation table. */
 export const PROFILE_COLUMNS = [
-  'normalised_address', 'building_type', 'workload_class',
+  'normalised_address', 'building_category', 'building_type',
+  'has_security_desk', 'workloads',
   'raw_note', 'opens_at', 'closes_at', 'break_start', 'break_end',
   'troublesome', 'collected_by', 'collected_on', 'updated_at',
 ] as const;
@@ -135,8 +220,16 @@ export function profilesToCSV(profiles: AddressProfile[]): string {
   for (const p of profiles.filter(isUsable)) {
     rows.push([
       p.address.trim(),
+      // Derived here the same way the server derives it, so the CSV is
+      // self-contained: a file that names only the leaf makes the reader look
+      // the category up.
+      BUILDING_TYPES.find((b) => b.value === p.building_type)?.category ?? '',
       p.building_type,
-      p.workload_class,
+      p.has_security_desk ? 'true' : 'false',
+      // Pipe-separated, not comma: the field is already inside a quoted CSV
+      // cell, and a comma there survives the file but trips every naive
+      // splitter downstream.
+      p.workloads.join('|'),
       p.note,
       p.opens_at, p.closes_at, p.break_start, p.break_end,
       // "true"/"false" rather than 1/0: unambiguous in every importer, and

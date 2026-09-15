@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Check, Search } from 'lucide-react';
 
 /** The house dropdown for the walker log.
@@ -29,6 +29,11 @@ export interface DropdownOption {
   hint?: string;
   /** A colour chip before the label (bag colours, difficulty scale). */
   swatch?: string;
+  /** Optional heading this option sits under. Options carrying the same
+   *  consecutive `group` render beneath one label — used for the building
+   *  taxonomy, where Residential and Commercial are the first cut a collector
+   *  makes. Purely presentational: the stored value is still the leaf. */
+  group?: string;
   disabled?: boolean;
 }
 
@@ -183,8 +188,17 @@ export default function Dropdown({
             {matches.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-muted-foreground">No match.</p>
             ) : matches.map((o, i) => (
+              /* A heading whenever the group CHANGES, so filtering cannot leave
+                 an orphaned header over options from the next group. The
+                 headings sit outside the option list for keyboard purposes —
+                 `cursor` still indexes `matches`, so arrowing skips them. */
+              <Fragment key={o.value}>
+                {o.group && o.group !== matches[i - 1]?.group && (
+                  <p className="px-3 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    {o.group}
+                  </p>
+                )}
               <button
-                key={o.value}
                 type="button"
                 role="option"
                 aria-selected={o.value === value}
@@ -211,6 +225,7 @@ export default function Dropdown({
                 </span>
                 {o.hint && <span className="text-[11px] text-muted-foreground shrink-0 pt-0.5">{o.hint}</span>}
               </button>
+              </Fragment>
             ))}
           </div>
         </div>

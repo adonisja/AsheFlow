@@ -14,7 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.location_profile import BUILDING_TYPES, WORKLOAD_CLASSES
+from app.schemas.building_taxonomy import BUILDING_TYPES, validate_workloads
 
 
 class CollectedProfileIn(BaseModel):
@@ -22,8 +22,19 @@ class CollectedProfileIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     address:        str = Field(..., min_length=3, max_length=200)
-    building_type:  str = Field(..., max_length=30)
-    workload_class: str = Field(..., max_length=20)
+    building_type:  str = Field(..., max_length=40)
+
+    # ADR-418. `building_category` is deliberately ABSENT from the request: it
+    # is derived from building_type server-side. Accepting it would let a client
+    # send residential/loading_dock, and a stored contradiction is worse than a
+    # lookup.
+    has_security_desk: bool = False
+
+    # Multi-select, and REQUIRED to be non-empty — ["not_applicable"] is how a
+    # collector says "none of these", which is a different statement from an
+    # unanswered field. max_length caps it at the tag count so a client cannot
+    # send the same tag a thousand times.
+    workloads: list[str] = Field(..., min_length=1, max_length=5)
 
     note:         Optional[str]  = Field(None, max_length=2000)
     opens_at:     Optional[time] = None
@@ -44,12 +55,18 @@ class CollectedProfileIn(BaseModel):
             raise ValueError(f"Unknown building_type: {v!r}")
         return v
 
-    @field_validator("workload_class")
+    @field_validator("workloads")
     @classmethod
-    def _known_workload(cls, v: str) -> str:
-        if v not in WORKLOAD_CLASSES:
-            raise ValueError(f"Unknown workload_class: {v!r}")
-        return v
+    def _known_workloads(cls, v: list[str]) -> list[str]:
+        # Rejects unknown tags, an empty list, and `not_applicable` combined
+        # with a real tag — the last one because "none apply, and also bulk
+        # drop" is not a thing a collector can mean.
+        validate_workloads(v)
+        # De-duplicated but ORDER PRESERVED: the set of tags is what matters,
+        # and sorting would discard the order the collector picked them in for
+        # no gain.
+        seen: set[str] = set()
+        return [t for t in v if not (t in seen or seen.add(t))]
 
     @field_validator("address", "note", "collected_by")
     @classmethod
@@ -166,9 +183,12 @@ class CollectedProfileOut(BaseModel):
     id:             UUID
     company_id:     UUID
     token_id:       UUID
-    address:        str
-    building_type:  str
-    workload_class: str
+    address:           str
+    building_type:     str
+    building_category: str
+    has_security_desk: bool
+    workloads:         list[str]
+    workload_class:    str
     note:           Optional[str]
     opens_at:       Optional[time]
     closes_at:      Optional[time]

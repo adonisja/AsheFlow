@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Boolean, DateTime, Float, Integer, Text, Time, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.sql import func
 import uuid
 from app.models.base import Base
@@ -64,6 +64,16 @@ class BuildingProfileLibrary(Base):
     # Delivery character
     building_type       = Column(String(30),  nullable=False)
     workload_class      = Column(String(20),  nullable=False)
+
+    # ── ADR-418 taxonomy ─────────────────────────────────────────────────────
+    # See building_profile.py for the full reasoning. In short: category is
+    # derived from type and written server-side; the security desk became a
+    # flag because it is an attribute of the door, not a kind of door; and
+    # workloads is a set because a doorman high-rise is genuinely both.
+    building_category   = Column(String(20), nullable=False,
+                                 server_default="unknown", index=True)
+    has_security_desk   = Column(Boolean, nullable=False, server_default="false")
+    workloads           = Column(JSONB, nullable=False, server_default="[]")
 
     # Operational note — captain-verified tip promoted from the source company record
     # raw_notes are not promoted — only the structured operational_note is carried forward

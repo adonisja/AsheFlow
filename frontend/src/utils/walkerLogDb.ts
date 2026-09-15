@@ -61,6 +61,7 @@ const CLEARED = 'cleared_dates';
  *  a walker-day would make it unreachable on any day that walker did not work. */
 const PROFILES = 'address_profiles';
 
+import { hydrateProfile } from './addressProfile';
 import type { AddressProfile } from './addressProfile';
 
 /** One RTS'd package: a real TBA plus why it came back. */
@@ -367,12 +368,18 @@ export async function clearDate(date: string): Promise<{
   return { ...r, manifests: manifests.length };
 }
 
-/** Address profiles for a date. */
-export const profilesForDate = (date: string): Promise<AddressProfile[]> =>
-  tx('readonly', (s) => s.index('by_date').getAll(date) as IDBRequest<AddressProfile[]>, PROFILES);
+/** Address profiles for a date.
+ *
+ *  Hydrated on the way out: IndexedDB has no migrations, so a record written
+ *  before a field existed simply lacks it, and the compiler cannot see that.
+ *  Closing the gap HERE means everything downstream can trust the type. */
+export const profilesForDate = async (date: string): Promise<AddressProfile[]> =>
+  (await tx('readonly', (s) => s.index('by_date').getAll(date) as IDBRequest<AddressProfile[]>, PROFILES))
+    .map(hydrateProfile);
 
-export const allProfiles = (): Promise<AddressProfile[]> =>
-  tx('readonly', (s) => s.getAll() as IDBRequest<AddressProfile[]>, PROFILES);
+export const allProfiles = async (): Promise<AddressProfile[]> =>
+  (await tx('readonly', (s) => s.getAll() as IDBRequest<AddressProfile[]>, PROFILES))
+    .map(hydrateProfile);
 
 export const putProfile = (p: AddressProfile): Promise<IDBValidKey> =>
   tx('readwrite', (s) => s.put({ ...p, updated_at: new Date().toISOString() }), PROFILES);
