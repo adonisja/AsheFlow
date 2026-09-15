@@ -533,18 +533,23 @@ def revoke_token(
     request: Request,
     token_id: str,
     db: Session = Depends(get_db),
-    caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
 ):
-    """The kill switch. Revoking stops submissions immediately."""
+    """The kill switch. Revoking stops submissions immediately.
+
+    ADR-424. Same two principals as create_token, and for the same reason: a
+    super admin has no Employee row, so `get_caller_employee` 403'd them on
+    their own campaigns. ADR-423 fixed that on create and missed its sibling —
+    the platform owner could issue an open campaign and then not revoke it.
+
+    Scoping comes from `_scope_reads`, so a company admin still cannot revoke
+    another tenant's link and cannot touch an open one (its company_id is NULL,
+    which `=` never matches).
+    """
     tok = (
-        db.query(CollectionToken)
-        .filter(
-            CollectionToken.id == token_id,
-            # Dimension 1: scoped to the caller's tenant, so one company cannot
-            # revoke another's link.
-            CollectionToken.company_id == caller.company_id,
-        )
+        _scope_reads(db.query(CollectionToken), CollectionToken, current_user, caller)
+        .filter(CollectionToken.id == token_id)
         .first()
     )
     if tok is None:
@@ -560,8 +565,8 @@ def revoke_token(
         action_type="collection.token.revoke",
         target_table="collection_tokens",
         target_id=str(tok.id),
-        actor_id=str(caller.id),
-        company_id=str(caller.company_id),
+        actor_id=str(caller.id) if caller else None,
+        company_id=str(tok.company_id) if tok.company_id else None,
         detail={"label": tok.label},
     )
     db.commit()
@@ -655,6 +660,11 @@ def list_tokens(
     for t in toks:
         row = CollectionTokenSummary.model_validate(t)
         row.submission_count = counts.get(t.id, 0)
+        # ADR-424: a revoked campaign shows no link. The string still exists in
+        # the row, but it no longer works — displaying it invites someone to
+        # send a link that will 404 for whoever receives it.
+        if t.revoked_at is not None:
+            row.token = None
         out.append(row)
     return out
 

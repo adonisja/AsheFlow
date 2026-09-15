@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Download, AlertTriangle,
+  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Download,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -178,7 +178,6 @@ export default function CollectionData({ platform = true }: {
   // The freshly-created secret. Held in component state ONLY, never refetched:
   // the backend returns it once, so once this page is left it is unrecoverable
   // and a new campaign must be issued.
-  const [newToken, setNewToken] = useState<CollectionTokenCreated | null>(null);
   const [copied, setCopied] = useState(false);
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState('');
@@ -278,10 +277,14 @@ export default function CollectionData({ platform = true }: {
         // and treats an absent key as "no expiry".
         ...(days !== null ? { expires_in_days: days } : {}),
       });
-      setNewToken(data);
+      // SELECT the new campaign rather than holding its token in state. The
+      // link then appears on its own row in the sidebar — same "copy it now"
+      // moment the old banner gave, attached to the campaign it belongs to and
+      // still there tomorrow (ADR-424).
       setLabel('');
       setExpiresInDays('');
       await loadTokens();
+      setActiveToken(data.id);
       setError('');
     } catch (e) {
       setError(errorText(e, 'Could not create the collection link.'));
@@ -363,14 +366,14 @@ export default function CollectionData({ platform = true }: {
     }
   };
 
-  const activeLabel = useMemo(
-    () => tokens.find((t) => t.id === activeToken)?.label,
+  /** The selected campaign, or null on "All campaigns". Carries the link, so
+   *  the row below can show it (ADR-424). */
+  const selected = useMemo(
+    () => tokens.find((t) => t.id === activeToken) ?? null,
     [tokens, activeToken],
   );
+  const activeLabel = selected?.label;
 
-  // Narrowed once, above the JSX: `token` is Optional on the wire, and a `!`
-  // inside the guard would keep compiling if the guard were ever loosened.
-  const secret = newToken?.token ?? null;
 
   return (
     <div className="space-y-6">
@@ -394,37 +397,13 @@ export default function CollectionData({ platform = true }: {
 
       {/* The secret, shown once. Deliberately loud: leaving this page loses it,
           and the only recovery is issuing a new campaign. */}
-      {secret !== null && (
-        <div className="rounded-xl border border-warning/50 bg-warning/10 p-4 space-y-2">
-          <p className="inline-flex items-center gap-1.5 text-sm font-semibold text-warning">
-            <AlertTriangle className="w-4 h-4" />
-            Copy this link now. It is not shown again.
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            <code className="min-w-0 flex-1 break-all rounded-lg border border-border bg-card px-3 py-2 font-mono text-xs">
-              {secret}
-            </code>
-            <button
-              onClick={() => {
-                void navigator.clipboard.writeText(secret);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-              className="btn-secondary text-sm inline-flex items-center gap-1.5"
-            >
-              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              {copied ? 'Copied' : 'Copy'}
-            </button>
-            <button onClick={() => setNewToken(null)} className="btn-secondary text-sm">
-              Done
-            </button>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            Give this to collectors. They paste it into the Addresses tab on the
-            collection page.
-          </p>
-        </div>
-      )}
+      {/* ADR-424. NO floating "copy it now" banner.
+          
+          It sat at the top of the page, detached from the campaign it belonged
+          to — with one campaign in the list it read as a page-level notice
+          rather than THAT campaign's link, and with several it would have been
+          ambiguous. The link now lives on its own row, where it is
+          unambiguous and can be re-copied any time. */}
 
       <div className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)] items-start [&>*]:min-w-0">
         {/* ── Campaigns ────────────────────────────────────────────────── */}
@@ -537,6 +516,39 @@ export default function CollectionData({ platform = true }: {
                 );
               })}
             </ul>
+          )}
+
+          {/* The selected campaign's LINK, under the list and unambiguous about
+              which campaign it belongs to (ADR-424). Shown for the selected
+              campaign only: three links stacked in a sidebar is three chances
+              to send the wrong one. */}
+          {selected?.token && (
+            <div className="rounded-lg border border-border bg-surface/60 p-2.5 space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Link for {selected.label}
+              </p>
+              <div className="flex items-center gap-1.5">
+                <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-card px-2 py-1.5 font-mono text-[11px]">
+                  {selected.token}
+                </code>
+                <button
+                  onClick={() => {
+                    void navigator.clipboard.writeText(selected.token ?? '');
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="btn-secondary shrink-0 px-2 py-1.5 text-xs inline-flex items-center gap-1"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {selected.scope === 'open'
+                  ? 'Anyone with this link can submit. Give it to collectors.'
+                  : 'Only signed-in employees of your company can use this link.'}
+              </p>
+            </div>
           )}
         </aside>
 

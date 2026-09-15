@@ -1142,7 +1142,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
               >
                 {sending
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
-                  : <><Upload className="w-4 h-4" /> Send {profiles.filter(isUsable).length} to the team</>}
+                  : <><Upload className="w-4 h-4" /> Submit {profiles.filter(isUsable).length} address{profiles.filter(isUsable).length === 1 ? '' : 'es'}</>}
               </button>
               <p className="text-[11px] text-muted-foreground">
                 Your entries stay on this device either way. Sending is a copy,

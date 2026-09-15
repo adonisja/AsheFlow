@@ -247,7 +247,12 @@ class CollectedProfileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id:             UUID
-    company_id:     UUID
+    # ADR-424. NULL for an open campaign. ADR-423 made the COLUMN nullable and
+    # left this read schema declaring a bare UUID, so the first profile
+    # submitted to an open campaign 500'd the super-admin listing on
+    # `model_validate` — and a 500 carries no CORS headers, so the browser
+    # reported it as a CORS failure rather than a server error.
+    company_id:     Optional[UUID]
     token_id:       UUID
     address:           str
     building_type:     str
@@ -269,11 +274,23 @@ class CollectedProfileOut(BaseModel):
 
 
 class CollectionTokenSummary(BaseModel):
-    """A campaign and how much has arrived under it.
+    """A campaign, how much has arrived under it, and its link.
 
-    `token` is deliberately ABSENT. The secret is returned once at creation and
-    never again; a listing that echoed live tokens would turn one compromised
-    admin session into every campaign at once.
+    ADR-424 REVERSES ADR-415's "returned once at creation and never again".
+
+    That rule treated the token as a password. It is not: an OPEN campaign's
+    link is handed to a dozen collectors by design, pasted into group chats and
+    typed off a phone screen — it is a shared URL, closer to a Google Doc
+    "anyone with the link" than to a credential. Withholding it from the one
+    person authorised to manage campaigns protected nothing while guaranteeing
+    that a mislaid link meant revoking and re-issuing to everyone who had it.
+
+    The original worry — one compromised admin session exposing every campaign
+    — is real but was already true: that session can CREATE campaigns, revoke
+    them, and read every collected address. A listing that also shows the links
+    adds nothing an attacker could not already do, and the gate that matters
+    (`_scope_reads`: super admin sees all, a company admin sees only their own)
+    is unchanged.
     """
     model_config = ConfigDict(from_attributes=True)
 
@@ -288,3 +305,8 @@ class CollectionTokenSummary(BaseModel):
     created_at:  object
     created_by_name: Optional[str]
     submission_count: int = 0
+
+    # ADR-424. The link, so it can be re-copied. A revoked campaign returns
+    # None: its link no longer works, and showing a dead string invites someone
+    # to send it.
+    token: Optional[str] = None
