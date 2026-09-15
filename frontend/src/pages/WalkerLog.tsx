@@ -153,6 +153,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  a direct hit on /walker-log returns 200, so CloudFront serves index.html
    *  for unknown paths and a deep link is a real, shareable URL. */
   const tab = dataset;
+  const routesTab = dataset === 'routes';
   const [profiles, setProfiles] = useState<AddressProfile[]>([]);
   /** Collection token, remembered per browser so a collector pastes the link
    *  once. localStorage rather than IndexedDB: it is one short string, and it
@@ -763,14 +764,37 @@ export default function WalkerLog({ dataset = 'routes' }: {
       <style>{TOUCH_CSS}</style>
       <div className="mx-auto max-w-6xl space-y-6">
       <SectionHeader
-        eyebrow="Local research log"
-        title="Walker Route Tracker"
+        eyebrow={routesTab ? 'Route study' : 'Address study'}
+        title={routesTab ? 'Walker Route Tracker' : 'Address Profiles'}
+        /* DESCRIBES THE CAMPAIGN. Makes no claim about where the data goes.
+         *
+         * This said "Stored only in this browser — nothing is sent to
+         * AsheFlow" while the address page had a submit button on it. That
+         * sentence was true when written and became false when ADR-415 landed,
+         * and it is the worst kind of thing to be wrong about: a privacy claim
+         * rendered to users, who make disclosure decisions from it.
+         *
+         * A promise about data handling has to be re-verified every time the
+         * data path changes, and nothing enforces that. A description of what
+         * the page is for does not go stale, so that is what this is. What
+         * actually happens to an entry is said at the control that does it —
+         * the send box names the campaign it posts to, and the export button
+         * is visibly an export. */
         description={
-          <>
-            Manual, hand-entered walker days for comparison against system output.
-            Stored <strong>only in this browser</strong> — nothing is sent to AsheFlow.
-            Export before clearing site data or switching machines.
-          </>
+          routesTab ? (
+            <>
+              What each walker actually carried, and how long it took: totes,
+              addresses, OVs, RTS and route times, entered by hand for one day
+              at a time. The point is a record to compare against what the
+              dispatch system produced for the same day.
+            </>
+          ) : (
+            <>
+              What is behind each door and how much work it is: building type,
+              workload, hours and access notes, collected one address at a time.
+              The point is a picture of the buildings a route actually visits.
+            </>
+          )
         }
       />
 
@@ -850,6 +874,15 @@ export default function WalkerLog({ dataset = 'routes' }: {
                 </div>
               </div>
             ))}
+            {/* The one piece of advice worth keeping from the old header, moved
+                to the control it is about. It survives a change in where data
+                goes, because it is about this browser losing its copy — which
+                is true whether or not anything was ever sent. */}
+            {g.key === 'export' && (
+              <p className="mt-2 text-[10px] text-muted-foreground/70">
+                Worth doing before clearing site data or switching machines.
+              </p>
+            )}
           </section>
         ))}
       </div>
