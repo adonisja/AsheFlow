@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Footprints, Plus, Trash2, Download, Upload, Clock,
   RotateCcw, ChevronDown, ChevronRight, Save, Layers, Search, CornerDownLeft,
@@ -146,15 +145,13 @@ export default function WalkerLog({ dataset = 'routes' }: {
   /** Which dataset is on screen, fixed by the route that rendered this page.
    *
    *  These are two separate jobs — logging what a walker carried, and profiling
-   *  what is at a door — so they get two URLs you can hand to two people.
+   *  what is at a door — handed to different people, so they get two URLs.
    *
-   *  It was one page with a client-side tab, on the reasoning that a route
-   *  change is a full page load over a flaky hotspot. That was true of the dev
-   *  server and is NOT true of the deployed site: react-router navigates
-   *  BrowserRouter routes client-side, so /walker-log <-> /address-log costs no
-   *  network at all, exactly like the tab did. Verified before splitting —
-   *  a direct hit on /walker-log returns 200, so CloudFront serves index.html
-   *  for unknown paths and a deep link is a real, shareable URL. */
+   *  There is deliberately NO way to get from one to the other in the UI
+   *  (ADR-421): a switcher would tell someone given the address form that the
+   *  route log exists and what it is called. One component still serves both
+   *  because the machinery underneath — storage, import, export, the send box
+   *  — is the same; only what it renders differs. */
   const tab = dataset;
   const routesTab = dataset === 'routes';
   const [profiles, setProfiles] = useState<AddressProfile[]>([]);
@@ -959,27 +956,38 @@ export default function WalkerLog({ dataset = 'routes' }: {
             key: 'import',
             title: 'Import',
             hint: 'Bring a day in',
-            items: [
-              { label: 'Load sheet', sub: '.xlsx', icon: FileSpreadsheet, onClick: () => { setImportTab('sheet'); setShowImport(true); } },
-              { label: 'Crew', sub: 'screenshot', icon: Camera, onClick: () => { setImportTab('crew'); setShowImport(true); } },
-              { label: 'Saved log', sub: '.json', icon: Download, onClick: () => fileRef.current?.click() },
-            ],
+            // PER PAGE (ADR-421). The route log needs a load sheet and a crew
+            // screenshot; the address log has no use for either, and offering
+            // them invited a collector to import a truck manifest into a
+            // building survey. Both keep the saved-log restore, which carries
+            // whichever dataset the file holds.
+            items: routesTab
+              ? [
+                  { label: 'Load sheet', sub: '.xlsx', icon: FileSpreadsheet, onClick: () => { setImportTab('sheet'); setShowImport(true); } },
+                  { label: 'Crew', sub: 'screenshot', icon: Camera, onClick: () => { setImportTab('crew'); setShowImport(true); } },
+                  { label: 'Saved log', sub: '.json', icon: Download, onClick: () => fileRef.current?.click() },
+                ]
+              : [
+                  { label: 'Saved log', sub: '.json', icon: Download, onClick: () => fileRef.current?.click() },
+                ],
           },
           {
             key: 'export',
             title: 'Export',
             hint: 'Take this log out',
-            // Two datasets, named. They have DIFFERENT GRAINS — the route
-            // export is one row per delivery address on a route, the address
-            // export is one row per building — so a single unlabelled row of
-            // buttons would make "CSV" ambiguous and invite importing one into
-            // the other's table.
-            items: [
-              { group: 'Routes', label: 'Excel', sub: '.xlsx', icon: Upload, onClick: () => void exportAll('xlsx') },
-              { group: 'Routes', label: 'CSV', sub: '.csv', icon: Upload, onClick: () => void exportAll('csv') },
-              { group: 'Routes', label: 'JSON', sub: '.json', icon: Upload, onClick: () => void exportAll('json') },
-              { group: 'Addresses', label: 'CSV', sub: '.csv', icon: Upload, onClick: () => void exportProfiles() },
-            ],
+            // Only this page's dataset. Both were listed under "Routes" and
+            // "Addresses" headings, which made /walker-log advertise an address
+            // CSV — a file it cannot produce anything for. With one dataset per
+            // page the group labels are noise, so they are gone too.
+            items: routesTab
+              ? [
+                  { label: 'Excel', sub: '.xlsx', icon: Upload, onClick: () => void exportAll('xlsx') },
+                  { label: 'CSV', sub: '.csv', icon: Upload, onClick: () => void exportAll('csv') },
+                  { label: 'JSON', sub: '.json', icon: Upload, onClick: () => void exportAll('json') },
+                ]
+              : [
+                  { label: 'CSV', sub: '.csv', icon: Upload, onClick: () => void exportProfiles() },
+                ],
           },
         ] as const).map((g) => (
           <section key={g.key} className="rounded-xl border border-border bg-surface/40 p-3">
@@ -989,30 +997,23 @@ export default function WalkerLog({ dataset = 'routes' }: {
               </h2>
               <span className="text-[11px] text-muted-foreground/70">{g.hint}</span>
             </div>
-            {/* Items carrying a `group` are rendered under that label; the
-                rest sit in one unlabelled row. Import has no subgroups, Export
-                has two, and one renderer serves both. */}
-            {[...new Set(g.items.map((it) => ('group' in it ? it.group : '')))].map((sub) => (
-              <div key={sub || 'ungrouped'} className={sub ? 'mt-1.5 first:mt-0' : ''}>
-                {sub && (
-                  <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                    {sub}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-1.5">
-                  {g.items.filter((it) => ('group' in it ? it.group : '') === sub).map((it) => (
-                    <button
-                      key={`${sub}-${it.label}`} type="button" onClick={it.onClick}
-                      className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm hover:border-primary/60 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40"
-                    >
-                      <it.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{it.label}</span>
-                      <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.sub}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+            {/* One flat row. The subgroup renderer that used to live here
+                existed because Export listed BOTH datasets under "Routes" and
+                "Addresses" headings; with one dataset per page (ADR-421) there
+                is nothing left to group, and a heading over a single row is
+                chrome that says nothing. */}
+            <div className="flex flex-wrap gap-1.5">
+              {g.items.map((it) => (
+                <button
+                  key={it.label} type="button" onClick={it.onClick}
+                  className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm hover:border-primary/60 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40"
+                >
+                  <it.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{it.label}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.sub}</span>
+                </button>
+              ))}
+            </div>
             {/* The one piece of advice worth keeping from the old header, moved
                 to the control it is about. It survives a change in where data
                 goes, because it is about this browser losing its copy — which
@@ -1048,33 +1049,20 @@ export default function WalkerLog({ dataset = 'routes' }: {
         </div>
       )}
 
-      {/* `min-w-0` on the grid items: a grid item defaults to min-width:auto,
-          so a long bag label or address sets a floor wider than the column and
-          the whole page scrolls sideways on a phone (measured: 385px content in
-          a 382px viewport). Explicit zero lets the content shrink and wrap. */}
-      {/* Dataset switch. <Link>, not a button: these are two URLs now, so the
-          switcher must produce a real navigation a phone can bookmark, share
-          and reload. react-router handles it client-side, so it costs no
-          network — the property the tab was chosen for in the first place. */}
-      <nav className="flex gap-1 rounded-lg bg-muted p-1">
-        {([
-          ['routes', '/walker-log', 'Routes', dayList.length],
-          ['addresses', '/address-log', 'Addresses', profiles.filter(isUsable).length],
-        ] as const).map(([k, to, label, count]) => (
-          <Link
-            key={k} to={to}
-            aria-current={tab === k ? 'page' : undefined}
-            className={`flex-1 rounded-md px-3 py-2 text-center text-sm font-medium transition-colors ${
-              tab === k ? 'bg-card shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {label}
-            {count > 0 && (
-              <span className="ml-1.5 text-[11px] text-muted-foreground">{count}</span>
-            )}
-          </Link>
-        ))}
-      </nav>
+      {/* NO CROSS-LINK between the two pages.
+          
+          ADR-417 D2 specified one; ADR-421 removes it. These are two separate
+          collection efforts handed to different people, and a link is a
+          disclosure: someone given the address form would learn the route log
+          exists, what it is called, and that they can open it. Knowing the URL
+          is the access control, thin as that is — advertising the other URL
+          removes even that.
+
+          `min-w-0` on the grid items below: a grid item defaults to
+          min-width:auto, so a long bag label or address sets a floor wider
+          than the column and the whole page scrolls sideways on a phone
+          (measured: 385px content in a 382px viewport). Explicit zero lets the
+          content shrink and wrap. */}
 
       {tab === 'addresses' ? (
         <section className="card p-4 space-y-3">
