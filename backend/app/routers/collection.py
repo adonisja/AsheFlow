@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     RoleChecker,
+    get_caller_employee_anonymous,
     get_caller_employee,
     get_caller_employee_optional,
     get_current_user,
@@ -111,8 +112,11 @@ def submit_profiles(
     request: Request,
     body: CollectionSubmitIn,
     db: Session = Depends(get_db),
-    # ADR-423: optional, so an OPEN campaign still needs no login.
-    caller: Employee | None = Depends(get_caller_employee_optional),
+    # ADR-423: anonymous-tolerant. NOT get_caller_employee_optional — that one
+    # is optional about the employee ROW but still 401s on a missing
+    # Authorization header, which made every public collection path demand a
+    # login.
+    caller: Employee | None = Depends(get_caller_employee_anonymous),
 ):
     """Accept a batch of collected building profiles.
 
@@ -243,8 +247,11 @@ def check_address(
     request: Request,
     body: CollectionCheckIn,
     db: Session = Depends(get_db),
-    # ADR-423: optional, so an OPEN campaign still needs no login.
-    caller: Employee | None = Depends(get_caller_employee_optional),
+    # ADR-423: anonymous-tolerant. NOT get_caller_employee_optional — that one
+    # is optional about the employee ROW but still 401s on a missing
+    # Authorization header, which made every public collection path demand a
+    # login.
+    caller: Employee | None = Depends(get_caller_employee_anonymous),
 ):
     """Is this door already collected under this campaign? (ADR-417 D7)
 
@@ -311,8 +318,11 @@ def submit_walker_days(
     request: Request,
     body: WalkerDaySubmitIn,
     db: Session = Depends(get_db),
-    # ADR-423: optional, so an OPEN campaign still needs no login.
-    caller: Employee | None = Depends(get_caller_employee_optional),
+    # ADR-423: anonymous-tolerant. NOT get_caller_employee_optional — that one
+    # is optional about the employee ROW but still 401s on a missing
+    # Authorization header, which made every public collection path demand a
+    # login.
+    caller: Employee | None = Depends(get_caller_employee_anonymous),
 ):
     """Accept a batch of logged walker days (ADR-417 D3-D5).
 

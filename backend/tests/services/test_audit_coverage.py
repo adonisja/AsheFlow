@@ -391,8 +391,14 @@ class TestClaimKeyNames:
     def test_get_current_user_still_returns_the_expected_keys(self):
         # If this changes, the assertion below is testing the wrong contract.
         deps = (ROUTERS.parent / "api" / "deps.py").read_text(encoding="utf-8")
-        block = deps[deps.index("def get_current_user"):]
-        block = block[:block.index("def ", 10)]
+        # The EXACT signature, not a prefix. `deps.index("def get_current_user")`
+        # matched `get_current_user_optional` once ADR-423 added it — slicing an
+        # empty block and reporting that the claims had vanished. A prefix match
+        # against a name is only safe while no longer name shares the prefix,
+        # which nothing enforces.
+        start = deps.index("def get_current_user(")
+        block = deps[start:]
+        block = block[:block.index("\ndef ", 10)]
         import re
         keys = set(re.findall(r'^\s+"(\w+)":', block, re.M))
         assert self._CLAIM_KEYS <= keys, (

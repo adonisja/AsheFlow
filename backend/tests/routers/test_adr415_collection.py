@@ -633,3 +633,37 @@ class TestCampaignScope:
         assert get_caller_employee not in deps, (
             "create_token must not require an Employee row — a super admin has none"
         )
+
+    def test_the_public_paths_do_not_require_an_authorization_header(self):
+        """ADR-423 regression.
+
+        The scope work gave the three public paths `get_caller_employee_optional`
+        — which is optional about the EMPLOYEE ROW but still depends on
+        `get_current_user`, which 401s on a missing Authorization header. Every
+        public collection path began answering "Not authenticated" to the very
+        collectors it exists for; staging confirmed it before a user did.
+
+        `get_caller_employee_anonymous` is optional about BOTH. Asserted against
+        the resolved dependency, so swapping the import back fails here.
+        """
+        import inspect
+        from app.api.deps import (
+            get_caller_employee, get_caller_employee_anonymous,
+            get_caller_employee_optional,
+        )
+        from app.routers import collection as C
+
+        for fn in (C.submit_profiles, C.check_address, C.submit_walker_days):
+            deps = [
+                p.default.dependency
+                for p in inspect.signature(fn).parameters.values()
+                if hasattr(p.default, "dependency")
+            ]
+            assert get_caller_employee_anonymous in deps, (
+                f"{fn.__name__} must tolerate an anonymous caller"
+            )
+            for blocking in (get_caller_employee, get_caller_employee_optional):
+                assert blocking not in deps, (
+                    f"{fn.__name__} uses {blocking.__name__}, which 401s on a "
+                    f"missing Authorization header"
+                )
