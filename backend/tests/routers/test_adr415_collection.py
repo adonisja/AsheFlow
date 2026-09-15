@@ -138,9 +138,38 @@ class TestTheTrustBoundaryIsTyped:
 class TestTheResponseSaysNothingUseful:
     """ADR-415 D4. The submitter gets a receipt, not a window into the table."""
 
-    def test_the_output_carries_only_counts(self):
+    def test_the_output_carries_counts_and_nothing_from_the_table(self):
+        """The receipt may echo THIS request; it may never describe the table.
+
+        `duplicate_addresses` was added by ADR-417: the addresses in this batch
+        the campaign already had. That is an echo of data the submitter just
+        supplied, not a read — it supports no enumeration, and learning one bit
+        costs a complete profile and a row against the daily cap.
+
+        The set is pinned exactly so a field that DOES describe the table (an
+        id, a count of everything, a neighbouring address) fails here.
+        """
         from app.schemas.collection import CollectionSubmitOut
-        assert set(CollectionSubmitOut.model_fields) == {"accepted", "duplicate"}
+        assert set(CollectionSubmitOut.model_fields) == {
+            "accepted", "duplicate", "duplicate_addresses",
+        }
+
+    def test_duplicate_addresses_only_ever_echoes_the_request(self):
+        """Every echoed address must have been in the submitted batch.
+
+        Pins the property that makes the echo safe. A future change that
+        populated this from a query — "addresses near yours", "others today" —
+        would turn the receipt into the read path D4 forbids, and fails here.
+        """
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.submit_profiles)
+        # The list is appended to exactly once, from the loop variable `p`
+        # (the request body), never from a query result.
+        assert "duplicate_addresses.append(p.address)" in src, \
+            "the echo must come from the request, not from a lookup"
+        assert src.count("duplicate_addresses.append") == 1, \
+            "only one source may populate the echo"
 
 
 class TestThePublicPathIsWriteOnly:

@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, Trash2, AlertTriangle, Info } from 'lucide-r
 import Dropdown from './Dropdown';
 import LabelScanner from './LabelScanner';
 import {
-  BUILDING_TYPES, TYPE_PROTOCOL, WORKLOAD_CLASSES, deriveWorkload,
+  BUILDING_TYPES, TYPE_PROTOCOL, WORKLOAD_CLASSES, deriveWorkload, doorKey,
   type AddressProfile,
 } from '../../utils/addressProfile';
 
@@ -25,9 +25,11 @@ const INPUT =
   'focus:outline-none focus:ring-2 focus:ring-primary/40';
 
 export default function AddressProfileForm({
-  profile, onChange, onAddressCommitted, onDelete,
+  profile, onChange, onAddressCommitted, onDelete, known,
 }: {
   profile: AddressProfile;
+  /** Door keys already received by this campaign — see `alreadyKnown`. */
+  known: Set<string>;
   onChange: (p: AddressProfile) => void;
   /** Fired on blur, once the address is settled — the caller re-keys there
    *  rather than on every keystroke, which would remount this form and steal
@@ -37,6 +39,21 @@ export default function AddressProfileForm({
 }) {
   const [open, setOpen] = useState(!profile.building_type);
   const set = (patch: Partial<AddressProfile>) => onChange({ ...profile, ...patch });
+
+  /** Does this address match a door the campaign already received?
+   *
+   *  `known` is the set the page passes down — door keys the SERVER reported
+   *  back as duplicates when this device last submitted. It is not a copy of
+   *  the database and cannot be: there is no public read path (ADR-415 D4),
+   *  so the set only grows by submitting an address and being told it was
+   *  already there.
+   *
+   *  That makes the warning imperfect by construction — it cannot know about a
+   *  door this device has never submitted. It catches the case that actually
+   *  recurs: the same collector revisiting a building they were already told
+   *  about, which without the warning happens again every single day. */
+  const alreadyKnown =
+    profile.address.trim().length > 3 && known.has(doorKey(profile.address));
 
   const typeLabel = BUILDING_TYPES.find((b) => b.value === profile.building_type)?.label;
   const workLabel = WORKLOAD_CLASSES.find((w) => w.value === profile.workload_class)?.label;
@@ -107,6 +124,21 @@ export default function AddressProfileForm({
                 }}
               />
             </div>
+            {/* LOUD, INLINE, AND WHILE TYPING — not a banner after the fact.
+                By the time a collector has filled in a building type and
+                workload and pressed send, the wasted walk has already
+                happened. This fires on the address itself, the moment the
+                text matches a door the campaign already has. */}
+            {alreadyKnown && (
+              <p className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-warning/50 bg-warning/10 px-2.5 py-2 text-xs font-medium text-warning">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Already collected. Someone has profiled this door for this
+                  campaign, so you can skip it. Keep going if you are correcting
+                  it.
+                </span>
+              </p>
+            )}
             <p className="mt-1 text-[11px] text-muted-foreground">
               Type it as it appears. It is normalised later, not here.
             </p>
