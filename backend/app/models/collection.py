@@ -99,6 +99,14 @@ class CollectedAddressProfile(Base):
     # form here would produce addresses matching nothing (ADR-277 D1).
     address     = Column(String(200), nullable=False)
 
+    # ADR-417 D7 — the folded form of `address`, for duplicate detection only.
+    #
+    # Stored rather than computed per query so the campaign-wide check is an
+    # index hit instead of a scan over every row folded on the fly. Never read
+    # back as data and never exported: `address` is the record, this is a
+    # lookup key. Indexed WITH token_id because every query filters on both.
+    door_key    = Column(String(200), nullable=False, server_default="", index=True)
+
     building_type  = Column(String(30), nullable=False)
     workload_class = Column(String(20), nullable=False)
 

@@ -25,11 +25,18 @@ const INPUT =
   'focus:outline-none focus:ring-2 focus:ring-primary/40';
 
 export default function AddressProfileForm({
-  profile, onChange, onAddressCommitted, onDelete, known,
+  profile, onChange, onAddressCommitted, onDelete, known, serverDuplicate, checking,
 }: {
   profile: AddressProfile;
   /** Door keys already received by this campaign — see `alreadyKnown`. */
   known: Set<string>;
+  /** The campaign already has this door, per the server check on blur. The
+   *  value is the date it was collected ('' when unknown); null means no
+   *  duplicate, or not checked. Authoritative — `known` is only a local hint
+   *  that works offline. */
+  serverDuplicate: string | null;
+  /** The server check is in flight for this profile. */
+  checking: boolean;
   onChange: (p: AddressProfile) => void;
   /** Fired on blur, once the address is settled — the caller re-keys there
    *  rather than on every keystroke, which would remount this form and steal
@@ -129,7 +136,34 @@ export default function AddressProfileForm({
                 workload and pressed send, the wasted walk has already
                 happened. This fires on the address itself, the moment the
                 text matches a door the campaign already has. */}
-            {alreadyKnown && (
+            {checking && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Checking whether this door is already collected…
+              </p>
+            )}
+
+            {/* THE AUTHORITATIVE REJECTION. The server was asked about this
+                exact door across the whole campaign, so this catches a
+                COWORKER's entry — the case the local hint below cannot see and
+                the one that actually wastes a walk.
+
+                Loud on purpose: a duplicate discovered here saves a trip, and
+                one missed costs somebody a walk to a door that was done. */}
+            {serverDuplicate !== null ? (
+              <div className="mt-1.5 rounded-lg border border-danger/50 bg-danger/10 px-2.5 py-2">
+                <p className="flex items-start gap-1.5 text-xs font-semibold text-danger">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Already collected{serverDuplicate ? ` on ${serverDuplicate}` : ''}.
+                    Someone has profiled this door for this campaign.
+                  </span>
+                </p>
+                <p className="mt-1 pl-5 text-[11px] text-danger/80">
+                  Skip it and move to the next address. Delete this entry unless
+                  you are deliberately correcting what is there.
+                </p>
+              </div>
+            ) : alreadyKnown && (
               <p className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-warning/50 bg-warning/10 px-2.5 py-2 text-xs font-medium text-warning">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>

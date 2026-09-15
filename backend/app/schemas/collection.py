@@ -98,6 +98,36 @@ class CollectionSubmitOut(BaseModel):
     duplicate_addresses: list[str] = []
 
 
+class CollectionCheckIn(BaseModel):
+    """Ask whether one address is already collected under this campaign.
+
+    ONE address per call, deliberately. A list parameter would turn this into a
+    bulk oracle: paste a thousand addresses, learn the campaign's whole
+    coverage in one request. One-at-a-time plus the rate limit makes mapping
+    the campaign slow enough to be pointless, while costing a collector nothing
+    — they check one door because they are standing at one door.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    token:   str = Field(..., min_length=16, max_length=64)
+    address: str = Field(..., min_length=3, max_length=200)
+
+
+class CollectionCheckOut(BaseModel):
+    """One bit, and the date if it is set.
+
+    `collected_on` is included because "already done" is far more convincing
+    with a date on it, and it reveals nothing the bit did not: the caller
+    already knows the address and already knows it was collected.
+
+    Nothing else. Not who collected it, not the building type, not an id —
+    those would make this a read path for the record rather than a check for
+    its existence.
+    """
+    known:        bool
+    collected_on: Optional[date] = None
+
+
 class CollectionTokenCreate(BaseModel):
     """Operator-side, authenticated. Issues a campaign token."""
     model_config = ConfigDict(extra="forbid")

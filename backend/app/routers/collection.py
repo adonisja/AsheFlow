@@ -32,10 +32,13 @@ from app.database import get_db
 from app.models.collection import CollectedAddressProfile, CollectionToken
 from app.models.employee import Employee
 from app.schemas.collection import (
+    CollectionCheckIn,
+    CollectionCheckOut,
     CollectedProfileOut, CollectionSubmitIn, CollectionSubmitOut,
     CollectionTokenCreate, CollectionTokenOut, CollectionTokenSummary,
 )
 from app.services.audit import write_audit
+from app.services.door_key import door_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/collection", tags=["collection"])
@@ -113,6 +116,9 @@ def submit_profiles(
             troublesome=p.troublesome,
             collected_by=p.collected_by,
             collected_on=p.collected_on,
+            # D7 — the folded key, set at the one place rows are created so it
+            # can never drift from `address`.
+            door_key=door_key(p.address)[:200],
         )
         db.add(row)
         try:
@@ -145,6 +151,62 @@ def submit_profiles(
         duplicate=duplicate,
         duplicate_addresses=duplicate_addresses,
     )
+
+
+@router.post("/check", response_model=CollectionCheckOut, status_code=status.HTTP_200_OK)
+@limiter.limit("60/minute")
+def check_address(
+    request: Request,
+    body: CollectionCheckIn,
+    db: Session = Depends(get_db),
+):
+    """Is this door already collected under this campaign? (ADR-417 D7)
+
+    THIS IS A READ ON THE PUBLIC PATH, which ADR-415 D4 forbade outright. The
+    narrowing that makes it acceptable, and the reasoning, are in ADR-417 D7.
+    In short: the caller must already know the address to ask about it, so no
+    content is disclosed — only existence, one address at a time.
+
+    Why it exists: collection is a GROUP activity. A collector cannot know that
+    a coworker profiled a building yesterday, so without this they walk to a
+    door that is already done, and keep doing it. The waste is somebody's time
+    in the field, repeatedly.
+
+    What keeps it from being an enumeration oracle:
+      - ONE address per request. No list parameter, ever.
+      - Scoped to the caller's own campaign (`token_id`), so a token reveals
+        only what that campaign itself collected — nothing about other
+        campaigns or the wider table.
+      - Rate limited per IP, so probing addresses is slow.
+      - Returns a bool and a date. No id, no building type, no collector.
+      - Same 404 for an inactive token as everywhere else, so it cannot be used
+        to test whether a token is live any more cheaply than /submit can.
+
+    Campaign-wide, NOT per-day (unlike the unique constraint, which is keyed by
+    `collected_on` because re-observing a building later is legitimately new
+    information). For "should I walk to this door", a profile from last week
+    counts — that is exactly the walk worth skipping.
+    """
+    tok = _resolve_token(db, body.token)
+
+    key = door_key(body.address)[:200]
+    if not key:
+        # An address that folds to nothing cannot match anything. Answer
+        # honestly rather than running a query on an empty key.
+        return CollectionCheckOut(known=False)
+
+    row = (
+        db.query(CollectedAddressProfile.collected_on)
+        .filter(
+            CollectedAddressProfile.token_id == tok.id,
+            CollectedAddressProfile.door_key == key,
+        )
+        .order_by(CollectedAddressProfile.collected_on.desc())
+        .first()
+    )
+    if row is None:
+        return CollectionCheckOut(known=False)
+    return CollectionCheckOut(known=True, collected_on=row[0])
 
 
 # ── Operator side — authenticated ────────────────────────────────────────────

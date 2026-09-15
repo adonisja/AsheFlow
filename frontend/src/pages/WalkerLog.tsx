@@ -32,7 +32,7 @@ import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
   emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile, knownAddresses, rememberKnown, doorKey} from '../utils/addressProfile';
-import { submitConfigured, submitProfiles } from '../utils/collectionSubmit';
+import { checkAddress, submitConfigured, submitProfiles } from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
 /** Manual walker/route tracker — a research instrument, not an operational page.
@@ -166,6 +166,11 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  this device's own submissions. Seeded from localStorage so the warning
    *  survives a reload. */
   const [known, setKnown] = useState<Set<string>>(() => knownAddresses());
+  /** Profile id -> the date the campaign already has it, from the server check.
+   *  Absent means "not a duplicate, or not checked". */
+  const [dupes, setDupes] = useState<Map<string, string | null>>(new Map());
+  /** Profile id currently being checked, so the field can say so. */
+  const [checking, setChecking] = useState<string | null>(null);
   /** True when this date was explicitly cleared — suppresses the bundled
    *  fixture so a clear actually sticks. */
   const [cleared, setCleared] = useState(false);
@@ -530,36 +535,63 @@ export default function WalkerLog({ dataset = 'routes' }: {
     await saveProfile(p);
   }, [saveProfile]);
 
-  /** Moves a profile to its address-derived id, once the address is settled.
+  /** Settles a profile's address: re-key it, then ask the campaign about it.
    *
    *  `${date}|address` is what makes revisiting a building an EDIT rather than
-   *  a second row, so the re-key still has to happen — just not mid-word. */
+   *  a second row, so the re-key still has to happen — just not mid-word.
+   */
   const rekeyProfile = useCallback(async (p: AddressProfile) => {
     const want = p.address.trim() ? profileId(p.date, p.address) : p.id;
-    if (want === p.id) return;
 
-    // An existing profile for this address wins: typing an address that is
-    // already recorded should reach that record, not silently replace it with
-    // a half-filled duplicate.
-    const clash = profiles.find((x) => x.id === want && x.id !== p.id);
-    if (clash) {
-      setError(`${p.address.trim()} is already recorded. Edit that entry instead.`);
-      return;
+    let settled = p;
+    if (want !== p.id) {
+      // An existing profile for this address wins: typing an address that is
+      // already recorded should reach that record, not silently replace it
+      // with a half-filled duplicate.
+      const clash = profiles.find((x) => x.id === want && x.id !== p.id);
+      if (clash) {
+        setError(`${p.address.trim()} is already recorded. Edit that entry instead.`);
+        return;
+      }
+      await deleteProfile(p.id);
+      settled = { ...p, id: want };
+      setProfiles((ps) => ps.map((x) => (x.id === p.id ? settled : x)));
+      await putProfile(settled);
+
+      // A door profiled on an EARLIER date is not a local clash — re-observing
+      // a building later is new information — but it is worth saying so,
+      // because the usual reason to retype it is not knowing it was done.
+      const earlier = (await allProfiles()).find(
+        (x) => x.date !== p.date && doorKey(x.address) === doorKey(p.address),
+      );
+      if (earlier) flash(`Heads up: this door was already profiled on ${earlier.date}.`);
     }
-    // A door profiled on an EARLIER date is not a clash — re-observing a
-    // building later is new information — but it is worth saying so, because
-    // the usual reason to type it again is not knowing it was done.
-    const earlier = (await allProfiles()).find(
-      (x) => x.date !== p.date && doorKey(x.address) === doorKey(p.address),
-    );
-    if (earlier) {
-      flash(`Heads up: this door was already profiled on ${earlier.date}.`);
-    }
-    await deleteProfile(p.id);
-    const moved = { ...p, id: want };
-    setProfiles((ps) => ps.map((x) => (x.id === p.id ? moved : x)));
-    await putProfile(moved);
-  }, [profiles, flash]);
+
+    if (!settled.address.trim()) return;
+
+    // ADR-417 D7 — ask the CAMPAIGN, not just this device.
+    //
+    // Collection is a group activity, so the duplicate that matters is a
+    // coworker's, and this browser cannot know about it. Without asking, the
+    // collector walks to a door somebody already did — repeatedly, because
+    // nothing ever tells them.
+    //
+    // On blur, so it is one request per address entered rather than per
+    // keystroke. Fails open by contract (see checkAddress): offline returns
+    // `unknown` and entry continues, because a dropped hotspot must not stop
+    // data entry. Nothing bad reaches the database either way — the unique
+    // constraint still rejects a true duplicate on submit.
+    if (!collectToken.trim()) return;
+    setChecking(settled.id);
+    const verdict = await checkAddress(collectToken, settled.address);
+    setChecking((c) => (c === settled.id ? null : c));
+    setDupes((m) => {
+      const next = new Map(m);
+      if (verdict.state === 'known') next.set(settled.id, verdict.collected_on);
+      else next.delete(settled.id);
+      return next;
+    });
+  }, [profiles, flash, collectToken]);
 
   const removeProfile = useCallback(async (id: string) => {
     const p = profiles.find((x) => x.id === id);
@@ -596,9 +628,18 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  copy — the submission is a copy sent onward, not a handoff — so a server
    *  that later loses the batch does not take the only record with it. */
   const sendProfiles = useCallback(async () => {
-    const ready = profiles.filter(isUsable);
+    // A door the campaign already has is excluded from the batch. The server
+    // would reject a same-day duplicate anyway, but it would ACCEPT one from
+    // another date — and re-sending a building a coworker already profiled is
+    // the waste this whole check exists to stop.
+    const ready = profiles.filter((p) => isUsable(p) && !dupes.has(p.id));
+    const held = profiles.filter((p) => isUsable(p) && dupes.has(p.id)).length;
     if (ready.length === 0) {
-      setError('Nothing complete to send. A profile needs an address and a building type.');
+      setError(
+        held > 0
+          ? `Nothing new to send. ${held} ${held === 1 ? 'profile is' : 'profiles are'} already collected by this campaign.`
+          : 'Nothing complete to send. A profile needs an address and a building type.',
+      );
       return;
     }
     setSending(true);
@@ -613,14 +654,17 @@ export default function WalkerLog({ dataset = 'routes' }: {
         setKnown(knownAddresses());
       }
       flash(
-        `Sent ${r.accepted}${r.duplicate ? ` (${r.duplicate} already received)` : ''}.`,
+        `Sent ${r.accepted}`
+        + (r.duplicate ? ` (${r.duplicate} already received)` : '')
+        + (held ? `, held back ${held} already collected` : '')
+        + '.',
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send.');
     } finally {
       setSending(false);
     }
-  }, [profiles, collectToken, flash]);
+  }, [profiles, collectToken, flash, dupes]);
 
   // ── Build-first routes ─────────────────────────────────────────────────
   // The truck is usually there before the walkers, so a route gets built and
@@ -971,6 +1015,8 @@ export default function WalkerLog({ dataset = 'routes' }: {
                   onAddressCommitted={(next) => void rekeyProfile(next)}
                   onDelete={() => void removeProfile(p.id)}
                   known={known}
+                  serverDuplicate={dupes.has(p.id) ? (dupes.get(p.id) ?? '') : null}
+                  checking={checking === p.id}
                 />
               ))}
             </div>

@@ -92,3 +92,43 @@ export async function submitProfiles(
   // Tolerate a server that predates the echo rather than crashing the page.
   return { ...out, duplicate_addresses: out.duplicate_addresses ?? [] };
 }
+
+
+/** Is this door already collected under this campaign? (ADR-417 D7)
+ *
+ *  FAILS OPEN. A dropped hotspot must not stop data entry — the page's whole
+ *  premise is that it works offline — so an unreachable server returns
+ *  `unknown` and the collector carries on. Nothing bad reaches the database:
+ *  the unique constraint still rejects a true same-day duplicate on submit,
+ *  and the campaign-wide case is a wasted walk, not corrupt data.
+ *
+ *  Returns `unknown` rather than throwing, so the caller cannot accidentally
+ *  treat a network failure as "not collected".
+ */
+export type CheckResult =
+  | { state: 'known'; collected_on: string | null }
+  | { state: 'new' }
+  | { state: 'unknown' };
+
+export async function checkAddress(
+  token: string,
+  address: string,
+): Promise<CheckResult> {
+  if (!submitConfigured() || !token.trim() || address.trim().length < 3) {
+    return { state: 'unknown' };
+  }
+  try {
+    const res = await fetch(`${API.replace(/\/$/, '')}/collection/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token.trim(), address: address.trim() }),
+    });
+    if (!res.ok) return { state: 'unknown' };   // 404 token, 429, 5xx: all "cannot say"
+    const j = (await res.json()) as { known: boolean; collected_on: string | null };
+    return j.known
+      ? { state: 'known', collected_on: j.collected_on }
+      : { state: 'new' };
+  } catch {
+    return { state: 'unknown' };                // offline
+  }
+}

@@ -58,6 +58,13 @@ _NO_AUDIT = {
     # heuristic because it is a POST (it has to be: the file is the body).
     # The write it precedes, confirm_bulk_profiles, IS audited.
     "building_profiles.py::preview_bulk_profiles",
+    # ADR-417 D7: a duplicate check. It SELECTs one row and persists nothing.
+    # POST rather than GET on purpose — the address is a customer address, and
+    # a GET would put it in the URL, which lands in access logs, proxy logs and
+    # browser history. Same shape as preview_bulk_profiles above: it trips the
+    # heuristic only because it is a POST. The write it precedes, submit_profiles,
+    # IS audited.
+    "collection.py::check_address",
     # ADR-312 D4: deprecated delegations. They carry no logic of their own —
     # each calls the moved handler in company_zones.py, which writes the audit.
     # Auditing here too would double-log every zone edit for one release.
