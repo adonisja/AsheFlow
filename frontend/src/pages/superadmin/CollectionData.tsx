@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import {
   ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Download, AlertTriangle,
 } from 'lucide-react';
@@ -41,24 +42,37 @@ const fmt = (iso: string | null): string => {
 const q = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 const CSV_COLUMNS = [
-  'normalised_address', 'building_type', 'workload_class', 'raw_note',
-  'opens_at', 'closes_at', 'break_start', 'break_end',
+  'normalised_address', 'building_category', 'building_type',
+  'has_security_desk', 'workloads', 'workload_other', 'workload_class',
+  'raw_note', 'opens_at', 'closes_at', 'break_start', 'break_end',
   'troublesome', 'collected_by', 'collected_on', 'submitted_at',
 ] as const;
 
-/** Column names match `BuildingProfile` so a later load maps straight across
- *  without a translation table — the same shape the collection page exports. */
+/** One profile as a row, in CSV_COLUMNS order.
+ *
+ *  Column names match `BuildingProfile` so a later load maps straight across
+ *  without a translation table. Extracted from `toCSV` so the CSV and the
+ *  workbook are literally the same data rather than two lists that agree
+ *  today. */
+function profileRow(r: CollectedProfile): unknown[] {
+  return [
+    r.address, r.building_category, r.building_type,
+    r.has_security_desk ? 'true' : 'false',
+    // Pipe-separated, matching every other place workloads are written: a
+    // comma inside a CSV cell survives the file and trips naive splitters.
+    (r.workloads ?? []).join('|'), r.workload_other ?? '',
+    r.workload_class, r.note ?? '',
+    r.opens_at ?? '', r.closes_at ?? '', r.break_start ?? '', r.break_end ?? '',
+    r.troublesome ? 'true' : 'false',
+    r.collected_by ?? '', r.collected_on, r.submitted_at,
+  ];
+}
+
 function toCSV(rows: CollectedProfile[]): string {
-  const out = [CSV_COLUMNS.join(',')];
-  for (const r of rows) {
-    out.push([
-      r.address, r.building_type, r.workload_class, r.note ?? '',
-      r.opens_at ?? '', r.closes_at ?? '', r.break_start ?? '', r.break_end ?? '',
-      r.troublesome ? 'true' : 'false',
-      r.collected_by ?? '', r.collected_on, r.submitted_at,
-    ].map(q).join(','));
-  }
-  return out.join('\n');
+  return [
+    CSV_COLUMNS.join(','),
+    ...rows.map((r) => profileRow(r).map(q).join(',')),
+  ].join('\n');
 }
 
 /** One row per ADDRESS on a route, not one per day.
@@ -75,8 +89,9 @@ const DAY_COLUMNS = [
   'rts_count', 'ov_count', 'revision', 'submitted_at',
 ] as const;
 
-function daysToCSV(rows: CollectedWalkerDayDetail[]): string {
-  const out = [DAY_COLUMNS.join(',')];
+/** Every day flattened to one row per address, in DAY_COLUMNS order. */
+function dayRows(rows: CollectedWalkerDayDetail[]): unknown[][] {
+  const out: unknown[][] = [];
   for (const d of rows) {
     for (const r of d.payload.routes ?? []) {
       const rts = r.rts?.length ?? 0;
@@ -93,12 +108,43 @@ function daysToCSV(rows: CollectedWalkerDayDetail[]): string {
             t.bag_id, a,
             ('sort_zone' in t ? t.sort_zone : '') ?? '', ('stop' in t ? t.stop : '') ?? '',
             rts, ovs, d.revision, d.submitted_at,
-          ].map(q).join(','));
+          ]);
         }
       }
     }
   }
-  return out.join('\n');
+  return out;
+}
+
+function daysToCSV(rows: CollectedWalkerDayDetail[]): string {
+  return [
+    DAY_COLUMNS.join(','),
+    ...dayRows(rows).map((r) => r.map(q).join(',')),
+  ].join('\n');
+}
+
+/** Turns a header and rows into a one-sheet workbook.
+ *
+ *  Shared by both datasets so the xlsx and the CSV cannot drift: each caller
+ *  passes the SAME column list and the SAME row builder it gives `toCSV`, and
+ *  only the container differs.
+ */
+function sheetBlob(name: string, header: readonly string[], rows: unknown[][]): Blob {
+  const ws = XLSX.utils.aoa_to_sheet([[...header], ...rows]);
+  ws['!cols'] = header.map((h) => ({ wch: Math.max(12, Math.min(40, h.length + 6)) }));
+  if (rows.length > 0) {
+    ws['!autofilter'] = {
+      ref: XLSX.utils.encode_range({
+        s: { r: 0, c: 0 }, e: { r: rows.length, c: header.length - 1 },
+      }),
+    };
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, name);
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+  return new Blob([out], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
 }
 
 export default function CollectionData() {
@@ -242,32 +288,60 @@ export default function CollectionData() {
     }
   };
 
-  const save = (name: string, body: string) => {
-    const url = URL.createObjectURL(new Blob([body], { type: 'text/csv' }));
+  /** Hands the bytes to the browser. Takes a Blob rather than a string so the
+   *  same path serves text formats and the xlsx binary. */
+  const save = (name: string, ext: string, blob: Blob) => {
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `${name}-${new Date().toISOString().slice(0, 10)}.${ext}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
+  const text = (body: string, type: string) => new Blob([body], { type });
+
   const [downloading, setDownloading] = useState(false);
 
-  const download = async () => {
+  /** THE export surface for collected data.
+   *
+   *  The collection pages have none: their data goes to the server, and a
+   *  second copy leaving on a collector's phone would be the record without
+   *  the access control. Everything anyone needs to take away is taken from
+   *  here, behind the super-admin gate.
+   *
+   *  Three formats for each dataset, carrying the same rows and columns — only
+   *  the container differs, so a recipient given one file is not given less
+   *  than a recipient given another. */
+  const download = async (fmt: 'csv' | 'json' | 'xlsx') => {
     if (dataset === 'addresses') {
-      save('collected-addresses', toCSV(profiles));
+      if (fmt === 'xlsx') {
+        save('collected-addresses', 'xlsx', sheetBlob('Address profiles', CSV_COLUMNS, profiles.map(profileRow)));
+      } else if (fmt === 'json') {
+        save('collected-addresses', 'json',
+          text(JSON.stringify({ profiles }, null, 2), 'application/json'));
+      } else {
+        save('collected-addresses', 'csv', text(toCSV(profiles), 'text/csv'));
+      }
       return;
     }
-    // The day CSV is one row per ADDRESS, so it needs every payload — and the
-    // listing deliberately carries none. Fetched here, on an explicit export,
-    // rather than eagerly on every page load: this is the one moment the cost
-    // buys something.
+    // The day export is one row per ADDRESS, so it needs every payload — and
+    // the listing deliberately carries none. Fetched here, on an explicit
+    // export, rather than eagerly on every page load: this is the one moment
+    // the cost buys something.
     setDownloading(true);
     try {
       const full = await Promise.all(days.map((d) =>
         axiosClient.get<CollectedWalkerDayDetail>(`/collection/walker-days/${d.id}`)
           .then((r) => r.data)));
-      save('collected-walker-days', daysToCSV(full));
+      if (fmt === 'xlsx') {
+        save('collected-walker-days', 'xlsx', sheetBlob('Walker days', DAY_COLUMNS, dayRows(full)));
+      } else if (fmt === 'json') {
+        save('collected-walker-days', 'json',
+          text(JSON.stringify({ days: full }, null, 2), 'application/json'));
+      } else {
+        save('collected-walker-days', 'csv', text(daysToCSV(full), 'text/csv'));
+      }
       setError('');
     } catch (e) {
       setError(errorText(e, 'Could not build the day export.'));
@@ -472,12 +546,24 @@ export default function CollectionData() {
                   </button>
                 ))}
               </div>
+              {/* THE export surface. The collection pages have none — their
+                  data goes to the server, and a copy leaving on a collector's
+                  phone would be the record without the access control. */}
               {((dataset === 'addresses' && profiles.length > 0)
                 || (dataset === 'days' && days.length > 0)) && (
-                <button onClick={() => void download()} className="btn-secondary text-sm inline-flex items-center gap-1.5">
-                  <Download className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
-                  {downloading ? 'Building…' : 'CSV'}
-                </button>
+                <div className="flex items-center gap-1">
+                  {(['csv', 'json', 'xlsx'] as const).map((fmt) => (
+                    <button
+                      key={fmt}
+                      onClick={() => void download(fmt)}
+                      disabled={downloading}
+                      className="btn-secondary text-sm inline-flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Download className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
+                      {fmt === 'xlsx' ? 'Excel' : fmt.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           </div>

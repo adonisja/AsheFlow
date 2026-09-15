@@ -3071,7 +3071,15 @@ export interface CollectedProfile {
   company_id: string;
   token_id: string;
   address: string;
+  // ADR-418/419. These four drifted: the server has returned them since the
+  // taxonomy change and this interface did not list them, so the super-admin
+  // CSV silently omitted four columns of collected data.
+  building_category: string;
   building_type: string;
+  has_security_desk: boolean;
+  workloads: string[];
+  workload_other: string | null;
+  /** Kept in step with workloads[0] for readers that expect one value. */
   workload_class: string;
   note: string | null;
   opens_at: string | null;

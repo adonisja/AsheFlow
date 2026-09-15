@@ -30,7 +30,7 @@ import LabelScanner from '../components/walkerlog/LabelScanner';
 import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
-  emptyProfile, isUsable, profileId, profilesToCSV, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress} from '../utils/addressProfile';
+  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress} from '../utils/addressProfile';
 import {
   checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles,
 } from '../utils/collectionSubmit';
@@ -664,17 +664,6 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  Exports EVERY date, not just the one on screen: a building profile is a
    *  fact about a place, and filtering it by the day it happened to be
    *  collected would drop most of the dataset. */
-  const exportProfiles = useCallback(async () => {
-    const all = (await allProfiles()).filter(isUsable);
-    if (all.length === 0) {
-      setError('No complete profiles yet. A profile needs an address and a building type.');
-      return;
-    }
-    all.sort((a, b) => a.address.localeCompare(b.address));
-    download(`address-profiles-${getLocalYMD()}.csv`, profilesToCSV(all), 'text/csv');
-    flash(`Exported ${all.length} profile${all.length === 1 ? '' : 's'}.`);
-  }, [flash]);
-
   /** Sends complete profiles to the shared collection endpoint.
    *
    *  Local storage is NOT cleared on success. The collector keeps their own
@@ -950,7 +939,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
           (receiving) and Upload points OUT of it (sending). Export sends data
           out, so it takes Upload; Import brings it in, so it takes Download.
           These were inverted. */}
-      <div className="grid gap-2 sm:grid-cols-2">
+      {/* Two columns only when there are two cards. The address study has no
+          import section, and a fixed 2-up grid would leave its export box at
+          half width with dead space beside it. */}
+      <div className={`grid gap-2 ${routesTab ? 'sm:grid-cols-2' : ''}`}>
         {([
           {
             key: 'import',
@@ -961,15 +953,19 @@ export default function WalkerLog({ dataset = 'routes' }: {
             // them invited a collector to import a truck manifest into a
             // building survey. Both keep the saved-log restore, which carries
             // whichever dataset the file holds.
+            // The address study has NO import. Nothing it could accept is
+            // produced anywhere else: there is no address equivalent of a load
+            // sheet or a crew card, and a saved-log restore would only be
+            // moving this page's own export between devices — which the export
+            // already covers, and which invites loading a route file into a
+            // building survey. The route log keeps all three.
             items: routesTab
               ? [
                   { label: 'Load sheet', sub: '.xlsx', icon: FileSpreadsheet, onClick: () => { setImportTab('sheet'); setShowImport(true); } },
                   { label: 'Crew', sub: 'screenshot', icon: Camera, onClick: () => { setImportTab('crew'); setShowImport(true); } },
                   { label: 'Saved log', sub: '.json', icon: Download, onClick: () => fileRef.current?.click() },
                 ]
-              : [
-                  { label: 'Saved log', sub: '.json', icon: Download, onClick: () => fileRef.current?.click() },
-                ],
+              : [],
           },
           {
             key: 'export',
@@ -985,11 +981,21 @@ export default function WalkerLog({ dataset = 'routes' }: {
                   { label: 'CSV', sub: '.csv', icon: Upload, onClick: () => void exportAll('csv') },
                   { label: 'JSON', sub: '.json', icon: Upload, onClick: () => void exportAll('json') },
                 ]
-              : [
-                  { label: 'CSV', sub: '.csv', icon: Upload, onClick: () => void exportProfiles() },
-                ],
+              // The address study has NO export either. Its data goes to the
+              // server and is read and exported from the super-admin page, so
+              // a second copy leaving on a collector's phone is a duplicate of
+              // the record with none of the access control. The route log
+              // keeps its exports: those days are still going somewhere by
+              // file.
+              : [],
           },
-        ] as const).map((g) => (
+        ] as const)
+          // A group with no items would render as a bare heading over nothing.
+          // The address study has no import, so its section is absent rather
+          // than empty — an empty labelled box reads as something failing to
+          // load.
+          .filter((g) => g.items.length > 0)
+          .map((g) => (
           <section key={g.key} className="rounded-xl border border-border bg-surface/40 p-3">
             <div className="mb-2 flex items-baseline justify-between gap-2">
               <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
