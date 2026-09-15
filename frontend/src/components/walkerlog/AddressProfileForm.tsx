@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Trash2, AlertTriangle, Info } from 'lucide-react';
-import Dropdown from './Dropdown';
+import BuildingTypePicker from './BuildingTypePicker';
 import LabelScanner from './LabelScanner';
 import {
   BUILDING_CATEGORIES, BUILDING_TYPES, NOT_APPLICABLE, SECURITY_DESK_PROTOCOL,
@@ -190,21 +190,9 @@ export default function AddressProfileForm({
               Building type
             </label>
             <div className="mt-1">
-              <Dropdown
+              <BuildingTypePicker
                 value={profile.building_type}
-                placeholder="What is at the door?"
-                ariaLabel="Building type"
-                onChange={(v) => set({ building_type: v as AddressProfile['building_type'] })}
-                /* Grouped by category, which is the first cut a walker makes:
-                   a residential walk-up and a commercial store front are
-                   different jobs. The category is NOT stored from here — the
-                   server derives it from the type, so the two can never
-                   disagree. */
-                options={BUILDING_CATEGORIES.flatMap((c) => [
-                  ...BUILDING_TYPES
-                    .filter((b) => b.category === c.value)
-                    .map((b) => ({ value: b.value, label: b.label, group: c.label })),
-                ])}
+                onChange={(v) => set({ building_type: v })}
               />
             </div>
 
