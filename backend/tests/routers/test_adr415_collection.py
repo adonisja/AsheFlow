@@ -250,17 +250,29 @@ class TestTheRouterIsActuallyMounted:
         from app.api.deps import get_super_admin
         from app.routers.collection import router
 
+        from app.api.deps import get_platform_staff
+
         for r in router.routes:
             if "GET" not in getattr(r, "methods", set()):
                 continue
+            src = inspect.getsource(r.endpoint)
             gates = [
                 p.default.dependency
                 for p in inspect.signature(r.endpoint).parameters.values()
                 if getattr(p.default, "dependency", None) is not None
             ]
-            assert get_super_admin in gates, (
-                f"{r.path} is a read on the collection router with no "
-                f"super-admin gate"
+            # ADR-423 widened these from "super admin only" to "super admin OR
+            # the owning company's admin", so the gate is no longer a single
+            # dependency — it is _scope_reads, which 403s anyone else and
+            # filters a company admin to their own company_id.
+            assert "_scope_reads(" in src, (
+                f"{r.path} is a read on the collection router that does not go "
+                f"through _scope_reads"
+            )
+            # The invariant ADR-423 must not erode: a cross-tenant support
+            # login may never reach addresses or names (ADR-343 D4).
+            assert get_platform_staff not in gates, (
+                f"{r.path} exposes collected PII to platform_support"
             )
 
 
@@ -279,7 +291,7 @@ class TestThePlatformOwnerCanReadWhatArrived:
         spec = app.openapi()
         assert set(spec["paths"]["/api/v1/collection/submit"]) == {"post"}
 
-    def test_reads_are_gated_on_super_admin_not_platform_staff(self):
+    def test_reads_never_admit_platform_staff(self):
         """ADR-343 D4: no `platform_support` endpoint may return addresses.
 
         These rows ARE customer delivery addresses, so the stricter gate is
@@ -287,18 +299,27 @@ class TestThePlatformOwnerCanReadWhatArrived:
         so swapping the import fails here.
         """
         import inspect
-        from app.api.deps import get_super_admin
-        from app.routers.collection import list_collected_profiles, list_tokens
+        from app.api.deps import get_platform_staff
+        from app.routers.collection import (
+            get_collected_day, list_collected_days, list_collected_profiles, list_tokens,
+        )
 
-        for fn in (list_collected_profiles, list_tokens):
+        for fn in (list_collected_profiles, list_tokens,
+                   list_collected_days, get_collected_day):
             deps = [
                 p.default.dependency
                 for p in inspect.signature(fn).parameters.values()
                 if hasattr(p.default, "dependency")
             ]
-            assert get_super_admin in deps, (
-                f"{fn.__name__} is not gated on get_super_admin — "
-                "ADR-343 D4 forbids addresses behind platform_support"
+            assert get_platform_staff not in deps, (
+                f"{fn.__name__} admits platform_support — ADR-343 D4 forbids "
+                "addresses and names behind that cross-tenant login"
+            )
+            # ADR-423: the gate is _scope_reads, not one dependency. It 403s
+            # anyone who is neither a super admin nor the owning company's
+            # management/admin, and filters the latter to their own company_id.
+            assert "_scope_reads(" in inspect.getsource(fn), (
+                f"{fn.__name__} does not scope its read"
             )
 
     def test_the_token_value_is_never_listed(self):
@@ -546,3 +567,69 @@ class TestTheVerificationLimit:
         from app.routers import collection as C
         src = inspect.getsource(C.check_address)
         assert "VERIFICATION_LIMIT + 1" in src
+
+
+class TestCampaignScope:
+    """ADR-423. Two campaign kinds, two auth models."""
+
+    def test_the_body_cannot_choose_its_own_scope(self):
+        """Scope follows WHO is calling. If the body could set it, a company
+        admin could mint an open campaign — the exact boundary this draws."""
+        from app.schemas.collection import CollectionTokenCreate
+        fields = set(CollectionTokenCreate.model_fields)
+        assert "scope" not in fields and "company_id" not in fields
+        with pytest.raises(ValidationError):
+            CollectionTokenCreate(label="x", scope="open")
+
+    def test_an_open_campaign_carries_no_company(self):
+        """NULL is the literal truth — no tenant owns it — and it is what keeps
+        open rows out of a company admin's reads: `company_id == <uuid>` never
+        matches NULL."""
+        from app.models.collection import (
+            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+        )
+        for m in (CollectionToken, CollectedAddressProfile, CollectedWalkerDay):
+            assert m.__table__.columns["company_id"].nullable, (
+                f"{m.__tablename__}.company_id must be nullable to hold an "
+                f"open campaign's rows"
+            )
+
+    def test_a_company_campaign_requires_an_authenticated_employee(self):
+        """The link alone is not enough: it can be forwarded, and a company
+        survey is scoped to a staff pool the way Driver Survey is."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C._authorise_scope)
+        assert "status_code=401" in src, "unauthenticated must be told to sign in"
+        assert "status_code=403" in src, "the wrong tenant must be refused"
+        assert "caller.company_id != tok.company_id" in src, (
+            "an employee of another company holding this link must not write here"
+        )
+
+    @pytest.mark.parametrize("fn_name", [
+        "submit_profiles", "check_address", "submit_walker_days",
+    ])
+    def test_every_public_path_enforces_the_scope(self, fn_name):
+        """All three, not just submit. A company campaign's duplicate check
+        leaks which doors it holds, so it is gated too."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(getattr(C, fn_name))
+        assert "_authorise_scope(tok, caller)" in src
+
+    def test_super_admin_creation_needs_no_employee_row(self):
+        """The bug this ADR opened on: the page built for the platform owner
+        403'd them with "No employee record found for your account", because
+        create_token took get_caller_employee unconditionally and a super admin
+        has no Employee row by design."""
+        import inspect
+        from app.api.deps import get_caller_employee
+        from app.routers.collection import create_token
+        deps = [
+            p.default.dependency
+            for p in inspect.signature(create_token).parameters.values()
+            if hasattr(p.default, "dependency")
+        ]
+        assert get_caller_employee not in deps, (
+            "create_token must not require an Employee row — a super admin has none"
+        )

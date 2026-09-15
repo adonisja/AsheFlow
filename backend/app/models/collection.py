@@ -45,7 +45,14 @@ class CollectionToken(Base):
     __tablename__ = "collection_tokens"
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    # ADR-423. NULL means OPEN: a super-admin campaign belongs to no tenant,
+    # which is the literal truth rather than a sentinel company standing in for
+    # one. A company admin's campaign carries their id.
+    #
+    # This is what keeps the two kinds apart on read: a company admin filters by
+    # their own id, which never matches NULL, so open data cannot appear in a
+    # tenant view by construction rather than by remembering to exclude it.
+    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # The secret itself. Compared in full; never logged, never returned after
     # creation. Long enough that guessing is not a threat model.
@@ -64,7 +71,15 @@ class CollectionToken(Base):
     # and a per-IP rate limit does not stop a distributed flood on one token.
     daily_cap   = Column(Integer, nullable=False, server_default="500")
 
+    # ADR-423. A super admin has no Employee row — that is why the create
+    # endpoint 403'd for them with "No employee record found for your account".
+    # Already nullable, now genuinely used that way.
     created_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+
+    # Who may submit, decided at creation and never inferred at submit time.
+    #   "open"    — anyone with the link (super admin only)
+    #   "company" — an authenticated employee of `company_id` (ADR-423 D2)
+    scope       = Column(String(10), nullable=False, server_default="open", index=True)
     created_by_name = Column(String(100), nullable=True)
     created_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -89,8 +104,9 @@ class CollectedAddressProfile(Base):
     )
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Resolved from the token, never from the request body (D2).
-    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    # Resolved from the token, never from the request body (ADR-415 D2).
+    # NULL for an open campaign — see CollectionToken.company_id.
+    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
     token_id    = Column(UUID(as_uuid=True),
                          ForeignKey("collection_tokens.id", ondelete="CASCADE"),
                          nullable=False, index=True)
@@ -177,7 +193,8 @@ class CollectedWalkerDay(Base):
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Resolved from the token, never from the request body (ADR-415 D2).
-    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    # NULL for an open campaign — see CollectionToken.company_id.
+    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
     token_id    = Column(UUID(as_uuid=True),
                          ForeignKey("collection_tokens.id", ondelete="CASCADE"),
                          nullable=False, index=True)
