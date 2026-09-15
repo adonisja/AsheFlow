@@ -38,6 +38,20 @@ MUTABLE_TYPES = (ARRAY, PG_ARRAY, JSONB, JSON)
 # assignment only, so mutation tracking would buy nothing but a deep copy on
 # every load. Format: "Model.column": why.
 REASSIGN_ONLY = {
+    # ADR-418. The workload SET is restated as a unit every time: the collector
+    # ticks boxes and the client sends the resulting list, and the one write
+    # site (collection.py submit_profiles) assigns `workloads=p.workloads`
+    # wholesale. Verified before declaring: the only subscript anywhere is
+    # `p.workloads[0]`, a READ off the Pydantic request model, not a mutation
+    # of the column. No append/pop/insert/extend path exists.
+    "BuildingProfile.workloads":            "collected as a set; assigned as a whole list",
+    "BuildingProfileLibrary.workloads":     "promoted as a whole list from a profile",
+    "CollectedAddressProfile.workloads":    "submitted as a whole list; never appended",
+    # ADR-417 D3. The whole day is re-sent and re-stored on every submission —
+    # the upsert assigns `existing.payload = payload` wholesale, and the create
+    # path passes it to the constructor. Verified before declaring: no
+    # .append/.update/.setdefault/[key]= anywhere on a payload attribute.
+    "CollectedWalkerDay.payload":           "the day is restated whole on every submit",
     # ADR-263. Set at seed time and replaced wholesale on re-seed
     # (seed_training_curriculum.py assigns `exists.roles = list(roles)`), never
     # appended to. A curriculum item's track membership is restated from the

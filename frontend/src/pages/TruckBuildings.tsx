@@ -13,22 +13,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
+import { buildingTypeLabel } from '../utils/addressProfile';
 import SectionHeader from '../components/ui/SectionHeader';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { errorText } from '../utils/errorText';
 import type { TruckBuildingsResponse, TruckBuildingStop } from '../api/types';
-
-const BUILDING_TYPE_LABELS: Record<string, string> = {
-  mailroom: 'Mail room',
-  receptionist: 'Receptionist',
-  doorman: 'Doorman',
-  walkup: 'Walk-up',
-  elevator: 'Elevator',
-  biz_front: 'Business — front desk',
-  biz_freight: 'Business — freight',
-  biz_security: 'Business — security',
-  biz_loading_dock: 'Business — loading dock',
-};
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -61,7 +50,7 @@ function StopRow({ stop }: { stop: TruckBuildingStop }) {
           {p && (
             <>
               <span aria-hidden>·</span>
-              <span>{BUILDING_TYPE_LABELS[p.building_type] ?? p.building_type}</span>
+              <span>{buildingTypeLabel(p.building_type)}</span>
             </>
           )}
         </div>

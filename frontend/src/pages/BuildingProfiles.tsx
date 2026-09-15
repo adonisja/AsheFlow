@@ -8,6 +8,7 @@ import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { BuildingProfileResponse, BuildingProfileCreate, BuildingProfileAnchorPatch, BuildingType } from '../api/types';
+import { BUILDING_TYPES, buildingTypeLabel } from '../utils/addressProfile';
 import { useAuth } from '../contexts/AuthContext';
 import { useCan } from '../hooks/useCan';
 import BulkImportModal from '../components/buildings/BulkImportModal';
@@ -16,19 +17,10 @@ import BulkImportModal from '../components/buildings/BulkImportModal';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const BUILDING_TYPE_LABELS: Record<string, string> = {
-  receptionist:    'Receptionist',
-  walkup:          'Walk-up',
-  elevator:        'Elevator',
-  biz_freight:     'Business – Freight',
-  biz_security:    'Business – Security',
-  biz_loading_dock:'Business – Loading Dock',
-  mailroom:        'Mailroom',
-  doorman:         'Doorman',
-  biz_front:       'Business – Front Desk',
-};
-
-const BUILDING_TYPES = Object.keys(BUILDING_TYPE_LABELS) as BuildingType[];
+// ADR-422: the labels and the list come from the one taxonomy. This file used
+// to hold its own copy of the pre-ADR-418 values, six of which the server now
+// rejects.
+const BUILDING_TYPE_VALUES = BUILDING_TYPES.map((b) => b.value) as BuildingType[];
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
@@ -112,8 +104,8 @@ function SubmitModal({ onClose, onCreated }: SubmitModalProps) {
               value={buildingType}
               onChange={e => setBuildingType(e.target.value as BuildingType)}
             >
-              {BUILDING_TYPES.map(t => (
-                <option key={t} value={t}>{BUILDING_TYPE_LABELS[t]}</option>
+              {BUILDING_TYPE_VALUES.map(t => (
+                <option key={t} value={t}>{buildingTypeLabel(t)}</option>
               ))}
             </select>
           </div>
@@ -219,8 +211,8 @@ function VerifyModal({ profile, onClose, onUpdated }: VerifyModalProps) {
               value={buildingType}
               onChange={e => setBuildingType(e.target.value as BuildingType)}
             >
-              {BUILDING_TYPES.map(t => (
-                <option key={t} value={t}>{BUILDING_TYPE_LABELS[t]}</option>
+              {BUILDING_TYPE_VALUES.map(t => (
+                <option key={t} value={t}>{buildingTypeLabel(t)}</option>
               ))}
             </select>
           </div>
@@ -478,7 +470,7 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-foreground truncate">{profile.normalised_address}</p>
           <p className="text-xs text-muted-foreground">
-            {BUILDING_TYPE_LABELS[profile.building_type] ?? profile.building_type}
+            {buildingTypeLabel(profile.building_type)}
             {' · '}{profile.workload_class}
             {' · '}{profile.block_key}
           </p>
@@ -660,7 +652,7 @@ export default function BuildingProfilesPage() {
     const matchesSearch = !q ||
       p.normalised_address.toLowerCase().includes(q) ||
       p.block_key.toLowerCase().includes(q) ||
-      (BUILDING_TYPE_LABELS[p.building_type] ?? '').toLowerCase().includes(q);
+      buildingTypeLabel(p.building_type).toLowerCase().includes(q);
     return matchesStatus && matchesSearch;
   });
 

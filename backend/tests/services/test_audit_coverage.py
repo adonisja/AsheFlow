@@ -58,6 +58,13 @@ _NO_AUDIT = {
     # heuristic because it is a POST (it has to be: the file is the body).
     # The write it precedes, confirm_bulk_profiles, IS audited.
     "building_profiles.py::preview_bulk_profiles",
+    # ADR-417 D7: a duplicate check. It SELECTs one row and persists nothing.
+    # POST rather than GET on purpose — the address is a customer address, and
+    # a GET would put it in the URL, which lands in access logs, proxy logs and
+    # browser history. Same shape as preview_bulk_profiles above: it trips the
+    # heuristic only because it is a POST. The write it precedes, submit_profiles,
+    # IS audited.
+    "collection.py::check_address",
     # ADR-312 D4: deprecated delegations. They carry no logic of their own —
     # each calls the moved handler in company_zones.py, which writes the audit.
     # Auditing here too would double-log every zone edit for one release.
@@ -384,8 +391,14 @@ class TestClaimKeyNames:
     def test_get_current_user_still_returns_the_expected_keys(self):
         # If this changes, the assertion below is testing the wrong contract.
         deps = (ROUTERS.parent / "api" / "deps.py").read_text(encoding="utf-8")
-        block = deps[deps.index("def get_current_user"):]
-        block = block[:block.index("def ", 10)]
+        # The EXACT signature, not a prefix. `deps.index("def get_current_user")`
+        # matched `get_current_user_optional` once ADR-423 added it — slicing an
+        # empty block and reporting that the claims had vanished. A prefix match
+        # against a name is only safe while no longer name shares the prefix,
+        # which nothing enforces.
+        start = deps.index("def get_current_user(")
+        block = deps[start:]
+        block = block[:block.index("\ndef ", 10)]
         import re
         keys = set(re.findall(r'^\s+"(\w+)":', block, re.M))
         assert self._CLAIM_KEYS <= keys, (

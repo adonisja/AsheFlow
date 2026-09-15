@@ -6,6 +6,7 @@ import {
   ArrowRight, Clock, Loader2, Info,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import { BUILDING_TYPES as TAXONOMY } from '../utils/addressProfile';
 import WalkerApReturnsPanel from '../components/WalkerApReturnsPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -42,17 +43,12 @@ const RTS_LABELS: Record<string, string> = {
   customer_cancelled_order: 'Order cancelled',
 };
 
-const BUILDING_TYPE_OPTIONS: { value: BuildingType; label: string }[] = [
-  { value: 'receptionist', label: 'Receptionist' },
-  { value: 'walkup', label: 'Walk-up' },
-  { value: 'elevator', label: 'Elevator' },
-  { value: 'biz_freight', label: 'Business – Freight' },
-  { value: 'biz_security', label: 'Business – Security' },
-  { value: 'biz_loading_dock', label: 'Business – Loading Dock' },
-  { value: 'mailroom', label: 'Mailroom' },
-  { value: 'doorman', label: 'Doorman' },
-  { value: 'biz_front', label: 'Business – Front Desk' },
-];
+// ADR-422. Built from the one taxonomy. This was a FOURTH hand-kept copy of
+// the pre-ADR-418 values, and the one that mattered most: this page SUBMITS a
+// building_type from the field, so six of its nine options would have been
+// rejected by the server with a 422 the walker could do nothing about.
+const BUILDING_TYPE_OPTIONS: { value: BuildingType; label: string }[] =
+  TAXONOMY.map((b) => ({ value: b.value as BuildingType, label: b.label }));
 
 // ── sub-components ────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Text, Time, UniqueConstraint, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.sql import func
 import uuid
 from app.models.base import Base
@@ -96,6 +96,31 @@ class BuildingProfile(Base):
     # Routing signal — feeds the weighted route effort score at sort time
     # Derived from building_type by default; captain can override independently
     workload_class      = Column(String(20),  nullable=False)   # bulk_drop | standard | high_touch | high_wait
+
+    # ── ADR-418 taxonomy ─────────────────────────────────────────────────────
+    # `building_category` is DERIVED from building_type via category_for() and
+    # written server-side, never accepted from a client: two independently
+    # supplied fields drift, and a row claiming residential/loading_dock is
+    # worse than no row. Stored rather than joined so "all residential" is a
+    # plain WHERE.
+    building_category   = Column(String(20), nullable=False,
+                                 server_default="unknown", index=True)
+
+    # Was `biz_security`, a TYPE — which forced a false choice: a loading dock
+    # with a security desk had to be filed as one or the other. It is an
+    # attribute of the door, so it is a flag.
+    has_security_desk   = Column(Boolean, nullable=False, server_default="false")
+
+    # Multi-select. A doorman building that is also 20+ floors is genuinely both
+    # bulk_drop and high_rise, which one column could not say. JSONB list of
+    # WORKLOAD_TAGS; ["not_applicable"] is an explicit "none apply", which is
+    # why an empty list is a validation error rather than a silent blank.
+    workloads           = Column(JSONB, nullable=False, server_default="[]")
+    # ADR-419. Free text behind the `other` workload tag. Kept OUT of
+    # `raw_note`: the note is "anything else about this door" and this is an
+    # answer to "which workload", so merging them would make it impossible to
+    # tell later which half was which.
+    workload_other      = Column(String(200), nullable=True)
 
     # Operational notes — surfaced to walker at delivery time
     raw_note            = Column(Text, nullable=True)           # walker free-text submission
