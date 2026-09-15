@@ -55,6 +55,7 @@ import Companies from './pages/superadmin/Companies';
 import CompanyDetail from './pages/superadmin/CompanyDetail';
 import PlatformAlerts from './pages/superadmin/PlatformAlerts';
 import PlatformStaff from './pages/superadmin/PlatformStaff';
+import CollectionData from './pages/superadmin/CollectionData';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
   const { companyId } = useParams<{ companyId: string }>();
@@ -614,6 +615,7 @@ function App() {
             <Route path="/superadmin/companies/:companyId" element={<CompanyDetailWithKey />} />
             <Route path="/superadmin/alerts" element={<PlatformAlerts />} />
             <Route path="/superadmin/staff" element={<PlatformStaff />} />
+            <Route path="/superadmin/collection" element={<CollectionData />} />
             <Route path="/superadmin/account" element={<Account />} />
             <Route path="/superadmin" element={<Navigate to="/superadmin/companies" replace />} />
           </Route>

@@ -3033,3 +3033,54 @@ export interface MyRouteOut {
   departed_at: string | null;
   returned_at: string | null;
 }
+
+// ── Public data collection (ADR-415) ─────────────────────────────────────────
+// Hand-maintained to match backend/app/schemas/collection.py. There is no
+// codegen, so a field added there must be added here or the client silently
+// cannot see it.
+
+/** A collection campaign. The token VALUE is deliberately absent — the backend
+ *  returns it once at creation and never lists it. */
+export interface CollectionTokenSummary {
+  id: string;
+  company_id: string;
+  label: string;
+  daily_cap: number;
+  revoked_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+  created_by_name: string | null;
+  submission_count: number;
+}
+
+/** The create response. Deliberately NOT a CollectionTokenSummary: the POST
+ *  returns `CollectionTokenOut`, which is thinner (no company_id, no counts, no
+ *  revoked_at) and carries the one thing the listing never does — the secret,
+ *  returned exactly once and unreadable afterwards. */
+export interface CollectionTokenCreated {
+  id: string;
+  label: string;
+  daily_cap: number;
+  created_at: string;
+  token: string | null;
+}
+
+/** One building profile submitted from the public collection page. */
+export interface CollectedProfile {
+  id: string;
+  company_id: string;
+  token_id: string;
+  address: string;
+  building_type: string;
+  workload_class: string;
+  note: string | null;
+  opens_at: string | null;
+  closes_at: string | null;
+  break_start: string | null;
+  break_end: string | null;
+  troublesome: boolean;
+  collected_by: string | null;
+  collected_on: string;
+  submitted_at: string;
+  review_status: string;
+}

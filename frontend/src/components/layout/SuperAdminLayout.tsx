@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck, ClipboardList } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
 import MfaNudgeBanner from '../MfaNudgeBanner';
@@ -14,6 +14,10 @@ const NAV = [
   // both existed only as AWS CLI commands in a runbook: unaudited, untested and
   // unavailable to anyone without AWS credentials.
   { to: '/superadmin/staff',     label: 'Staff',      icon: ShieldCheck },
+  // ADR-415 — the public collection page submits into a quarantine table that
+  // had no reader. Super admin, not platform staff: the rows are customer
+  // delivery addresses, and ADR-343 D4 keeps PII off every platform_support path.
+  { to: '/superadmin/collection', label: 'Collected', icon: ClipboardList },
   { to: '/superadmin/account',   label: 'My Account', icon: UserCircle2 },
 ];
 
