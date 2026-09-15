@@ -171,8 +171,13 @@ class TestTheResponseSaysNothingUseful:
         # (the request body), never from a query result.
         assert "duplicate_addresses.append(p.address)" in src, \
             "the echo must come from the request, not from a lookup"
-        assert src.count("duplicate_addresses.append") == 1, \
-            "only one source may populate the echo"
+        # Two appends now, both from the loop variable `p`: one when the unique
+        # constraint rejects a same-day repeat, one when the door is already at
+        # the verification limit (ADR-420). Neither reads another row's address,
+        # which is the property that matters.
+        assert src.count("duplicate_addresses.append(p.address)") == \
+            src.count("duplicate_addresses.append"), \
+            "every echoed address must come from the request body"
 
 
 class TestThePublicPathIsWriteOnly:
@@ -312,11 +317,23 @@ class TestTheDuplicateCheckIsNotAnOracle:
         with pytest.raises(ValidationError):
             CollectionCheckIn(token="k" * 32, address=["a", "b"])
 
-    def test_the_response_is_existence_and_a_date_and_nothing_else(self):
+    def test_the_response_is_existence_a_date_and_a_count_and_nothing_else(self):
         """No id, no building type, no collector — those would make this a read
-        of the record rather than a check for its existence."""
+        of the RECORD rather than a check for its existence.
+
+        `count` and `locked` were added by ADR-420 and are a real widening: the
+        caller learns how many observations a door has, not just that it has
+        one. Accepted because it is still only about an address the caller
+        named and already knows is collected, and because the alternative is
+        worse — without it a collector is turned away from a door that still
+        needs verifying, or walks to one that is closed.
+
+        The set is pinned exactly so the NEXT field has to argue for itself.
+        """
         from app.schemas.collection import CollectionCheckOut
-        assert set(CollectionCheckOut.model_fields) == {"known", "collected_on"}
+        assert set(CollectionCheckOut.model_fields) == {
+            "known", "collected_on", "count", "locked",
+        }
 
     def test_the_check_is_scoped_to_the_callers_own_campaign(self):
         """A token must reveal only what that campaign collected. Without the
@@ -482,3 +499,39 @@ class TestTheBuildingTaxonomy:
         without one shows a blank where the instruction should be."""
         from app.schemas.building_taxonomy import BUILDING_TYPE_PROTOCOL, BUILDING_TYPES
         assert set(BUILDING_TYPES) == set(BUILDING_TYPE_PROTOCOL)
+
+
+class TestTheVerificationLimit:
+    """ADR-420. Two observations verify a door; a third adds cost, not
+    information."""
+
+    def test_the_limit_is_two(self):
+        from app.schemas.collection import VERIFICATION_LIMIT
+        assert VERIFICATION_LIMIT == 2
+
+    def test_the_submit_path_enforces_the_lock_itself(self):
+        """The UI refuses a locked door on blur. That is the explanation; this
+        is the guarantee — /submit is public, so anything holding a token can
+        post a batch the form would never have produced."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.submit_profiles)
+        assert "locked_keys" in src, "submit must check the limit, not trust the client"
+        assert "VERIFICATION_LIMIT" in src
+
+    def test_the_lock_is_counted_in_one_grouped_query(self):
+        """A batch of a hundred profiles must not become a hundred counts."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.submit_profiles)
+        assert ".group_by(" in src and ".in_(keys)" in src, (
+            "the locked-door count must be one grouped query over the batch"
+        )
+
+    def test_the_check_reads_a_bounded_number_of_rows(self):
+        """The answer only distinguishes 0, 1 and at-the-limit, so there is no
+        reason to read an unbounded set to count it."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.check_address)
+        assert "VERIFICATION_LIMIT + 1" in src

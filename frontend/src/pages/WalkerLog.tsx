@@ -35,6 +35,7 @@ import {
 import {
   checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles,
 } from '../utils/collectionSubmit';
+import type { CheckResult } from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
 /** Manual walker/route tracker — a research instrument, not an operational page.
@@ -160,18 +161,39 @@ export default function WalkerLog({ dataset = 'routes' }: {
   /** Collection token, remembered per browser so a collector pastes the link
    *  once. localStorage rather than IndexedDB: it is one short string, and it
    *  is NOT data — losing it costs a paste, not a day's work. */
-  const [collectToken, setCollectToken] = useState(
+  const [collectToken, setCollectTokenState] = useState(
     () => localStorage.getItem('walkerlog.collectToken') ?? '',
   );
+
+  /** Persists on EDIT, not only on a successful send.
+   *
+   *  It used to be written in the two send handlers, so a collector who pasted
+   *  the link and closed the page before sending — the normal shape of a shift,
+   *  where you enter all morning and send at the end — lost it and had to ask
+   *  for it again. The token is not sensitive to this page: anyone who can open
+   *  the page already has it. */
+  const setCollectToken = useCallback((v: string) => {
+    setCollectTokenState(v);
+    try {
+      if (v.trim()) localStorage.setItem('walkerlog.collectToken', v.trim());
+      else localStorage.removeItem('walkerlog.collectToken');
+    } catch {
+      /* private window or storage disabled — the field still works this session */
+    }
+  }, []);
   const [sending, setSending] = useState(false);
   const [sendingDays, setSendingDays] = useState(false);
   /** Door keys the campaign has already received, as reported by the server on
    *  this device's own submissions. Seeded from localStorage so the warning
    *  survives a reload. */
   const [known, setKnown] = useState<Set<string>>(() => knownAddresses());
-  /** Profile id -> the date the campaign already has it, from the server check.
-   *  Absent means "not a duplicate, or not checked". */
-  const [dupes, setDupes] = useState<Map<string, string | null>>(new Map());
+  /** Profile id -> what the campaign said about its address.
+   *
+   *  Absent means the address has not been settled yet, which is what gates the
+   *  rest of the form: a collector types the door, clicks away, and the
+   *  building-type and workload fields open once the campaign has answered
+   *  (ADR-420). A locked door never gets a verdict — the row is cleared. */
+  const [verdicts, setVerdicts] = useState<Map<string, CheckResult>>(new Map());
   /** Profile id currently being checked, so the field can say so. */
   const [checking, setChecking] = useState<string | null>(null);
   /** True when this date was explicitly cleared — suppresses the bundled
@@ -584,16 +606,33 @@ export default function WalkerLog({ dataset = 'routes' }: {
     // `unknown` and entry continues, because a dropped hotspot must not stop
     // data entry. Nothing bad reaches the database either way — the unique
     // constraint still rejects a true duplicate on submit.
-    if (!collectToken.trim()) return;
+    if (!collectToken.trim()) {
+      // No campaign to ask. The rest of the form still opens — a collector
+      // logging locally must not be blocked by a check they cannot make.
+      setVerdicts((m) => new Map(m).set(settled.id, { state: 'unknown' }));
+      return;
+    }
     setChecking(settled.id);
     const verdict = await checkAddress(collectToken, settled.address);
     setChecking((c) => (c === settled.id ? null : c));
-    setDupes((m) => {
-      const next = new Map(m);
-      if (verdict.state === 'known') next.set(settled.id, verdict.collected_on);
-      else next.delete(settled.id);
-      return next;
-    });
+
+    if (verdict.state === 'known' && verdict.locked) {
+      // LOCKED: two observations already. Clear the field and say so — the
+      // collector should move to the next door, not fill in a form whose
+      // submission the server will refuse.
+      setVerdicts((m) => { const n = new Map(m); n.delete(settled.id); return n; });
+      await deleteProfile(settled.id);
+      const blank = emptyProfile(settled.date);
+      setProfiles((ps) => ps.map((x) => (x.id === settled.id ? blank : x)));
+      await putProfile(blank);
+      // Says WHAT, never WHY. "Two collectors have profiled it" told anyone
+      // holding a token exactly how many submissions close a door — the
+      // procedure, not the outcome. The collector only needs to move on.
+      setError(`${settled.address.trim()} is already recorded.`);
+      return;
+    }
+
+    setVerdicts((m) => new Map(m).set(settled.id, verdict));
   }, [profiles, flash, collectToken]);
 
   const removeProfile = useCallback(async (id: string) => {
@@ -635,8 +674,16 @@ export default function WalkerLog({ dataset = 'routes' }: {
     // would reject a same-day duplicate anyway, but it would ACCEPT one from
     // another date — and re-sending a building a coworker already profiled is
     // the waste this whole check exists to stop.
-    const ready = profiles.filter((p) => isUsable(p) && !dupes.has(p.id));
-    const held = profiles.filter((p) => isUsable(p) && dupes.has(p.id)).length;
+    // A door with ONE observation is still worth a second — that is the whole
+    // point of the verification limit — so only a LOCKED door is held back.
+    // The server refuses those anyway; holding them here means the collector
+    // is told before the round trip rather than after.
+    const isLocked = (p: AddressProfile) => {
+      const v = verdicts.get(p.id);
+      return v?.state === 'known' && v.locked;
+    };
+    const ready = profiles.filter((p) => isUsable(p) && !isLocked(p));
+    const held = profiles.filter((p) => isUsable(p) && isLocked(p)).length;
     if (ready.length === 0) {
       setError(
         held > 0
@@ -649,7 +696,6 @@ export default function WalkerLog({ dataset = 'routes' }: {
     setError('');
     try {
       const r = await submitProfiles(collectToken.trim(), ready);
-      localStorage.setItem('walkerlog.collectToken', collectToken.trim());
       // Remember what the server said was already there, so the next person to
       // type one of these addresses is warned BEFORE walking to it.
       if (r.duplicate_addresses.length > 0) {
@@ -667,7 +713,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
     } finally {
       setSending(false);
     }
-  }, [profiles, collectToken, flash, dupes]);
+  }, [profiles, collectToken, flash, verdicts]);
 
   // ── Build-first routes ─────────────────────────────────────────────────
   // The truck is usually there before the walkers, so a route gets built and
@@ -755,7 +801,6 @@ export default function WalkerLog({ dataset = 'routes' }: {
     setError('');
     try {
       const r = await submitDays(collectToken.trim(), worth);
-      localStorage.setItem('walkerlog.collectToken', collectToken.trim());
       flash(
         `Sent ${r.accepted} day${r.accepted === 1 ? '' : 's'}`
         + (r.replaced ? `, updated ${r.replaced}` : '')
@@ -1051,7 +1096,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
                   onAddressCommitted={(next) => void rekeyProfile(next)}
                   onDelete={() => void removeProfile(p.id)}
                   known={known}
-                  serverDuplicate={dupes.has(p.id) ? (dupes.get(p.id) ?? '') : null}
+                  verdict={verdicts.get(p.id) ?? null}
                   checking={checking === p.id}
                 />
               ))}

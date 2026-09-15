@@ -156,8 +156,18 @@ class CollectionCheckIn(BaseModel):
     address: str = Field(..., min_length=3, max_length=200)
 
 
+VERIFICATION_LIMIT = 2
+"""How many independent observations a door may collect before it is closed.
+
+Two, because the point is VERIFICATION: a second collector either confirms the
+first or disagrees with them, and both outcomes are informative. A third adds
+cost (someone walks to a door that is already answered twice) without adding
+information, so the door locks.
+"""
+
+
 class CollectionCheckOut(BaseModel):
-    """One bit, and the date if it is set.
+    """A count, a date, and whether the door is closed.
 
     `collected_on` is included because "already done" is far more convincing
     with a date on it, and it reveals nothing the bit did not: the caller
@@ -169,6 +179,17 @@ class CollectionCheckOut(BaseModel):
     """
     known:        bool
     collected_on: Optional[date] = None
+
+    # ADR-420. How many observations this campaign already has for the door,
+    # and whether that has reached the limit.
+    #
+    # A COUNT, not just a bit, is a wider disclosure than the original check —
+    # but only by "how many times", about an address the caller already named
+    # and already knows is collected. It buys the thing the bit could not: a
+    # collector can be told "one more needed" instead of being turned away from
+    # a door that still wants verifying.
+    count:  int  = 0
+    locked: bool = False
 
 
 class CollectionTokenCreate(BaseModel):
