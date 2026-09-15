@@ -42,7 +42,16 @@ export default function AddressProfileForm({
   const workLabel = WORKLOAD_CLASSES.find((w) => w.value === profile.workload_class)?.label;
 
   return (
-    <div className="card overflow-hidden">
+    /* NO overflow-hidden. It clipped every dropdown inside the form: a
+       building-type list opened and was cut off mid-option by the card's
+       edge, and Workload showed one row of four. `overflow` creates a
+       clipping box that no z-index escapes, so the popup cannot simply be
+       raised above it.
+
+       It was only ever protecting the rounded corners of the collapsed
+       header, and nothing here scrolls — the inner content is padded well
+       inside the radius, so the corners stay clean without it. */
+    <div className="card">
       <div className="flex items-center gap-2 p-3">
         <button type="button" onClick={() => setOpen((o) => !o)} className="shrink-0 rounded-md p-1 hover:bg-muted">
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
