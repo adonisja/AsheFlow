@@ -1313,16 +1313,25 @@ export interface NextStopSuggestion {
 // Building Profiles
 // ---------------------------------------------------------------------------
 
+/** ADR-422. Mirrors `BUILDING_TYPES` in building_taxonomy.py.
+ *
+ *  The nine `biz_`-prefixed values this used to list were replaced by ADR-418;
+ *  six of them the server now rejects. `unknown` is the sentinel
+ *  address_inventory.py writes for a building nobody has visited — it is a
+ *  valid stored value, so it belongs in the type. */
 export type BuildingType =
-  | 'receptionist'
   | 'walkup'
   | 'elevator'
-  | 'biz_freight'
-  | 'biz_security'
-  | 'biz_loading_dock'
+  | 'doorman_reception'
   | 'mailroom'
-  | 'doorman'
-  | 'biz_front';
+  | 'lockers'
+  | 'public_housing'
+  | 'storefront_reception'
+  | 'storefront_front_door'
+  | 'freight'
+  | 'loading_dock'
+  | 'loading_dock_mailroom'
+  | 'unknown';
 
 export interface BuildingProfileCreate {
   normalised_address: string;
