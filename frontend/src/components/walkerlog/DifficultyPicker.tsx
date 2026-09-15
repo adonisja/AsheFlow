@@ -18,11 +18,20 @@ import { DIFFICULTIES } from '../../utils/walkerLogDb';
  *  explicit × rather than a fifth step on the scale.
  */
 
+/** The scale's colour comes entirely from the token layer.
+ *
+ *  `dot` was a hex literal rendered through an inline style, which is the exact
+ *  shape the contrast gate cannot see: a literal does not follow a palette
+ *  change and never reaches the checker. The severity here is semantic
+ *  (easy/moderate/hard/brutal maps onto success/warning/danger), so there was
+ *  no reason for it to be a literal — the sibling `on` classes were already
+ *  tokens. Escalation within warning is carried by opacity, not by a second
+ *  hand-picked yellow. */
 const SCALE: Record<string, { label: string; dot: string; on: string }> = {
-  easy:     { label: 'Easy',     dot: '#15803d', on: 'bg-success/15 border-success/50 text-success' },
-  moderate: { label: 'Moderate', dot: '#ca8a04', on: 'bg-warning/15 border-warning/50 text-warning' },
-  hard:     { label: 'Hard',     dot: '#ea580c', on: 'bg-warning/20 border-warning/60 text-warning' },
-  brutal:   { label: 'Brutal',   dot: '#dc2626', on: 'bg-danger/15 border-danger/50 text-danger' },
+  easy:     { label: 'Easy',     dot: 'bg-success',      on: 'bg-success/15 border-success/50 text-success' },
+  moderate: { label: 'Moderate', dot: 'bg-warning/70',   on: 'bg-warning/15 border-warning/50 text-warning' },
+  hard:     { label: 'Hard',     dot: 'bg-warning',      on: 'bg-warning/20 border-warning/60 text-warning' },
+  brutal:   { label: 'Brutal',   dot: 'bg-danger',       on: 'bg-danger/15 border-danger/50 text-danger' },
 };
 
 export default function DifficultyPicker({ value, onChange }: {
@@ -64,8 +73,7 @@ export default function DifficultyPicker({ value, onChange }: {
             >
               <span
                 aria-hidden
-                className={`inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle ${on ? '' : 'opacity-30'}`}
-                style={{ background: spec.dot }}
+                className={`inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle ${spec.dot} ${on ? '' : 'opacity-30'}`}
               />
               <span className="align-middle truncate">{spec.label}</span>
             </button>
