@@ -18,6 +18,34 @@ logger = logging.getLogger(__name__)
 # It also adds the "Authorize" padlock button to our /docs Swagger UI automatically!
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# ADR-423. A scheme that does NOT 401 when the header is absent.
+#
+# `oauth2_scheme` above raises 401 on a missing Authorization header, which is
+# right for every authenticated endpoint and wrong for the public collection
+# paths: those must serve an anonymous caller on an OPEN campaign and only
+# demand a login on a COMPANY one. Two schemes, because the difference is
+# whether "no credentials" is an error or an answer.
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+
+
+def get_current_user_optional(
+    token: str | None = Depends(oauth2_scheme_optional),
+) -> dict | None:
+    """The caller's claims, or None when there are none.
+
+    Returns None for a missing OR invalid token rather than raising. An
+    endpoint that accepts anonymous callers cannot distinguish "no token" from
+    "bad token" in any way that helps the caller — both mean "not
+    authenticated" — and raising would defeat the point of the optional path.
+    """
+    if not token:
+        return None
+    try:
+        return get_current_user(token)
+    except HTTPException:
+        return None
+
+
 def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     """FastAPI dependency that verifies the JWT and returns the authenticated user's claims.
 
@@ -291,6 +319,29 @@ def _send_discord_invite(employee) -> None:
             log.error("Discord invite email failed for %s: %s", employee.email, e)
 
     threading.Thread(target=_fire, daemon=True).start()
+
+
+def get_caller_employee_anonymous(
+    current_user: dict | None = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """The caller's Employee row, or None — including when unauthenticated.
+
+    `get_caller_employee_optional` is optional about the EMPLOYEE ROW, not about
+    authentication: it depends on `get_current_user`, which 401s on a missing
+    header. Using it on a public endpoint turned every collection path into an
+    authenticated one — /check began answering "Not authenticated" to the very
+    collectors it exists for (ADR-423).
+
+    This one is optional about both.
+    """
+    if current_user is None:
+        return None
+    employee, sub = _resolve_employee_from_cognito(current_user, db)
+    if employee and sub and not employee.cognito_sub:
+        employee.cognito_sub = sub
+        db.commit()
+    return employee
 
 
 def get_caller_employee_optional(
