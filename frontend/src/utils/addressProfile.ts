@@ -386,6 +386,54 @@ export function canonicalAddress(address: string): string {
  *  stored, exported and shown on a leaderboard, and none of those want a
  *  coworker's real name.
  */
+/** Workload tags as a reader's sentence (ADR-429).
+ *
+ *  `["bulk_drop","high_rise"]` -> "Bulk drop, High-rise". The collector picked
+ *  those from labelled checkboxes; showing them the stored enum back is
+ *  leaking the wire format into a reading surface.
+ *
+ *  An unknown tag falls through to itself rather than disappearing — a value
+ *  the UI does not recognise is exactly what a reader needs to see.
+ */
+export function workloadLabels(tags: string[] | undefined): string {
+  if (!tags || tags.length === 0) return '';
+  return tags
+    .map((t) => (t === OTHER
+      ? 'Other'
+      : WORKLOAD_TAGS.find((w) => w.value === t)?.label ?? t))
+    .join(', ');
+}
+
+/** "09:00:00" -> "9:00 AM". Returns '' for an absent or unparseable time.
+ *
+ *  The seconds are noise: nobody records a door opening at 9:00:07, and the
+ *  stored precision is an artifact of the column type rather than something
+ *  observed. */
+export function formatTime(value: string | null | undefined): string {
+  if (!value) return '';
+  const m = /^(\d{1,2}):(\d{2})/.exec(value);
+  if (!m) return value;
+  const h = Number(m[1]);
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${m[2]} ${suffix}`;
+}
+
+/** An open–close pair as one string, or '' when there are no hours. */
+export function formatHours(
+  opens: string | null | undefined,
+  closes: string | null | undefined,
+): string {
+  const a = formatTime(opens);
+  const b = formatTime(closes);
+  if (!a && !b) return '';
+  // One-sided hours are real: a collector may know a door opens at 9 and not
+  // when it shuts. Saying so beats inventing a "?" that looks like corruption.
+  if (a && !b) return `from ${a}`;
+  if (!a && b) return `until ${b}`;
+  return `${a} – ${b}`;
+}
+
 const HANDLE_KEY = 'walkerlog.collectorHandle';
 
 export function collectorHandle(): string {

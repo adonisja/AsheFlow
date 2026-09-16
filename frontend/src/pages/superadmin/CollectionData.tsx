@@ -1,13 +1,16 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Download,
+  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { errorText } from '../../utils/errorText';
+import {
+  buildingTypeLabel, formatHours, workloadLabels,
+} from '../../utils/addressProfile';
 import type {
   CollectedProfile, CollectedWalkerDay, CollectedWalkerDayDetail,
   CollectionTokenCreated, CollectionTokenSummary,
@@ -41,6 +44,15 @@ const fmt = (iso: string | null): string => {
  *  notes carry everything. */
 const q = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
+/** ADR-429: the EXPORT keeps stored values, deliberately.
+ *
+ *  The table humanises `loading_dock_mailroom` to "Loading dock: mailroom"
+ *  because a person reads it. A CSV is read by a loader, and these column names
+ *  already match `BuildingProfile` so a later import maps straight across —
+ *  translating them would mean translating them back.
+ *
+ *  Display formats for people, wire formats for machines, and the same file
+ *  cannot be both. */
 const CSV_COLUMNS = [
   'normalised_address', 'building_category', 'building_type',
   'has_security_desk', 'workloads', 'workload_other', 'workload_class',
@@ -595,7 +607,12 @@ export default function CollectionData({ platform = true }: {
                       disabled={downloading}
                       className="btn-secondary text-sm inline-flex items-center gap-1.5 disabled:opacity-50"
                     >
-                      <Download className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
+                      {/* Upload, not Download. lucide's Download arrow points
+                          INTO a tray (receiving) and Upload points OUT of it
+                          (sending) — so an EXPORT takes Upload. The walker log
+                          fixed this same inversion; this page reintroduced it.
+                          One convention, both pages. */}
+                      <Upload className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
                       {fmt === 'xlsx' ? 'Excel' : fmt.toUpperCase()}
                     </button>
                   ))}
@@ -660,7 +677,13 @@ export default function CollectionData({ platform = true }: {
                                       Route {r.route_id}
                                       <span className="ml-2 font-normal text-muted-foreground">
                                         {r.route_start || '—'}–{r.route_end || '—'}
-                                        {r.difficulty && ` · ${r.difficulty}`}
+                                        {/* Route times are stored HH:MM, so
+                                            they need no reformatting — only
+                                            the difficulty reads as a raw
+                                            value. */}
+                                        {r.difficulty && (
+                                          <> · {r.difficulty[0].toUpperCase() + r.difficulty.slice(1)}</>
+                                        )}
                                       </span>
                                     </p>
                                     {r.notes && (
@@ -719,10 +742,37 @@ export default function CollectionData({ platform = true }: {
                   </tr>
                 </thead>
                 <tbody>
-                  {profiles.map((p) => (
+                  {/* ADR-430. Rows that describe ONE door, marked.
+                      
+                      Two observations close a door to new collectors
+                      (ADR-420), and the flat table gave the reader no way to
+                      tell — a verified door and a door still wanting a second
+                      look were identical rows. The count is computed from
+                      door_key rather than fetched: the listing already carries
+                      every row it is counting. */}
+                  {profiles.map((p) => {
+                    // Server-computed (ADR-430). Counting matching door_keys in
+                    // `profiles` would be wrong the moment a campaign exceeds
+                    // one page: a pair split across the boundary would read as
+                    // two single observations, and the count would be right
+                    // only for small campaigns.
+                    const closed = p.closed;
+                    return (
                     <tr key={p.id} className="border-b border-border/50 align-top">
                       <td className="py-2 pr-3">
-                        <span className="block">{p.address}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span>{p.address}</span>
+                          {/* A lock, not a colour: "closed" is a state of the
+                              door, not a warning about the row, and colouring
+                              the whole line would compete with `troublesome`
+                              which genuinely is a warning. */}
+                          {closed && (
+                            <Lock
+                              className="h-3 w-3 shrink-0 text-muted-foreground"
+                              aria-label="Closed to new observations"
+                            />
+                          )}
+                        </span>
                         {p.note && (
                           <span className="block text-[11px] text-muted-foreground">{p.note}</span>
                         )}
@@ -732,10 +782,46 @@ export default function CollectionData({ platform = true }: {
                           </span>
                         )}
                       </td>
-                      <td className="py-2 pr-3 whitespace-nowrap">{p.building_type}</td>
-                      <td className="py-2 pr-3 whitespace-nowrap">{p.workload_class}</td>
+                      {/* ADR-429. LABELS, not stored values. The collector
+                          chose "Loading dock: mailroom" from a list; showing
+                          the admin `loading_dock_mailroom` back is the wire
+                          format leaking into a reading surface.
+                          buildingTypeLabel has existed since ADR-422 and this
+                          page never called it. */}
+                      <td className="py-2 pr-3">
+                        <span className="block whitespace-nowrap">
+                          {buildingTypeLabel(p.building_type)}
+                        </span>
+                        {/* The flag was collected and never displayed. It
+                            changes what a walker must carry, which makes it
+                            one of the more consequential things on the row. */}
+                        {p.has_security_desk && (
+                          <span className="mt-0.5 inline-block rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            security desk
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3">
+                        {/* The collected SET, not workload_class — that column
+                            is a single derived default (ADR-418), so showing it
+                            here hid the second and third things the collector
+                            actually ticked. */}
+                        <span className="block">
+                          {workloadLabels(p.workloads) || '—'}
+                        </span>
+                        {p.workload_other && (
+                          <span className="block text-[11px] text-muted-foreground">
+                            {p.workload_other}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
-                        {p.opens_at ? `${p.opens_at}–${p.closes_at ?? '?'}` : '—'}
+                        {formatHours(p.opens_at, p.closes_at) || '—'}
+                        {(p.break_start || p.break_end) && (
+                          <span className="block text-[11px]">
+                            closed {formatHours(p.break_start, p.break_end)}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
                         {p.collected_by ?? '—'}
@@ -743,9 +829,18 @@ export default function CollectionData({ platform = true }: {
                       <td className="py-2 whitespace-nowrap text-muted-foreground">
                         {p.collected_on}
                         <span className="block text-[11px]">{fmt(p.submitted_at)}</span>
+                        {/* Which of the door's observations this row is. Says
+                            "1 of 2" rather than just "closed", so a reader can
+                            see the pair rather than two unrelated rows. */}
+                        <span className="mt-0.5 block text-[10px]">
+                          {closed
+                            ? `closed · ${p.observations} observations`
+                            : 'open · 1 more wanted'}
+                        </span>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
