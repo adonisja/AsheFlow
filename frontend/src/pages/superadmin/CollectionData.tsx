@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock, Trash2,
@@ -23,12 +23,28 @@ import type {
   CollectionTokenCreated, CollectionTokenSummary,
 } from '../../api/types';
 
-/** A filter chip that opens a native <select> (ADR-432 D3).
+/** A filter chip with the house dropdown (ADR-433).
  *
- *  A real <select> rather than a custom popover: it is keyboard- and
- *  screen-reader-correct for free, and on a phone it opens the platform
- *  picker, which beats any menu that could be built here. The chip styling is
- *  the select itself, so the control and its affordance cannot drift apart.
+ *  WAS A NATIVE <select> styled as a chip, which failed on both counts the
+ *  screenshot showed:
+ *
+ *   - The popup is drawn by the OS, so it ignored the app's border radius,
+ *     card colour and shadow entirely, and looked nothing like the truck
+ *     picker or the employee picker two pages away.
+ *   - `Type any` ran together as one string, because a native select cannot be
+ *     given a gap between the label and its own value — the label was a
+ *     sibling <span> and the select's text started wherever the OS put it.
+ *
+ *  So this mirrors `ui/SelectMenu`: a bordered trigger and an overlaid panel,
+ *  same border/card/shadow tokens, same outside-click and Escape handling,
+ *  same role="listbox" / role="option" / aria-selected contract. SelectMenu
+ *  itself is a full-width form control with a label above it; a filter chip is
+ *  inline, compact and carries its own label, so this is the same language at
+ *  a different size rather than a second opinion about how a dropdown looks.
+ *
+ *  The label and the value are now separated deliberately: the label is muted
+ *  and the value is foreground-coloured, with real spacing between them, so
+ *  "Type" reads as the field and "any" as its current setting.
  */
 function ChipSelect({ label, value, options, onChange }: {
   label: string;
@@ -36,25 +52,89 @@ function ChipSelect({ label, value, options, onChange }: {
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const active = value !== '';
+  const current = options.find((o) => o.value === value);
+
+  // Same dismissal contract as SelectMenu. A panel that overlays other
+  // controls and cannot be dismissed by clicking away is worse than the
+  // native select it replaced, not better.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const choose = (v: string) => { onChange(v); setOpen(false); };
+
   return (
-    <label className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 transition-colors ${
-      active ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
-    }`}>
-      <span className={active ? 'font-medium' : ''}>{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        // Transparent, sized to content: the chip IS the control, so the
-        // select must not paint its own box on top of it.
-        className="cursor-pointer bg-transparent pr-0.5 text-inherit focus:outline-none focus:ring-2 focus:ring-primary/40 rounded"
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Filter by ${label.toLowerCase()}`}
+        onClick={() => setOpen((o) => !o)}
+        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs shadow-sm transition-colors ${
+          active
+            ? 'border-primary bg-primary/10 text-primary'
+            : 'border-input bg-background hover:border-primary'
+        } focus:outline-none focus:ring-1 focus:ring-primary`}
       >
-        <option value="">any</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
-    </label>
+        {/* Label and value are separate elements with a gap and different
+            weights — the fix for "Type any" reading as one word. */}
+        <span className={active ? 'text-primary/70' : 'text-muted-foreground'}>{label}</span>
+        <span className={`font-medium ${active ? '' : 'text-foreground'}`}>
+          {current ? current.label : 'any'}
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className={`h-3 w-3 shrink-0 transition-transform ${open ? 'rotate-180' : ''} ${
+            active ? 'text-primary/70' : 'text-muted-foreground'
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label={label}
+          className="absolute z-20 mt-1 min-w-full max-h-72 overflow-auto rounded-lg border border-border bg-card shadow-lg"
+        >
+          {/* "any" is an option in the list rather than a separate clear
+              control: it is what the filter is SET TO when unset, so it
+              belongs where the other values are. The bar's Clear button
+              resets every chip at once, which is a different action. */}
+          {[{ value: '', label: 'any' }, ...options].map((o) => (
+            <button
+              key={o.value || '__any'}
+              type="button"
+              role="option"
+              aria-selected={o.value === value}
+              onClick={() => choose(o.value)}
+              className={`flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-xs hover:bg-accent/40 ${
+                o.value === value ? 'bg-accent/60' : ''
+              }`}
+            >
+              <Check
+                aria-hidden="true"
+                className={`h-3 w-3 shrink-0 ${o.value === value ? '' : 'invisible'}`}
+              />
+              <span className="truncate">{o.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -458,6 +538,25 @@ export default function CollectionData({ platform = true }: {
 
   const doors = useMemo(() => (grouped ? groupByDoor(visible) : []), [grouped, visible]);
 
+  /** Campaign progress (ADR-433). "1 address collected" is a COUNT, not
+   *  progress — it cannot tell you whether a 30-day survey is on track.
+   *
+   *  Derived from every fetched row, not from `visible`: progress is a property
+   *  of the campaign, and a filtered view must not make it look like the
+   *  campaign shrank. That is the same trap as the headline count, in the
+   *  opposite direction — there the number must follow the filter, here it must
+   *  ignore it, because one describes the table and the other the survey.
+   */
+  const progress = useMemo(() => {
+    const all = groupByDoor(profiles);
+    return {
+      doors: all.length,
+      verified: all.filter((d) => d.state !== 'single').length,
+      conflicts: all.filter((d) => d.state === 'differs').length,
+      collectors: new Set(profiles.map((p) => p.collected_by).filter(Boolean)).size,
+    };
+  }, [profiles]);
+
   /** Options come from the DATA, not from the taxonomy: a type nobody has
    *  collected is a filter that can only return nothing, and listing all
    *  fifteen makes the two that matter harder to find. */
@@ -749,6 +848,33 @@ export default function CollectionData({ platform = true }: {
                     : `${profiles.length} address${profiles.length === 1 ? '' : 'es'} collected`
                   : `${days.length} walker day${days.length === 1 ? '' : 's'} collected`}
               </p>
+              {/* ADR-433. What the campaign has actually LEARNED, which a raw
+                  submission count cannot say: how many doors are verified
+                  rather than seen once, and whether any need a third look.
+                  Verified is the number that matters — ADR-420 treats a door as
+                  known only at two observations. */}
+              {dataset === 'addresses' && profiles.length > 0 && (
+                <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                  <span>
+                    <span className="font-medium text-foreground">
+                      {progress.verified}
+                    </span>
+                    {' of '}
+                    <span className="font-medium text-foreground">{progress.doors}</span>
+                    {' doors verified'}
+                  </span>
+                  {progress.conflicts > 0 && (
+                    <span className="inline-flex items-center gap-1 text-warning">
+                      <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                      {progress.conflicts} door{progress.conflicts === 1 ? '' : 's'}
+                      {progress.conflicts === 1 ? ' needs' : ' need'} a third look
+                    </span>
+                  )}
+                  <span>
+                    {progress.collectors} collector{progress.collectors === 1 ? '' : 's'}
+                  </span>
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {/* Two datasets, two views. Addresses describe a door and days
@@ -896,9 +1022,22 @@ export default function CollectionData({ platform = true }: {
               </div>
             )
           ) : profiles.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing submitted yet.
-            </p>
+            /* ADR-433. "Nothing submitted yet" states a fact and leaves the
+               reader to work out whether that is normal. The two reasons a
+               campaign is empty need different answers, so they are told
+               apart: there is no campaign to submit to, or there is one and
+               nobody has used the link.
+
+               Deliberately not an illustration or a big empty-state block —
+               this is a panel inside a working page, not a first-run screen. */
+            <div className="space-y-1.5 py-2">
+              <p className="text-sm font-medium">Nothing submitted yet.</p>
+              <p className="text-xs text-muted-foreground">
+                {tokens.length === 0
+                  ? 'Create a campaign on the left, then share its link with collectors. Submissions appear here as they arrive.'
+                  : 'The campaign is live. Copy its link from the list on the left and send it to collectors. The first submission shows up here.'}
+              </p>
+            </div>
           ) : (
           <>
             {/* ADR-432. Filters above the table, active ones visibly pressed
@@ -930,7 +1069,7 @@ export default function CollectionData({ platform = true }: {
                 <button
                   type="button"
                   onClick={() => setFilters(NO_FILTERS)}
-                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-input bg-background px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:border-primary hover:text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 >
                   <X className="h-3 w-3" aria-hidden="true" /> Clear filters
                 </button>
@@ -943,10 +1082,10 @@ export default function CollectionData({ platform = true }: {
                 type="button"
                 onClick={() => { setGrouped((g) => !g); setOpenDoor(null); }}
                 aria-pressed={grouped}
-                className={`ml-auto inline-flex items-center gap-1 rounded-full border px-2 py-1 transition-colors ${
+                className={`ml-auto inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-primary ${
                   grouped
                     ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border text-muted-foreground hover:text-foreground'
+                    : 'border-input bg-background text-muted-foreground hover:border-primary hover:text-foreground'
                 }`}
               >
                 <Rows3 className="h-3 w-3" aria-hidden="true" />
