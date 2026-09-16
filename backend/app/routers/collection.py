@@ -844,6 +844,69 @@ def get_collected_day(
     return CollectedWalkerDayDetail.model_validate(row)
 
 
+@router.delete("/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+def delete_collected_profile(
+    request: Request,
+    profile_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
+):
+    """Remove one collected observation. ADR-431.
+
+    DELETE AND NOT EDIT, deliberately. This table records what collectors
+    actually submitted, which is the only reason a conclusion drawn from it is
+    worth anything. An admin edit would make a row a claim about two people
+    while still reading as one, and an observation retyped by someone who was
+    not at the door is indistinguishable afterwards from one that was. Removing
+    a row asserts nothing on the collector's behalf, so it carries no such
+    ambiguity. A wrong VALUE is fixed by the collector resubmitting (ADR-426).
+
+    HARD delete, not a `deleted_at` flag. ADR-415 calls this table a quarantine
+    holding customer delivery addresses that are meant to be stripped later; a
+    soft-deleted address is still in the table, still in backups, and one
+    forgotten WHERE clause from an export.
+
+    The audit detail therefore carries the WHOLE row rather than just its id.
+    This is the only surviving record of the observation, and an audit entry
+    reading "profile 8f3a deleted" answers nothing later.
+    """
+    row = (
+        _scope_reads(db.query(CollectedAddressProfile), CollectedAddressProfile,
+                     current_user, caller)
+        .filter(CollectedAddressProfile.id == profile_id)
+        .first()
+    )
+    # 404 whether it never existed or belongs to another tenant: _scope_reads
+    # has already narrowed the query, so a wrong-tenant id is simply not found.
+    # Distinguishing the two would confirm the row exists.
+    if row is None:
+        raise HTTPException(status_code=404, detail="Collected address not found.")
+
+    write_audit(
+        db,
+        action_type="collection.profile.delete",
+        target_table="collected_address_profiles",
+        target_id=str(row.id),
+        actor_id=str(caller.id) if caller else None,
+        company_id=str(row.company_id) if row.company_id else None,
+        detail={
+            "address": row.address,
+            "building_type": row.building_type,
+            "workloads": list(row.workloads or []),
+            "collected_by": row.collected_by,
+            "collected_on": row.collected_on.isoformat() if row.collected_on else None,
+            "token_id": str(row.token_id),
+        },
+    )
+    # Audit BEFORE the delete: write_audit reads the row's own fields, and
+    # they are gone after db.delete() flushes.
+    db.delete(row)
+    db.commit()
+    return None
+
+
 @router.get("/profiles", status_code=status.HTTP_200_OK)
 @limiter.limit("60/minute")
 def list_collected_profiles(

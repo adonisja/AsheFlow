@@ -829,3 +829,69 @@ class TestTheCampaignRanking:
         from app.routers import collection as C
         src = inspect.getsource(C.campaign_leaderboard)
         assert "isnot(None)" in src and '!= ""' in src
+
+
+class TestADR431DeleteNotEdit:
+    """A collected row can be removed but not rewritten (ADR-431)."""
+
+    def test_delete_is_scoped_like_every_other_read(self):
+        """The delete goes through _scope_reads, so a company admin cannot
+        delete another tenant's row and cannot touch an open campaign's.
+
+        The GET test above checks only GET. A DELETE on this router reads the
+        row before destroying it and echoes it into an audit detail, so it is
+        exactly as much a cross-tenant surface as a read is — and it was not
+        covered.
+        """
+        import inspect
+        from app.routers.collection import router
+
+        destructive = [
+            r for r in router.routes
+            if {"DELETE", "PATCH", "PUT"} & getattr(r, "methods", set())
+        ]
+        assert destructive, "expected at least the ADR-431 delete"
+        for r in destructive:
+            src = inspect.getsource(r.endpoint)
+            assert "_scope_reads(" in src, (
+                f"{r.path} mutates or destroys a collected row without going "
+                f"through _scope_reads — a company admin could reach another "
+                f"tenant's data"
+            )
+
+    def test_there_is_no_edit_path_for_a_collected_profile(self):
+        """ADR-431 D1 is a decision that this endpoint does NOT exist.
+
+        Pinned as a test because 'add the matching PATCH' is the natural next
+        commit for anyone who sees a DELETE and no update, and the reason not to
+        is a property of the dataset rather than anything visible in the router.
+        """
+        from app.routers.collection import router
+
+        for r in router.routes:
+            methods = getattr(r, "methods", set())
+            if {"PATCH", "PUT"} & methods and "profiles" in r.path:
+                raise AssertionError(
+                    f"{r.path} edits a collected profile. ADR-431 D1: this "
+                    f"table records what collectors actually submitted; a "
+                    f"correction is the collector resubmitting (ADR-426), not "
+                    f"an admin retyping."
+                )
+
+    def test_the_audit_detail_carries_the_row_not_just_its_id(self):
+        """ADR-431 D2/D3. The delete is hard, so the audit entry is the only
+        surviving record of the observation."""
+        import inspect
+        from app.routers.collection import delete_collected_profile
+
+        src = inspect.getsource(delete_collected_profile)
+        for field in ("address", "building_type", "workloads", "collected_by"):
+            assert f'"{field}"' in src, (
+                f"the delete audit detail omits {field!r}; a hard delete whose "
+                f"audit says only 'row deleted' loses the observation entirely"
+            )
+        # The audit must be written while the row still exists.
+        assert src.index("write_audit") < src.index("db.delete("), (
+            "write_audit must run BEFORE db.delete() — it reads the row's own "
+            "fields and they are gone once the delete flushes"
+        )
