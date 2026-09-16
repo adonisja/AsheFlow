@@ -769,6 +769,18 @@ export async function markSubmitted(profiles: AddressProfile[]): Promise<void> {
   }
 }
 
+/** Forgets submitted rows the server no longer has (ADR-434).
+ *
+ *  Only touches the SUBMITTED store. A row the collector has since reopened
+ *  onto the working board is a card they are actively editing, and deleting
+ *  that under them would be worse than the stale entry this fixes.
+ */
+export async function forgetSubmitted(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await tx('readwrite', (s) => s.delete(id), SUBMITTED);
+  }
+}
+
 /** Puts a submitted profile back on the working board so it can be corrected.
  *  It stays in the submitted store: re-sending upserts server-side, and the
  *  record of what was sent is not something an edit should erase. */
