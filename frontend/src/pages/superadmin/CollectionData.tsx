@@ -2,12 +2,18 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock, Trash2,
+  ChevronDown, ChevronRight, ChevronUp, X, Rows3, AlertTriangle,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import {
+  groupByDoor, compareProfiles, filterProfiles,
+  NO_FILTERS, hasActiveFilters,
+  type SortKey, type SortDir, type Filters,
+} from '../../utils/collectedTable';
 import { errorText } from '../../utils/errorText';
 import {
   buildingTypeLabel, formatHours, workloadLabels,
@@ -16,6 +22,83 @@ import type {
   CollectedProfile, CollectedWalkerDay, CollectedWalkerDayDetail,
   CollectionTokenCreated, CollectionTokenSummary,
 } from '../../api/types';
+
+/** A filter chip that opens a native <select> (ADR-432 D3).
+ *
+ *  A real <select> rather than a custom popover: it is keyboard- and
+ *  screen-reader-correct for free, and on a phone it opens the platform
+ *  picker, which beats any menu that could be built here. The chip styling is
+ *  the select itself, so the control and its affordance cannot drift apart.
+ */
+function ChipSelect({ label, value, options, onChange }: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+}) {
+  const active = value !== '';
+  return (
+    <label className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 transition-colors ${
+      active ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
+    }`}>
+      <span className={active ? 'font-medium' : ''}>{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        // Transparent, sized to content: the chip IS the control, so the
+        // select must not paint its own box on top of it.
+        className="cursor-pointer bg-transparent pr-0.5 text-inherit focus:outline-none focus:ring-2 focus:ring-primary/40 rounded"
+      >
+        <option value="">any</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** One sortable column header (ADR-432 D3).
+ *
+ *  Exists as a component so the ARIA contract is written ONCE. Four inline
+ *  copies would be four chances to put aria-sort on the button instead of the
+ *  th, or to leave it set on two columns at once — both of which are silent
+ *  failures that only a screen reader reveals.
+ */
+function SortableTh({ label, col, sortKey, sortDir, onSort }: {
+  label: string;
+  col: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (k: SortKey) => void;
+}) {
+  const active = sortKey === col;
+  return (
+    <th
+      className="py-2 pr-3 font-semibold"
+      // Only the ACTIVE column may carry this. Undefined removes the attribute
+      // entirely rather than rendering aria-sort="none" on every other column.
+      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 rounded"
+      >
+        {label}
+        {/* aria-hidden: the direction is already announced via aria-sort, and
+            a chevron inside the button would otherwise be read as part of its
+            name. An inactive column keeps a dimmed chevron so the control
+            reads as sortable before it is used. */}
+        <span aria-hidden="true" className={active ? '' : 'opacity-30'}>
+          {active && sortDir === 'asc'
+            ? <ChevronUp className="h-3 w-3" />
+            : <ChevronDown className="h-3 w-3" />}
+        </span>
+      </button>
+    </th>
+  );
+}
 
 /**
  * What came back from the public collection page (ADR-415 D6).
@@ -322,6 +405,14 @@ export default function CollectionData({ platform = true }: {
    *  Holding the ROW rather than an id so the dialog can name the address.
    *  That is the whole safety mechanism here: the realistic mistake is
    *  deleting the wrong row, and only the address catches it. */
+  // ADR-432. View state for the address table: how it is ordered, what is
+  // hidden, and whether rows are collapsed into doors.
+  const [sortKey, setSortKey] = useState<SortKey>('collected_on');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [grouped, setGrouped] = useState(false);
+  const [openDoor, setOpenDoor] = useState<string | null>(null);
+
   const [toDelete, setToDelete] = useState<CollectedProfile | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -348,6 +439,49 @@ export default function CollectionData({ platform = true }: {
       setDeleting(false);
     }
   };
+
+  /** ADR-432 D4. The listing asks for 1000 rows; if it came back full, there
+   *  are probably more, and every aggregate below is computed over a SUBSET.
+   *  Said out loud rather than hidden — this is the exact shape of the bug
+   *  ADR-430 shipped, where a client-side count was right only until a door's
+   *  observations straddled a page boundary. */
+  const atFetchLimit = profiles.length >= 1000;
+
+  /** Filter first, then sort. The other order costs a sort of rows that are
+   *  about to be discarded, and for the `differs` filter it would be wrong as
+   *  well as wasteful: that filter is resolved against the door grouping, which
+   *  sorting does not affect but re-deriving would recompute. */
+  const visible = useMemo(() => {
+    const kept = filterProfiles(profiles, filters);
+    return [...kept].sort((a, b) => compareProfiles(a, b, sortKey, sortDir));
+  }, [profiles, filters, sortKey, sortDir]);
+
+  const doors = useMemo(() => (grouped ? groupByDoor(visible) : []), [grouped, visible]);
+
+  /** Options come from the DATA, not from the taxonomy: a type nobody has
+   *  collected is a filter that can only return nothing, and listing all
+   *  fifteen makes the two that matter harder to find. */
+  const typeOptions = useMemo(
+    () => [...new Set(profiles.map((p) => p.building_type))].sort(),
+    [profiles],
+  );
+  const workloadOptions = useMemo(
+    () => [...new Set(profiles.flatMap((p) => p.workloads ?? []))].sort(),
+    [profiles],
+  );
+
+  /** Moving the sort. First click on a new column sorts it ascending; clicking
+   *  the active column flips it. Resetting to ascending on a NEW column matters
+   *  — carrying the previous column's direction over makes the first click on
+   *  a column land on an order the reader did not ask for. */
+  const toggleSort = (k: SortKey) => {
+    if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('asc'); }
+  };
+
+  /** Bundled so each SortableTh spreads one prop rather than repeating three,
+   *  which is where a copy-paste would forget to update `col`. */
+  const sortProps = { sortKey, sortDir, onSort: (k: SortKey) => toggleSort(k) };
 
   /** Hands the bytes to the browser. Takes a Blob rather than a string so the
    *  same path serves text formats and the xlsx binary. */
@@ -605,8 +739,14 @@ export default function CollectionData({ platform = true }: {
                 {activeLabel ?? 'All campaigns'}
               </h2>
               <p className="text-[11px] text-muted-foreground">
+                {/* When a filter is active the headline count must describe
+                    what is ON SCREEN, not the campaign. A table showing 12 of
+                    500 rows under a heading that still says 500 is how someone
+                    reports the wrong number in a meeting. */}
                 {dataset === 'addresses'
-                  ? `${profiles.length} address${profiles.length === 1 ? '' : 'es'} collected`
+                  ? hasActiveFilters(filters)
+                    ? `${visible.length} of ${profiles.length} addresses shown`
+                    : `${profiles.length} address${profiles.length === 1 ? '' : 'es'} collected`
                   : `${days.length} walker day${days.length === 1 ? '' : 's'} collected`}
               </p>
             </div>
@@ -760,18 +900,99 @@ export default function CollectionData({ platform = true }: {
               Nothing submitted yet.
             </p>
           ) : (
+          <>
+            {/* ADR-432. Filters above the table, active ones visibly pressed
+                with one clear — the enterprise-table rule. A filtered table
+                that does not LOOK filtered is worse than an unfiltered one,
+                because it produces confident wrong readings. */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <ChipSelect
+                label="Type" value={filters.buildingType}
+                options={typeOptions.map((v) => ({ value: v, label: buildingTypeLabel(v) }))}
+                onChange={(v) => setFilters((f) => ({ ...f, buildingType: v }))}
+              />
+              <ChipSelect
+                label="Workload" value={filters.workload}
+                options={workloadOptions.map((v) => ({ value: v, label: workloadLabels([v]) }))}
+                onChange={(v) => setFilters((f) => ({ ...f, workload: v }))}
+              />
+              <ChipSelect
+                label="State" value={filters.state}
+                options={[
+                  { value: 'open',    label: 'Still open' },
+                  { value: 'closed',  label: 'Verified' },
+                  { value: 'differs', label: 'Collectors disagree' },
+                ]}
+                onChange={(v) => setFilters((f) => ({ ...f, state: v }))}
+              />
+
+              {hasActiveFilters(filters) && (
+                <button
+                  type="button"
+                  onClick={() => setFilters(NO_FILTERS)}
+                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <X className="h-3 w-3" aria-hidden="true" /> Clear filters
+                </button>
+              )}
+
+              {/* One door per row, or one submission per row. Both are useful
+                  and neither is always right, so it is a toggle rather than a
+                  replacement (ADR-432 D2). */}
+              <button
+                type="button"
+                onClick={() => { setGrouped((g) => !g); setOpenDoor(null); }}
+                aria-pressed={grouped}
+                className={`ml-auto inline-flex items-center gap-1 rounded-full border px-2 py-1 transition-colors ${
+                  grouped
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Rows3 className="h-3 w-3" aria-hidden="true" />
+                Group by door
+              </button>
+            </div>
+
+            {/* ADR-432 D4. The aggregates below are computed over what was
+                fetched. Said plainly at the one moment it stops being the whole
+                campaign, rather than letting the page quietly describe a
+                subset. */}
+            {atFetchLimit && (
+              <p className="flex items-start gap-1.5 rounded-lg bg-warning/10 p-2 text-[11px] text-warning">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+                Showing the first 1000 submissions. Counts and grouping below
+                describe those rows, not the whole campaign.
+              </p>
+            )}
+
+            {visible.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No addresses match these filters.
+              </p>
+            ) : (
             /* Scrolls inside its own container — a wide table must never make
                the page scroll sideways. */
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                    <th className="py-2 pr-3 font-semibold">Address</th>
-                    <th className="py-2 pr-3 font-semibold">Type</th>
+                    {/* ADR-432 D3 — the WAI-ARIA sortable-table pattern, not an
+                        approximation of it. aria-sort sits on the th (never on
+                        the inner control), exactly one column carries it at a
+                        time, the label is a real <button> so it is reachable by
+                        keyboard, and the chevron is aria-hidden so it cannot
+                        pollute the button's accessible name.
+
+                        This is the repo's first aria-sort. Getting it right
+                        once matters more than usual: the next sortable table
+                        will be copied from this one. */}
+                    <SortableTh label="Address"   col="address"       {...sortProps} />
+                    <SortableTh label="Type"      col="building_type" {...sortProps} />
                     <th className="py-2 pr-3 font-semibold">Workload</th>
                     <th className="py-2 pr-3 font-semibold">Hours</th>
-                    <th className="py-2 pr-3 font-semibold">By</th>
-                    <th className="py-2 pr-3 font-semibold">Collected</th>
+                    <SortableTh label="By"        col="collected_by"  {...sortProps} />
+                    <SortableTh label="Collected" col="collected_on"  {...sortProps} />
                     {/* No header text: an icon-only action column reads as
                         chrome, and "Actions" would be the widest thing in a
                         column holding one 12px button. */}
@@ -787,7 +1008,103 @@ export default function CollectionData({ platform = true }: {
                       look were identical rows. The count is computed from
                       door_key rather than fetched: the listing already carries
                       every row it is counting. */}
-                  {profiles.map((p) => {
+                  {/* `visible`, not `profiles` — the map must render what the
+                      filters and sort produced. Iterating the raw list here
+                      would leave a filter bar that visibly changes nothing,
+                      which reads as a broken control rather than an empty
+                      result. */}
+                  {grouped && doors.map((door) => {
+                    const isOpen = openDoor === door.key;
+                    const head = door.observations[0];
+                    return (
+                      <Fragment key={door.key}>
+                        <tr
+                          className="border-b border-border/50 align-top cursor-pointer hover:bg-muted/40"
+                          onClick={() => setOpenDoor(isOpen ? null : door.key)}
+                        >
+                          <td className="py-2 pr-3">
+                            <span className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                aria-expanded={isOpen}
+                                aria-label={`${isOpen ? 'Hide' : 'Show'} the ${door.observations.length} observations of ${door.address}`}
+                                className="rounded text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                onClick={(e) => { e.stopPropagation(); setOpenDoor(isOpen ? null : door.key); }}
+                              >
+                                {isOpen
+                                  ? <ChevronDown className="h-3.5 w-3.5" />
+                                  : <ChevronRight className="h-3.5 w-3.5" />}
+                              </button>
+                              <span className="font-medium">{door.address}</span>
+                            </span>
+                          </td>
+                          {/* The door's TYPE is shown only when its observations
+                              agree. Printing one of two conflicting values would
+                              silently pick a winner, which is exactly the
+                              judgement this view exists to hand to a human. */}
+                          <td className="py-2 pr-3">
+                            {door.state === 'differs'
+                              ? '—'
+                              : buildingTypeLabel(head.building_type)}
+                          </td>
+                          <td className="py-2 pr-3" colSpan={2}>
+                            {/* The one row worth acting on gets the only
+                                colour. `agreed` and `single` are ordinary
+                                states and are left quiet, so `differs` is
+                                findable by eye down a long table. */}
+                            {door.state === 'differs' ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">
+                                <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                                collectors disagree
+                              </span>
+                            ) : door.state === 'agreed' ? (
+                              <span className="text-[11px] text-muted-foreground">agreed by both</span>
+                            ) : (
+                              <span className="text-[11px] text-muted-foreground">one observation</span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3 text-muted-foreground">
+                            {[...new Set(door.observations.map((o) => o.collected_by).filter(Boolean))].join(', ') || '—'}
+                          </td>
+                          <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
+                            {door.observations.length} observation{door.observations.length === 1 ? '' : 's'}
+                          </td>
+                          <td />
+                        </tr>
+                        {isOpen && door.observations.map((o) => (
+                          <tr key={o.id} className="border-b border-border/50 bg-muted/20 text-[11px]">
+                            <td className="py-1.5 pl-8 pr-3 text-muted-foreground">
+                              {o.collected_on}
+                            </td>
+                            <td className="py-1.5 pr-3">{buildingTypeLabel(o.building_type)}</td>
+                            <td className="py-1.5 pr-3">{workloadLabels(o.workloads) || '—'}</td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">
+                              {formatHours(o.opens_at, o.closes_at) || '—'}
+                            </td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">{o.collected_by ?? '—'}</td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">{fmt(o.submitted_at)}</td>
+                            {/* Delete stays on the OBSERVATION, never on the
+                                door: ADR-431 removes one person's submission,
+                                and a control on the parent row would destroy
+                                several at once. */}
+                            <td className="py-1.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => setToDelete(o)}
+                                disabled={deleting}
+                                title="Delete this observation"
+                                aria-label={`Delete the observation for ${o.address} collected on ${o.collected_on}`}
+                                className="rounded p-1 text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger focus:outline-none focus:ring-2 focus:ring-danger/40 disabled:opacity-50"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    );
+                  })}
+                  {!grouped && visible.map((p) => {
                     // Server-computed (ADR-430). Counting matching door_keys in
                     // `profiles` would be wrong the moment a campaign exceeds
                     // one page: a pair split across the boundary would read as
@@ -904,6 +1221,8 @@ export default function CollectionData({ platform = true }: {
                 </tbody>
               </table>
             </div>
+            )}
+          </>
           )}
         </section>
       </div>
