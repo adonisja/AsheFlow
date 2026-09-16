@@ -3090,6 +3090,13 @@ export interface CollectedProfile {
   company_id: string | null;
   token_id: string;
   address: string;
+  /** ADR-430. The folded key, so rows describing one door can be grouped. */
+  door_key: string;
+  /** How many observations this door has across the WHOLE campaign, and
+   *  whether that closes it. Server-computed: counting the rows on screen
+   *  would miscount a pair split across a page boundary. */
+  observations: number;
+  closed: boolean;
   // ADR-418/419. These four drifted: the server has returned them since the
   // taxonomy change and this interface did not list them, so the super-admin
   // CSV silently omitted four columns of collected data.

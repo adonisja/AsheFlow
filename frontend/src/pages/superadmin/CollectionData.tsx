@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Download,
+  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -607,7 +607,12 @@ export default function CollectionData({ platform = true }: {
                       disabled={downloading}
                       className="btn-secondary text-sm inline-flex items-center gap-1.5 disabled:opacity-50"
                     >
-                      <Download className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
+                      {/* Upload, not Download. lucide's Download arrow points
+                          INTO a tray (receiving) and Upload points OUT of it
+                          (sending) — so an EXPORT takes Upload. The walker log
+                          fixed this same inversion; this page reintroduced it.
+                          One convention, both pages. */}
+                      <Upload className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
                       {fmt === 'xlsx' ? 'Excel' : fmt.toUpperCase()}
                     </button>
                   ))}
@@ -737,10 +742,37 @@ export default function CollectionData({ platform = true }: {
                   </tr>
                 </thead>
                 <tbody>
-                  {profiles.map((p) => (
+                  {/* ADR-430. Rows that describe ONE door, marked.
+                      
+                      Two observations close a door to new collectors
+                      (ADR-420), and the flat table gave the reader no way to
+                      tell — a verified door and a door still wanting a second
+                      look were identical rows. The count is computed from
+                      door_key rather than fetched: the listing already carries
+                      every row it is counting. */}
+                  {profiles.map((p) => {
+                    // Server-computed (ADR-430). Counting matching door_keys in
+                    // `profiles` would be wrong the moment a campaign exceeds
+                    // one page: a pair split across the boundary would read as
+                    // two single observations, and the count would be right
+                    // only for small campaigns.
+                    const closed = p.closed;
+                    return (
                     <tr key={p.id} className="border-b border-border/50 align-top">
                       <td className="py-2 pr-3">
-                        <span className="block">{p.address}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span>{p.address}</span>
+                          {/* A lock, not a colour: "closed" is a state of the
+                              door, not a warning about the row, and colouring
+                              the whole line would compete with `troublesome`
+                              which genuinely is a warning. */}
+                          {closed && (
+                            <Lock
+                              className="h-3 w-3 shrink-0 text-muted-foreground"
+                              aria-label="Closed to new observations"
+                            />
+                          )}
+                        </span>
                         {p.note && (
                           <span className="block text-[11px] text-muted-foreground">{p.note}</span>
                         )}
@@ -797,9 +829,18 @@ export default function CollectionData({ platform = true }: {
                       <td className="py-2 whitespace-nowrap text-muted-foreground">
                         {p.collected_on}
                         <span className="block text-[11px]">{fmt(p.submitted_at)}</span>
+                        {/* Which of the door's observations this row is. Says
+                            "1 of 2" rather than just "closed", so a reader can
+                            see the pair rather than two unrelated rows. */}
+                        <span className="mt-0.5 block text-[10px]">
+                          {closed
+                            ? `closed · ${p.observations} observations`
+                            : 'open · 1 more wanted'}
+                        </span>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
