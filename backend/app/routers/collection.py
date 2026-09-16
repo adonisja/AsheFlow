@@ -35,17 +35,12 @@ from app.api.deps import (
 )
 from app.api.ratelimit import limiter
 from app.database import get_db
-from app.models.collection import CollectedAddressProfile, CollectedWalkerDay, CollectionToken
+from app.models.collection import CollectedAddressProfile, CollectionToken
 from app.models.employee import Employee
-from app.schemas.walker_day import (
-    CollectedWalkerDayDetail, CollectedWalkerDayOut,
-    WalkerDaySubmitIn, WalkerDaySubmitOut,
-)
 from app.schemas.collection import (
     LeaderboardEntryOut,
     LeaderboardIn,
     DATASET_ADDRESSES,
-    DATASET_ROUTES,
     SCOPE_COMPANY,
     SCOPE_OPEN,
     TOP_COLLECTORS,
@@ -379,136 +374,6 @@ def check_address(
     )
 
 
-@router.post("/submit-day", response_model=WalkerDaySubmitOut,
-             status_code=status.HTTP_202_ACCEPTED)
-@limiter.limit("30/minute")
-def submit_walker_days(
-    request: Request,
-    body: WalkerDaySubmitIn,
-    db: Session = Depends(get_db),
-    # ADR-423: anonymous-tolerant. NOT get_caller_employee_optional — that one
-    # is optional about the employee ROW but still 401s on a missing
-    # Authorization header, which made every public collection path demand a
-    # login.
-    caller: Employee | None = Depends(get_caller_employee_anonymous),
-):
-    """Accept a batch of logged walker days (ADR-417 D3-D5).
-
-    202, not 201: a submission for later review, not a resource the caller can
-    go and look at. There is no read on this path, for the same reason there is
-    none on /submit — see ADR-415 D4.
-
-    UPSERTS on (token, collected_on, walker_name). A resubmission REPLACES the
-    day rather than adding a second one: the field connection drops mid-submit
-    often enough that a retry has to be safe, and the page already models one
-    row per walker per date locally, so last-write-wins is what the collector
-    sees. `revision` counts the overwrites so a reader can tell a corrected day
-    from a first submission.
-    """
-    tok = _resolve_token(db, body.token, DATASET_ROUTES)
-    _authorise_scope(tok, caller)
-
-    # Same daily ceiling as addresses, counted in the same unit: one row is one
-    # day's work by one walker. A leaked token that could not write addresses
-    # but could write unlimited days would not be bounded at all.
-    today = date.today()
-    used = (
-        db.query(sa_func.count(CollectedWalkerDay.id))
-        .filter(
-            CollectedWalkerDay.token_id == tok.id,
-            CollectedWalkerDay.collected_on == today,
-        )
-        .scalar()
-        or 0
-    )
-    if used + len(body.days) > tok.daily_cap:
-        raise HTTPException(
-            status_code=429,
-            detail="Daily collection limit reached for this link.",
-        )
-
-    accepted = 0
-    replaced = 0
-
-    for d in body.days:
-        # `.model_dump(mode="json")` and not the model object: a JSONB column
-        # handed a Pydantic object stores a Python repr, not JSON. `mode="json"`
-        # so the nested `date` becomes a string rather than a date instance
-        # psycopg cannot serialise inside a dict.
-        payload = d.model_dump(mode="json")
-
-        routes = d.routes
-        counts = dict(
-            route_count=len(routes),
-            tote_count=sum(len(r.totes) for r in routes),
-            rts_count=sum(len(r.rts) for r in routes),
-        )
-
-        existing = (
-            db.query(CollectedWalkerDay)
-            .filter(
-                CollectedWalkerDay.token_id == tok.id,
-                CollectedWalkerDay.collected_on == d.collected_on,
-                CollectedWalkerDay.walker_name == d.walker_name,
-            )
-            .first()
-        )
-
-        if existing is not None:
-            existing.arrival_time   = d.arrival_time or None
-            existing.departure_time = d.departure_time or None
-            existing.payload        = payload
-            existing.revision       = (existing.revision or 1) + 1
-            existing.submitted_at   = datetime.now(timezone.utc)
-            for k, v in counts.items():
-                setattr(existing, k, v)
-            replaced += 1
-        else:
-            db.add(CollectedWalkerDay(
-                company_id=tok.company_id,      # from the TOKEN, never the body
-                token_id=tok.id,
-                walker_name=d.walker_name,
-                collected_on=d.collected_on,
-                arrival_time=d.arrival_time or None,
-                departure_time=d.departure_time or None,
-                payload=payload,
-                **counts,
-            ))
-            accepted += 1
-
-        try:
-            # Per-row flush so one bad day does not discard the batch, and so a
-            # concurrent submit of the same day surfaces here rather than at
-            # commit.
-            db.flush()
-        except IntegrityError:
-            # Two devices submitting the same walker-day at once: the loser
-            # re-reads and overwrites, which is the same last-write-wins rule
-            # the sequential path applies.
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="That day was submitted concurrently. Send it again.",
-            )
-
-    if accepted or replaced:
-        write_audit(
-            db,
-            action_type="collection.submit_day",
-            target_table="collected_walker_days",
-            target_id=str(tok.id),
-            company_id=str(tok.company_id),
-            # No actor_id: there is no account behind this, and inventing one
-            # would make the audit log claim something untrue.
-            detail={"label": tok.label, "accepted": accepted, "replaced": replaced},
-        )
-    db.commit()
-
-    return WalkerDaySubmitOut(accepted=accepted, replaced=replaced)
-
-
-# ── Operator side — authenticated ────────────────────────────────────────────
-
 @router.post("/tokens", response_model=CollectionTokenOut, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
 def create_token(
@@ -789,70 +654,6 @@ def list_tokens(
     return out
 
 
-@router.get("/walker-days", status_code=status.HTTP_200_OK)
-@limiter.limit("60/minute")
-def list_collected_days(
-    request: Request,
-    company_id: str | None = Query(None),
-    token_id: str | None = Query(None),
-    collected_on: date | None = Query(None, description="Single collection date."),
-    walker: str | None = Query(None, max_length=100, description="Exact walker name."),
-    limit: int = Query(200, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    caller: Employee | None = Depends(get_caller_employee_optional),
-) -> list[CollectedWalkerDayOut]:
-    """Logged walker days, newest first. Counts only, no payloads.
-
-    SUPER ADMIN, not platform staff. These rows carry real coworkers' names and
-    ADR-343 D4 keeps personal data off every cross-tenant support path.
-
-    The payload is excluded deliberately: a page of forty days with every tote
-    and address inline is a large response for a listing that only needs the
-    counts. Use /walker-days/{id} for one day in full.
-    """
-    q = _scope_reads(db.query(CollectedWalkerDay), CollectedWalkerDay,
-                     current_user, caller)
-    if company_id:
-        q = q.filter(CollectedWalkerDay.company_id == company_id)
-    if token_id:
-        q = q.filter(CollectedWalkerDay.token_id == token_id)
-    if collected_on:
-        q = q.filter(CollectedWalkerDay.collected_on == collected_on)
-    if walker:
-        q = q.filter(CollectedWalkerDay.walker_name == walker)
-
-    rows = (
-        q.order_by(CollectedWalkerDay.collected_on.desc(),
-                   CollectedWalkerDay.submitted_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    return [CollectedWalkerDayOut.model_validate(r) for r in rows]
-
-
-@router.get("/walker-days/{day_id}", status_code=status.HTTP_200_OK)
-@limiter.limit("60/minute")
-def get_collected_day(
-    request: Request,
-    day_id: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    caller: Employee | None = Depends(get_caller_employee_optional),
-) -> CollectedWalkerDayDetail:
-    """One logged day, payload included."""
-    # Scoped, not just fetched by id: without this a company admin could read
-    # any day by guessing a UUID, which is the classic IDOR.
-    row = _scope_reads(db.query(CollectedWalkerDay), CollectedWalkerDay,
-                       current_user, caller).filter(
-        CollectedWalkerDay.id == day_id).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail="No such collected day.")
-    return CollectedWalkerDayDetail.model_validate(row)
-
-
 @router.delete("/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("30/minute")
 def delete_collected_profile(
@@ -1006,25 +807,22 @@ def _campaign_for_cleanup(db, token_id: str, current_user, caller) -> Collection
     return tok
 
 
-def _count_campaign_rows(db, token_id) -> tuple[int, int]:
+def _count_campaign_rows(db, token_id) -> int:
     """How much is about to be destroyed.
 
-    Counted BEFORE the delete and never after: both child tables carry
+    Counted BEFORE the delete and never after: the child table carries
     ondelete="CASCADE" on token_id, so the rows are gone at the DATABASE level
     without the ORM ever seeing them. A count taken afterwards is always zero,
     and an audit entry that cannot say what it destroyed is not an audit entry.
+
+    ADR-440 removed the walker-day half, so this counts one table and returns a
+    plain int rather than a tuple whose second element is always zero.
     """
-    profiles = (
+    return (
         db.query(sa_func.count(CollectedAddressProfile.id))
         .filter(CollectedAddressProfile.token_id == token_id)
         .scalar()
     ) or 0
-    days = (
-        db.query(sa_func.count(CollectedWalkerDay.id))
-        .filter(CollectedWalkerDay.token_id == token_id)
-        .scalar()
-    ) or 0
-    return profiles, days
 
 
 @router.delete("/tokens/{token_id}/data", status_code=status.HTTP_200_OK)
@@ -1055,8 +853,8 @@ def purge_campaign_data(
     quarantine inside the audit log, which defeats the purge.
     """
     tok = _campaign_for_cleanup(db, token_id, current_user, caller)
-    profiles, days = _count_campaign_rows(db, tok.id)
-    if profiles == 0 and days == 0:
+    profiles = _count_campaign_rows(db, tok.id)
+    if profiles == 0:
         raise HTTPException(status_code=409, detail="This campaign holds no data.")
 
     write_audit(
@@ -1066,18 +864,15 @@ def purge_campaign_data(
         target_id=str(tok.id),
         actor_id=str(caller.id) if caller else None,
         company_id=str(tok.company_id) if tok.company_id else None,
-        detail={"label": tok.label, "profiles": profiles, "walker_days": days},
+        detail={"label": tok.label, "profiles": profiles},
     )
     # Bulk DELETEs rather than loading every row to delete it one at a time —
     # a 500-row campaign should not become 500 ORM objects to destroy them.
     db.query(CollectedAddressProfile).filter(
         CollectedAddressProfile.token_id == tok.id
     ).delete(synchronize_session=False)
-    db.query(CollectedWalkerDay).filter(
-        CollectedWalkerDay.token_id == tok.id
-    ).delete(synchronize_session=False)
     db.commit()
-    return {"profiles": profiles, "walker_days": days}
+    return {"profiles": profiles}
 
 
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_200_OK)
@@ -1102,7 +897,7 @@ def delete_campaign(
     delete rather than discovered missing after it.
     """
     tok = _campaign_for_cleanup(db, token_id, current_user, caller)
-    profiles, days = _count_campaign_rows(db, tok.id)
+    profiles = _count_campaign_rows(db, tok.id)
 
     write_audit(
         db,
@@ -1115,14 +910,13 @@ def delete_campaign(
             "label": tok.label,
             "scope": tok.scope,
             "profiles": profiles,
-            "walker_days": days,
         },
     )
     # The FK cascade removes the children. Counted above, so the audit records
     # what this destroyed even though the ORM never loads the rows.
     db.delete(tok)
     db.commit()
-    return {"deleted": True, "profiles": profiles, "walker_days": days}
+    return {"deleted": True, "profiles": profiles}
 
 
 @router.get("/profiles", status_code=status.HTTP_200_OK)

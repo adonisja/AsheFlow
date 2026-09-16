@@ -168,8 +168,11 @@ def build(counts: dict[str, str] | None) -> list[tuple[str, str]]:
         ("HEADING_2", "Is this an Amazon-approved platform?"),
         ("NORMAL", "No. There is no approval, relationship, or integration of any kind."),
         ("HEADING_2", "Is customer information being stored?"),
-        ("NORMAL", "Yes. Delivery addresses are the purpose of the study. No package "
-                   "identifiers, customer names, or order contents are collected."),
+        ("NORMAL", "Building addresses, yes. Customer details, no. Every address is "
+                   "standardised in the browser before it is sent: apartment, unit, "
+                   "floor, suite and anything following \"Attn:\" are cut, so what "
+                   "reaches the server identifies a building rather than a household. "
+                   "No names, no package identifiers, no order contents."),
         ("HEADING_2", "Is it stored externally?"),
         ("NORMAL", "Yes — on AWS infrastructure operated by Akkeem, in Ohio, United States."),
         ("HEADING_2", "Who built and runs it?"),
@@ -192,14 +195,29 @@ def build(counts: dict[str, str] | None) -> list[tuple[str, str]]:
                    "payment details, or package tracking identifiers are collected in "
                    "any field."),
 
+        ("HEADING_1", "What the server actually receives"),
+        ("NORMAL", "Addresses are standardised in the collector's browser, before "
+                   "anything is sent. The typed text is replaced as soon as the field "
+                   "is left, so unit-level detail never reaches the network or the "
+                   "database."),
+        ("BULLET", "433 W 31st St, Apt 4A  ->  433 W 31 ST"),
+        ("BULLET", "500 Broadway Attn: J Smith  ->  500 BROADWAY"),
+        ("BULLET", "9 Park Ave, Suite 210  ->  9 PARK AVE"),
+        ("BULLET", "12 Main St Floor 3  ->  12 MAIN ST"),
+        ("BULLET", "77 King St Basement  ->  77 KING ST"),
+        ("NORMAL", "Apartment, unit, floor, suite, basement, lobby and anything after "
+                   "\"Attn:\" are all removed. A stored record describes a building "
+                   "entrance. It cannot be tied back to a specific customer or "
+                   "delivery."),
+
         ("HEADING_1", "A note on scope"),
-        ("NORMAL", "A second page exists on the same system — a personal route tracker "
-                   "the operator uses to reconstruct their own delivery days for "
-                   "comparison against dispatch output. It is not part of this study, "
-                   "was never given to anyone else, and holds zero records in "
-                   "production. Its server-side submission path is being removed so it "
-                   "cannot collect from anyone; afterwards it works only as a local tool "
-                   "on the operator's own device."),
+        ("NORMAL", "A second page on the same system is a personal route tracker. The "
+                   "operator uses it to reconstruct their own delivery days and compare "
+                   "them against what the dispatch system produced. It was never given "
+                   "to anyone else and never collected a record. Its server-side "
+                   "submission path has been removed, so the tracker now stores data "
+                   "only in the operator's own browser with no way to send anything to "
+                   "a server."),
 
         ("HEADING_1", "Where it is stored"),
         ("BULLET", "PostgreSQL 15, in a Docker container on the application host"),
@@ -220,7 +238,7 @@ def build(counts: dict[str, str] | None) -> list[tuple[str, str]]:
         ("BULLET", "Deletion available per-record, per-device, and per-campaign"),
         ("BULLET", "Nightly database backups, nine retained"),
 
-        ("HEADING_1", "Gaps — stated plainly"),
+        ("HEADING_1", "What is not in place"),
         ("BULLET", "Encryption at rest is NOT in place. All three EBS volumes are "
                    "unencrypted; data is protected in transit but not on disk."),
         ("BULLET", "No automated retention. Collected records persist indefinitely; "
@@ -231,12 +249,12 @@ def build(counts: dict[str, str] | None) -> list[tuple[str, str]]:
         ("BULLET", "Access is link-based: the collection link is the only credential."),
 
         ("HEADING_1", "Outside the scope of this record"),
-        ("NORMAL", "Whether delivery associates may record address data observed while "
-                   "working Amazon routes, and store it on a system outside Amazon and "
+        ("NORMAL", "Whether delivery associates may record address data they see while "
+                   "working Amazon routes, and keep it on a system outside Amazon and "
                    "outside the DSP, is a question about their delivery-associate "
-                   "agreements and Amazon's data policies. It is not a technical "
-                   "question and nothing here resolves it. That determination belongs "
-                   "to the DSP owner and Amazon."),
+                   "agreements and Amazon's data policies. That is not a technical "
+                   "question, and nothing here settles it. It belongs to the DSP owner "
+                   "and Amazon."),
 
         ("HEADING_1", "Options available immediately"),
         ("BULLET", "Revoke the collection link — stops all new submissions at once, "
@@ -276,10 +294,18 @@ def slides(counts: dict[str, str] | None) -> list[tuple[str, list[str]]]:
           "Operator: Akkeem (sole super admin)"]),
 
         ("The four questions",
-         ["Amazon-approved platform?  NO",
-          "Storing customer information?  YES — delivery addresses",
-          "Stored externally?  YES — AWS, Ohio, operated by Akkeem",
+         ["Amazon-approved platform?  No",
+          "Storing customer information?  Building addresses, not customer details",
+          "Stored externally?  Yes. AWS, Ohio, operated by Akkeem",
           "Who built it?  Akkeem, personally"]),
+
+        ("What the server actually receives",
+         ["Addresses are standardised in the browser, before anything is sent",
+          "433 W 31st St, Apt 4A   ->   433 W 31 ST",
+          "500 Broadway Attn: J Smith   ->   500 BROADWAY",
+          "9 Park Ave, Suite 210   ->   9 PARK AVE",
+          "Apartment, floor, suite and any name are cut",
+          "A record describes a building entrance, not a household"]),
 
         ("Nothing has been collected yet",
          [f"Address records in production: {n}",
@@ -288,10 +314,10 @@ def slides(counts: dict[str, str] | None) -> list[tuple[str, list[str]]]:
           "before a single customer address exists"]),
 
         ("What a record contains",
-         ["Street address — the customer PII in question",
+         ["Standardised building address",
           "Building type, access hours, workload",
           "Free-text access note",
-          "Collector alias — not a legal name",
+          "Collector alias, not a legal name",
           "No package IDs, customer names, or order contents"]),
 
         ("Where it lives",
@@ -307,7 +333,7 @@ def slides(counts: dict[str, str] | None) -> list[tuple[str, list[str]]]:
           "Rate limiting and input caps on every public endpoint",
           "Deletion per record, per device, per campaign"]),
 
-        ("Gaps — stated plainly",
+        ("What is not in place",
          ["Encryption at rest: NOT in place",
           "Automated retention: none — deletion is manual",
           "Offsite backups: none",
