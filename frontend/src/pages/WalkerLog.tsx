@@ -5,6 +5,7 @@ import {
   Route, X, Pencil, Check, FileSpreadsheet, Camera, Loader2,
 } from 'lucide-react';
 import SectionHeader from '../components/ui/SectionHeader';
+import ThemeToggle from '../components/ui/ThemeToggle';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { getLocalYMD } from '../utils/date';
 import {
@@ -161,6 +162,13 @@ export default function WalkerLog({ dataset = 'routes' }: {
   /** Collection token, remembered per browser so a collector pastes the link
    *  once. localStorage rather than IndexedDB: it is one short string, and it
    *  is NOT data — losing it costs a paste, not a day's work. */
+  /** The collector's handle for THIS send (ADR-436 D4).
+   *
+   *  Seeded from the device's remembered value (ADR-427) so a returning
+   *  collector never retypes it — which is the whole point of the leaderboard
+   *  having names on it. */
+  const [handle, setHandle] = useState(() => collectorHandle());
+
   const [collectToken, setCollectTokenState] = useState(
     () => localStorage.getItem('walkerlog.collectToken') ?? '',
   );
@@ -201,9 +209,14 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  fails soft to an empty list and never blocks collecting. */
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
   /** This device's handle, so the ranking can mark which row is the
-   *  collector's own. Read from the same store that prefills the field, so the
-   *  two cannot disagree. */
-  const myHandle = collectorHandle();
+   *  collector's own.
+   *
+   *  ADR-436 D4: reads the LIVE field, not localStorage. Once the handle became
+   *  an editable input on the submit card, a stored value could lag what the
+   *  collector had just typed — and the row they were looking for would stop
+   *  being highlighted the moment they corrected a typo. The input is seeded
+   *  from the store, so this still matches on first load. */
+  const myHandle = handle.trim();
   /** Profile id currently being checked, so the field can say so. */
   const [checking, setChecking] = useState<string | null>(null);
   /** True when this date was explicitly cleared — suppresses the bundled
@@ -768,7 +781,19 @@ export default function WalkerLog({ dataset = 'routes' }: {
       const v = verdicts.get(p.id);
       return v?.state === 'known' && v.locked;
     };
-    const ready = profiles.filter((p) => isUsable(p) && !isLocked(p));
+    // ADR-436 D4. The handle is entered once on the submit card and stamped
+    // onto every profile in the batch — `collected_by` is still per-row on the
+    // wire and in storage, so nothing downstream changes shape. Applied here
+    // rather than on each card so a handle typed just before sending reaches
+    // rows that were filled in before it was.
+    const stamp = (p: AddressProfile): AddressProfile =>
+      handle.trim() ? { ...p, collected_by: handle.trim() } : p;
+    // Persist it here too. commitProfile still remembers a handle typed on a
+    // CARD, but the field moved to this card (ADR-436 D4) — without this the
+    // value would be forgotten on reload and the collector would retype it
+    // every session, which is exactly what ADR-427 existed to prevent.
+    if (handle.trim()) rememberHandle(handle);
+    const ready = profiles.filter((p) => isUsable(p) && !isLocked(p)).map(stamp);
     const held = profiles.filter((p) => isUsable(p) && isLocked(p)).length;
     if (ready.length === 0) {
       setError(
@@ -823,7 +848,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
     } finally {
       setSending(false);
     }
-  }, [profiles, collectToken, flash, verdicts, reconcileSubmitted]);
+  }, [profiles, collectToken, flash, verdicts, reconcileSubmitted, handle]);
 
   // ── Build-first routes ─────────────────────────────────────────────────
   // The truck is usually there before the walkers, so a route gets built and
@@ -999,6 +1024,13 @@ export default function WalkerLog({ dataset = 'routes' }: {
       <style>{TOUCH_CSS}</style>
       <div className="mx-auto max-w-6xl space-y-6">
       <SectionHeader
+        /* ADR-436 D3. This page is used in a van in direct sunlight and in a
+           dark warehouse at 5am, and it followed the OS with no way to
+           override. The app's own toggle and the app's own tokens — the
+           collection pages simply never rendered one, because they sit outside
+           the authenticated shell that carries it. The choice is per device,
+           which is right for a page that has no account. */
+        actions={<ThemeToggle />}
         eyebrow={routesTab ? 'Route study' : 'Address study'}
         title={routesTab ? 'Walker Route Tracker' : 'Address Profiles'}
         /* DESCRIBES THE CAMPAIGN. Makes no claim about where the data goes.
@@ -1327,6 +1359,32 @@ export default function WalkerLog({ dataset = 'routes' }: {
               never shows a control that cannot work. */}
           {submitConfigured() && profiles.some(isUsable) && (
             <div className="rounded-lg border border-border p-3 space-y-2">
+              {/* ADR-436 D4. Was buried inside "More detail", which quietly broke
+                  the leaderboard: ADR-427 remembers a handle per device and prefills
+                  it, but a collector who never opened the disclosure never typed one,
+                  so every submission arrived anonymous and there was nothing to rank.
+
+                  It belongs HERE because identity is a property of the SEND, not of
+                  one building — asked once per submission rather than once per
+                  address. The value is still per-row in storage and on the wire; this
+                  writes it onto every profile in the batch. */}
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Collected by
+                </label>
+                <input
+                  value={handle}
+                  onChange={(e) => setHandle(e.target.value)}
+                  placeholder="An alias or handle"
+                  className={`${TEXT_INPUT} mt-1`}
+                />
+                {/* ADR-427. A handle, not a legal name: this is stored, exported and
+                    shown on the ranking, and a real name would put a coworker's
+                    identity in all three for no analytical gain. */}
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Remembered on this device. A nickname is better than your full name.
+                </p>
+              </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Collection link
