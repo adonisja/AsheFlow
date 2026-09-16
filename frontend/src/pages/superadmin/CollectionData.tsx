@@ -8,6 +8,9 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { errorText } from '../../utils/errorText';
+import {
+  buildingTypeLabel, formatHours, workloadLabels,
+} from '../../utils/addressProfile';
 import type {
   CollectedProfile, CollectedWalkerDay, CollectedWalkerDayDetail,
   CollectionTokenCreated, CollectionTokenSummary,
@@ -41,6 +44,15 @@ const fmt = (iso: string | null): string => {
  *  notes carry everything. */
 const q = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
+/** ADR-429: the EXPORT keeps stored values, deliberately.
+ *
+ *  The table humanises `loading_dock_mailroom` to "Loading dock: mailroom"
+ *  because a person reads it. A CSV is read by a loader, and these column names
+ *  already match `BuildingProfile` so a later import maps straight across —
+ *  translating them would mean translating them back.
+ *
+ *  Display formats for people, wire formats for machines, and the same file
+ *  cannot be both. */
 const CSV_COLUMNS = [
   'normalised_address', 'building_category', 'building_type',
   'has_security_desk', 'workloads', 'workload_other', 'workload_class',
@@ -660,7 +672,13 @@ export default function CollectionData({ platform = true }: {
                                       Route {r.route_id}
                                       <span className="ml-2 font-normal text-muted-foreground">
                                         {r.route_start || '—'}–{r.route_end || '—'}
-                                        {r.difficulty && ` · ${r.difficulty}`}
+                                        {/* Route times are stored HH:MM, so
+                                            they need no reformatting — only
+                                            the difficulty reads as a raw
+                                            value. */}
+                                        {r.difficulty && (
+                                          <> · {r.difficulty[0].toUpperCase() + r.difficulty.slice(1)}</>
+                                        )}
                                       </span>
                                     </p>
                                     {r.notes && (
@@ -732,10 +750,46 @@ export default function CollectionData({ platform = true }: {
                           </span>
                         )}
                       </td>
-                      <td className="py-2 pr-3 whitespace-nowrap">{p.building_type}</td>
-                      <td className="py-2 pr-3 whitespace-nowrap">{p.workload_class}</td>
+                      {/* ADR-429. LABELS, not stored values. The collector
+                          chose "Loading dock: mailroom" from a list; showing
+                          the admin `loading_dock_mailroom` back is the wire
+                          format leaking into a reading surface.
+                          buildingTypeLabel has existed since ADR-422 and this
+                          page never called it. */}
+                      <td className="py-2 pr-3">
+                        <span className="block whitespace-nowrap">
+                          {buildingTypeLabel(p.building_type)}
+                        </span>
+                        {/* The flag was collected and never displayed. It
+                            changes what a walker must carry, which makes it
+                            one of the more consequential things on the row. */}
+                        {p.has_security_desk && (
+                          <span className="mt-0.5 inline-block rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            security desk
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3">
+                        {/* The collected SET, not workload_class — that column
+                            is a single derived default (ADR-418), so showing it
+                            here hid the second and third things the collector
+                            actually ticked. */}
+                        <span className="block">
+                          {workloadLabels(p.workloads) || '—'}
+                        </span>
+                        {p.workload_other && (
+                          <span className="block text-[11px] text-muted-foreground">
+                            {p.workload_other}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
-                        {p.opens_at ? `${p.opens_at}–${p.closes_at ?? '?'}` : '—'}
+                        {formatHours(p.opens_at, p.closes_at) || '—'}
+                        {(p.break_start || p.break_end) && (
+                          <span className="block text-[11px]">
+                            closed {formatHours(p.break_start, p.break_end)}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
                         {p.collected_by ?? '—'}
