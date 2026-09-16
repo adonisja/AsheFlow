@@ -198,6 +198,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
   /** The campaign's top collectors (ADR-427). Encouragement, not data — it
    *  fails soft to an empty list and never blocks collecting. */
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
+  /** This device's handle, so the ranking can mark which row is the
+   *  collector's own. Read from the same store that prefills the field, so the
+   *  two cannot disagree. */
+  const myHandle = collectorHandle();
   /** Profile id currently being checked, so the field can say so. */
   const [checking, setChecking] = useState<string | null>(null);
   /** True when this date was explicitly cleared — suppresses the bundled
@@ -226,13 +230,27 @@ export default function WalkerLog({ dataset = 'routes' }: {
     // Not date-scoped: a collector wants to see everything they have sent,
     // and a profile is a fact about a building rather than about a day.
     setSubmitted(await submittedProfiles());
-    if (collectToken.trim()) setBoard(await fetchLeaderboard(collectToken));
     const saved = await getActiveBtr(d);
     // Fall back to the first imported truck so a fresh import is immediately
     // usable without a second choice.
     setActiveBtrState(saved && ms.some((m) => m.btr === saved) ? saved : (ms[0]?.btr ?? null));
     setNames(await knownNames());
   }, []);
+
+  /** The campaign ranking, refetched when the token changes.
+   *
+   *  Its own effect rather than a line in refreshSidebar: that callback is
+   *  memoised with an empty dep array, so reading `collectToken` inside it
+   *  captures the value from first render — the board would keep showing the
+   *  previous campaign's ranking after a collector pastes a new link. Keying
+   *  the effect on the token is what makes it follow. */
+  useEffect(() => {
+    if (!collectToken.trim()) { setBoard([]); return; }
+    let live = true;
+    void fetchLeaderboard(collectToken).then((b) => { if (live) setBoard(b); });
+    // Guarded so a slow response for an old token cannot overwrite a newer one.
+    return () => { live = false; };
+  }, [collectToken]);
 
   /** Unclaimed routes persist on every mutation, so there is no unsaved state
    *  for them to lose. */
@@ -1113,26 +1131,97 @@ export default function WalkerLog({ dataset = 'routes' }: {
 
       {tab === 'addresses' ? (
         <section className="card p-4 space-y-3">
-          {/* ADR-427. The campaign's top three collectors.
+          {/* ADR-427 / ADR-428. The campaign's top three collectors.
+              
+              A RANKED LIST, not a sentence. The first version laid the three
+              out as inline spans, which wrapped mid-ranking on a phone — third
+              place orphaned onto its own line — and used default-size emoji
+              medals that fought the text for attention.
+              
+              Rows with fixed columns instead: rank, handle, count. Nothing
+              wraps because nothing needs to, and the eye reads down the counts
+              rather than hunting along a paragraph.
+              
+              The bar is proportional to the leader, so relative effort is
+              legible without reading the numbers — the thing a glance is for.
               
               Handles, not names: the Collected by field asks for an alias and
-              says why, so this shows "Sparky — 14" rather than putting a
-              coworker's real name in front of everyone holding the link.
+              says why, so this shows "Sparky", not a coworker's legal name in
+              front of everyone holding the link.
               
               Hidden until someone has submitted under a handle — an empty
               podium is worse than no podium. */}
           {board.length > 0 && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Top collectors
-              </span>
-              {board.map((e, i) => (
-                <span key={e.handle} className="text-sm">
-                  <span aria-hidden>{['🥇', '🥈', '🥉'][i] ?? '·'}</span>{' '}
-                  <span className={i === 0 ? 'font-semibold' : ''}>{e.handle}</span>
-                  <span className="text-muted-foreground"> {e.count}</span>
-                </span>
-              ))}
+            <div className="rounded-xl border border-border bg-surface/60 p-3">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                  Top collectors
+                </h3>
+                <span className="text-[10px] text-muted-foreground/70">this campaign</span>
+              </div>
+
+              <ol className="space-y-1.5">
+                {board.map((e, i) => {
+                  const lead = board[0]?.count || 1;
+                  const mine = e.handle === myHandle;
+                  return (
+                    <li
+                      key={e.handle}
+                      // Colour is the visual cue; this is the one for anyone
+                      // who cannot use it — a screen reader announces the row
+                      // as the collector's own, and it costs nothing visually.
+                      aria-current={mine ? 'true' : undefined}
+                      className="flex items-center gap-2.5"
+                    >
+                      {/* A numeral, not a medal. Three emoji at text size read
+                          as decoration and render differently on every
+                          platform; a chip is legible at a glance and keeps the
+                          rows aligned. */}
+                      <span
+                        aria-hidden
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold tabular-nums ${
+                          i === 0 ? 'bg-warning/20 text-warning'
+                            : i === 1 ? 'bg-muted text-muted-foreground'
+                            : 'bg-muted/60 text-muted-foreground'
+                        }`}
+                      >
+                        {i + 1}
+                      </span>
+
+                      <span className="min-w-0 flex-1">
+                        {/* The collector's own row is COLOURED, not labelled.
+                            A "you" tag competed with the handle for the same
+                            line and had to be read; colour is recognised before
+                            it is read, which is what a glance wants.
+                            
+                            `text-primary` rather than a literal blue: the
+                            palette owns the hue, it is the same accent the rest
+                            of the app uses for "this one is yours", and it
+                            follows a theme change. */}
+                        <span className={`block truncate text-sm ${
+                          mine ? 'font-semibold text-primary' : ''
+                        }`}>
+                          {e.handle}
+                        </span>
+                        {/* Proportional to the leader, so the gap is visible
+                            without arithmetic. */}
+                        <span className="mt-1 block h-1 overflow-hidden rounded-full bg-muted">
+                          <span
+                            className={`block h-full rounded-full ${i === 0 ? 'bg-warning' : 'bg-muted-foreground/40'}`}
+                            style={{ width: `${Math.max(8, (e.count / lead) * 100)}%` }}
+                          />
+                        </span>
+                      </span>
+
+                      <span className={`shrink-0 text-sm font-semibold tabular-nums ${
+                        mine ? 'text-primary' : ''
+                      }`}>
+                        {e.count}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
             </div>
           )}
 
