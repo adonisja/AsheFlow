@@ -65,6 +65,11 @@ _NO_AUDIT = {
     # heuristic only because it is a POST. The write it precedes, submit_profiles,
     # IS audited.
     "collection.py::check_address",
+    # ADR-427: a ranking. It GROUPs and counts; it persists nothing. POST for
+    # the same reason check_address is — the campaign token travels in the
+    # body, not a URL that lands in access logs. Verified by source inspection
+    # that it performs no db.add/commit/flush/delete.
+    "collection.py::campaign_leaderboard",
     # ADR-312 D4: deprecated delegations. They carry no logic of their own —
     # each calls the moved handler in company_zones.py, which writes the audit.
     # Auditing here too would double-log every zone edit for one release.

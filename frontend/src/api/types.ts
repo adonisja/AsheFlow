@@ -3064,6 +3064,10 @@ export interface CollectionTokenSummary {
   created_at: string;
   created_by_name: string | null;
   submission_count: number;
+  /** ADR-424. The collection link, so it can be re-copied. NULL once revoked:
+   *  the string still exists but no longer works, and showing a dead link
+   *  invites someone to send it. */
+  token: string | null;
 }
 
 /** The create response. Deliberately NOT a CollectionTokenSummary: the POST

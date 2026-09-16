@@ -16,7 +16,8 @@ import {
   listByDate,
   manifestLoad, manifestsForDate, nextRouteId, nowHM,
   putCrew, putDay, putManifest, putUnclaimed, setActiveBtr, toCSV,
-  type LogRoute, type StoredManifest, type WalkerDay,
+  type LogRoute, type StoredManifest, type WalkerDay, markSubmitted, submittedProfiles, reopenSubmitted,
+  type SubmittedProfile,
 } from '../utils/walkerLogDb';
 import {
   bagToTote, crewFor, seedFor, unassignedBags, type SeedBag,
@@ -30,11 +31,11 @@ import LabelScanner from '../components/walkerlog/LabelScanner';
 import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
-  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress} from '../utils/addressProfile';
+  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress, BUILDING_TYPES, collectorHandle, rememberHandle} from '../utils/addressProfile';
 import {
-  checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles,
+  checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles, fetchLeaderboard,
 } from '../utils/collectionSubmit';
-import type { CheckResult } from '../utils/collectionSubmit';
+import type { CheckResult, LeaderboardEntry } from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
 /** Manual walker/route tracker — a research instrument, not an operational page.
@@ -191,6 +192,12 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  building-type and workload fields open once the campaign has answered
    *  (ADR-420). A locked door never gets a verdict — the row is cleared. */
   const [verdicts, setVerdicts] = useState<Map<string, CheckResult>>(new Map());
+  /** What this device has already sent (ADR-425). Kept after the working cards
+   *  clear, so a collector can see and correct what they submitted. */
+  const [submitted, setSubmitted] = useState<SubmittedProfile[]>([]);
+  /** The campaign's top collectors (ADR-427). Encouragement, not data — it
+   *  fails soft to an empty list and never blocks collecting. */
+  const [board, setBoard] = useState<LeaderboardEntry[]>([]);
   /** Profile id currently being checked, so the field can say so. */
   const [checking, setChecking] = useState<string | null>(null);
   /** True when this date was explicitly cleared — suppresses the bundled
@@ -216,6 +223,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
     setImported(ms);
     setCleared(await isDateCleared(d));
     setProfiles(await profilesForDate(d));
+    // Not date-scoped: a collector wants to see everything they have sent,
+    // and a profile is a fact about a building rather than about a day.
+    setSubmitted(await submittedProfiles());
+    if (collectToken.trim()) setBoard(await fetchLeaderboard(collectToken));
     const saved = await getActiveBtr(d);
     // Fall back to the first imported truck so a fresh import is immediately
     // usable without a second choice.
@@ -537,7 +548,9 @@ export default function WalkerLog({ dataset = 'routes' }: {
   }, []);
 
   const addProfile = useCallback(async () => {
-    const p = emptyProfile(date);
+    // Prefilled from the device's remembered handle (ADR-427): a collector
+    // types it once a campaign, not once an address.
+    const p = { ...emptyProfile(date), collected_by: collectorHandle() };
     // A stable id before an address exists — otherwise two blank rows collide
     // on `${date}|` and the second overwrites the first.
     p.id = `${date}|new-${Date.now()}`;
@@ -554,6 +567,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *
    *  Re-keying happens in `rekeyProfile`, on blur. */
   const commitProfile = useCallback(async (p: AddressProfile) => {
+    // The handle sticks to the device. Written on every save rather than on a
+    // dedicated action: there is no "set my handle" step, and the last one
+    // typed is the one they mean.
+    if (p.collected_by.trim()) rememberHandle(p.collected_by);
     await saveProfile(p);
   }, [saveProfile]);
 
@@ -702,11 +719,35 @@ export default function WalkerLog({ dataset = 'routes' }: {
         rememberKnown(r.duplicate_addresses);
         setKnown(knownAddresses());
       }
+      // ADR-425. The cards clear on success, and what was sent moves to the
+      // submitted list. A collector standing at the next door should see an
+      // empty board, not the building they have finished with — and the
+      // duplicate check makes re-typing a sent address a warning rather than a
+      // silent second row.
+      //
+      // Only what the server ACCEPTED is cleared. A duplicate it refused stays
+      // on the board so the collector can see why.
+      const sentIds = new Set(
+        ready.filter((p) => !r.duplicate_addresses.includes(p.address)).map((p) => p.id),
+      );
+      const sent = ready.filter((p) => sentIds.has(p.id));
+      if (sent.length > 0) {
+        await markSubmitted(sent);
+        setProfiles((ps) => ps.filter((p) => !sentIds.has(p.id)));
+        setSubmitted(await submittedProfiles());
+      }
+      // Refreshed after a submit so the collector sees their own count move.
+      setBoard(await fetchLeaderboard(collectToken));
       flash(
-        `Sent ${r.accepted}`
-        + (r.duplicate ? ` (${r.duplicate} already received)` : '')
-        + (held ? `, held back ${held} already collected` : '')
-        + '.',
+        [
+          r.accepted ? `Submitted ${r.accepted} address${r.accepted === 1 ? '' : 'es'}` : '',
+          // ADR-426: an update is not a new observation, and saying so is the
+          // difference between "I added two doors" and "I fixed the one I got
+          // wrong".
+          r.updated ? `updated ${r.updated}` : '',
+          r.duplicate ? `${r.duplicate} already recorded` : '',
+          held ? `held back ${held}` : '',
+        ].filter(Boolean).join(', ') + '.',
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send.');
@@ -1072,6 +1113,29 @@ export default function WalkerLog({ dataset = 'routes' }: {
 
       {tab === 'addresses' ? (
         <section className="card p-4 space-y-3">
+          {/* ADR-427. The campaign's top three collectors.
+              
+              Handles, not names: the Collected by field asks for an alias and
+              says why, so this shows "Sparky — 14" rather than putting a
+              coworker's real name in front of everyone holding the link.
+              
+              Hidden until someone has submitted under a handle — an empty
+              podium is worse than no podium. */}
+          {board.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Top collectors
+              </span>
+              {board.map((e, i) => (
+                <span key={e.handle} className="text-sm">
+                  <span aria-hidden>{['🥇', '🥈', '🥉'][i] ?? '·'}</span>{' '}
+                  <span className={i === 0 ? 'font-semibold' : ''}>{e.handle}</span>
+                  <span className="text-muted-foreground"> {e.count}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h2 className="text-sm font-semibold">Address profiles</h2>
@@ -1142,13 +1206,63 @@ export default function WalkerLog({ dataset = 'routes' }: {
               >
                 {sending
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
-                  : <><Upload className="w-4 h-4" /> Send {profiles.filter(isUsable).length} to the team</>}
+                  : <><Upload className="w-4 h-4" /> Submit {profiles.filter(isUsable).length} address{profiles.filter(isUsable).length === 1 ? '' : 'es'}</>}
               </button>
               <p className="text-[11px] text-muted-foreground">
-                Your entries stay on this device either way. Sending is a copy,
-                not a handoff.
+                Submitted addresses move to the list below and clear from the
+                board.
               </p>
             </div>
+          )}
+
+          {/* ADR-425. What this device has already sent.
+              
+              The cards clear on submit so the next door starts from an empty
+              board, but "sent" is not "gone": a collector who mistyped a
+              building type needs to find it again, and the server upserts a
+              resubmission rather than duplicating it. Collapsed by default —
+              it grows all shift and is not what anyone is looking at while
+              collecting. */}
+          {submitted.length > 0 && (
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Submitted ({submitted.length})
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {submitted
+                  .slice()
+                  // Most recent first: a correction is nearly always to
+                  // something just sent.
+                  .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))
+                  .map((p) => (
+                    <li key={p.id} className="flex items-center gap-2 text-sm">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{p.address}</span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {BUILDING_TYPES.find((b) => b.value === p.building_type)?.label
+                            ?? p.building_type}
+                          {' · sent '}
+                          {new Date(p.submitted_at).toLocaleString([], {
+                            month: 'short', day: 'numeric',
+                            hour: '2-digit', minute: '2-digit',
+                          })}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void (async () => {
+                          await reopenSubmitted(p);
+                          setProfiles(await profilesForDate(date));
+                          flash(`${p.address} is back on the board. Re-submit to update it.`);
+                        })()}
+                        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] hover:bg-muted"
+                      >
+                        Edit
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </details>
           )}
         </section>
       ) : (

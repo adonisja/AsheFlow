@@ -22,9 +22,37 @@ const API = (import.meta.env.VITE_COLLECTION_API as string | undefined)
 
 export const submitConfigured = (): boolean => API.length > 0;
 
+/** This browser's id, for correcting its own submissions (ADR-426).
+ *
+ *  Generated once and kept in localStorage. NOT an identity — it says "the
+ *  device that sent this row", nothing about who was holding it. Clearing site
+ *  data loses the ability to edit past submissions, which is the honest
+ *  consequence of a collection page with no accounts.
+ *
+ *  Falls back to a per-session id when storage is unavailable (a private
+ *  window): submissions still work, and editing them works for as long as the
+ *  tab is open.
+ */
+let _sessionDeviceId: string | null = null;
+
+export function deviceId(): string {
+  try {
+    const existing = localStorage.getItem('walkerlog.deviceId');
+    if (existing) return existing;
+    const made = `dev-${crypto.randomUUID()}`;
+    localStorage.setItem('walkerlog.deviceId', made);
+    return made;
+  } catch {
+    _sessionDeviceId ??= `dev-${crypto.randomUUID()}`;
+    return _sessionDeviceId;
+  }
+}
+
 export interface SubmitResult {
   accepted: number;
   duplicate: number;
+  /** Rows this device already owned and has now corrected (ADR-426). */
+  updated: number;
   /** Addresses in THIS batch the campaign had already received — typically
    *  from another collector, since your own are blocked before they are sent.
    *  Echoed back so the page can warn about them next time rather than letting
@@ -59,6 +87,7 @@ export async function submitProfiles(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       token,
+      device_id: deviceId(),
       // Mapped explicitly rather than spread: the stored shape carries `id`,
       // `date` and `updated_at`, and the server forbids unrecognised keys, so a
       // spread would 422 the whole batch.
@@ -97,8 +126,8 @@ export async function submitProfiles(
     throw new Error('Could not send. Your entries are still saved on this device.');
   }
   const out = (await res.json()) as SubmitResult;
-  // Tolerate a server that predates the echo rather than crashing the page.
-  return { ...out, duplicate_addresses: out.duplicate_addresses ?? [] };
+  // Tolerate a server that predates these fields rather than crashing the page.
+  return { ...out, duplicate_addresses: out.duplicate_addresses ?? [], updated: out.updated ?? 0 };
 }
 
 
@@ -116,7 +145,10 @@ export async function submitProfiles(
 export type CheckResult =
   /** The campaign has this door. `count` is how many observations, `locked`
    *  whether that has reached the verification limit (ADR-420). */
-  | { state: 'known'; collected_on: string | null; count: number; locked: boolean }
+  | { state: 'known'; collected_on: string | null; count: number; locked: boolean;
+      /** This device submitted one of the rows, so re-submitting updates it
+       *  rather than being refused (ADR-426). */
+      mine: boolean }
   | { state: 'new' }
   | { state: 'unknown' };
 
@@ -131,11 +163,14 @@ export async function checkAddress(
     const res = await fetch(`${API.replace(/\/$/, '')}/collection/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: token.trim(), address: address.trim() }),
+      body: JSON.stringify({
+        token: token.trim(), address: address.trim(), device_id: deviceId(),
+      }),
     });
     if (!res.ok) return { state: 'unknown' };   // 404 token, 429, 5xx: all "cannot say"
     const j = (await res.json()) as {
-      known: boolean; collected_on: string | null; count?: number; locked?: boolean;
+      known: boolean; collected_on: string | null;
+      count?: number; locked?: boolean; mine?: boolean;
     };
     return j.known
       ? {
@@ -145,6 +180,7 @@ export async function checkAddress(
           // rendering `undefined observations` at a collector.
           count: j.count ?? 1,
           locked: j.locked ?? true,
+          mine: j.mine ?? false,
         }
       : { state: 'new' };
   } catch {
@@ -241,4 +277,33 @@ export async function submitDays(
     throw new Error('Could not send. Your entries are still saved on this device.');
   }
   return (await res.json()) as DaySubmitResult;
+}
+
+
+// ── Campaign ranking (ADR-427) ───────────────────────────────────────────────
+
+export interface LeaderboardEntry {
+  handle: string;
+  count: number;
+}
+
+/** The campaign's top collectors.
+ *
+ *  Fails soft: an empty list on any error. A ranking is encouragement, not
+ *  data — it must never be the reason a collector sees an error banner, and a
+ *  page that works offline cannot depend on it.
+ */
+export async function fetchLeaderboard(token: string): Promise<LeaderboardEntry[]> {
+  if (!submitConfigured() || !token.trim()) return [];
+  try {
+    const res = await fetch(`${API.replace(/\/$/, '')}/collection/leaderboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token.trim() }),
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as LeaderboardEntry[];
+  } catch {
+    return [];
+  }
 }
