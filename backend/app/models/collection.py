@@ -80,6 +80,15 @@ class CollectionToken(Base):
     #   "open"    — anyone with the link (super admin only)
     #   "company" — an authenticated employee of `company_id` (ADR-423 D2)
     scope       = Column(String(10), nullable=False, server_default="open", index=True)
+
+    # WHAT may be submitted, decided at creation and never inferred (ADR-439).
+    #   "addresses" — /submit, /check, /leaderboard
+    #   "routes"    — /submit-day
+    #
+    # Separate from `scope` because the two axes vary independently: scope is
+    # WHO may submit, this is WHAT they may submit. One combined enum would need
+    # a new value every time either axis gained one.
+    dataset     = Column(String(10), nullable=False, server_default="addresses", index=True)
     created_by_name = Column(String(100), nullable=True)
     created_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

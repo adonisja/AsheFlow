@@ -18,7 +18,7 @@ import {
   manifestLoad, manifestsForDate, nextRouteId, nowHM,
   putCrew, putDay, putManifest, putUnclaimed, setActiveBtr, toCSV,
   type LogRoute, type StoredManifest, type WalkerDay, markSubmitted, submittedProfiles, reopenSubmitted,
-  forgetSubmitted,
+  forgetSubmitted, recordSentDays, sentDaysForDate, type SentDay,
   type SubmittedProfile,
 } from '../utils/walkerLogDb';
 import {
@@ -169,8 +169,33 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *  having names on it. */
   const [handle, setHandle] = useState(() => collectorHandle());
 
+  /** Receipts for days already sent to a campaign from this device (ADR-438).
+   *  Per date, matching how the routes tab already works. */
+  const [sentDays, setSentDays] = useState<SentDay[]>([]);
+
+  /** The campaign link, remembered PER STUDY (ADR-439 D8).
+   *
+   *  One key for both pages was fine while a token worked everywhere. It no
+   *  longer does: a link is issued for one study, so a shared key means pasting
+   *  the route link on the address page silently replaces the address link, and
+   *  the next send 404s with nothing on screen explaining why. Scoping the key
+   *  lets a collector hold both at once, which is the actual situation for
+   *  anyone running both studies. */
+  const tokenKey = `walkerlog.collectToken.${dataset}`;
   const [collectToken, setCollectTokenState] = useState(
-    () => localStorage.getItem('walkerlog.collectToken') ?? '',
+    () => {
+      try {
+        // Falls back to the old shared key so a collector who already pasted a
+        // link keeps it — on the address page, which is what every existing
+        // token is now scoped to.
+        return localStorage.getItem(tokenKey)
+          ?? (dataset === 'addresses'
+            ? localStorage.getItem('walkerlog.collectToken') ?? ''
+            : '');
+      } catch {
+        return '';
+      }
+    },
   );
 
   /** Persists on EDIT, not only on a successful send.
@@ -183,12 +208,12 @@ export default function WalkerLog({ dataset = 'routes' }: {
   const setCollectToken = useCallback((v: string) => {
     setCollectTokenState(v);
     try {
-      if (v.trim()) localStorage.setItem('walkerlog.collectToken', v.trim());
-      else localStorage.removeItem('walkerlog.collectToken');
+      if (v.trim()) localStorage.setItem(tokenKey, v.trim());
+      else localStorage.removeItem(tokenKey);
     } catch {
       /* private window or storage disabled — the field still works this session */
     }
-  }, []);
+  }, [tokenKey]);
   const [sending, setSending] = useState(false);
   const [sendingDays, setSendingDays] = useState(false);
   /** Door keys the campaign has already received, as reported by the server on
@@ -283,6 +308,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
     // usable without a second choice.
     setActiveBtrState(saved && ms.some((m) => m.btr === saved) ? saved : (ms[0]?.btr ?? null));
     setNames(await knownNames());
+    // ADR-438. Safe inside this []-memoised callback, unlike the profile
+    // reconcile: it reads the DATE argument it was handed, not a token from
+    // component state, so there is no stale closure to capture.
+    setSentDays(await sentDaysForDate(d));
   }, []);
 
   /** Drops submitted rows the server no longer has (ADR-434).
@@ -936,6 +965,23 @@ export default function WalkerLog({ dataset = 'routes' }: {
     setError('');
     try {
       const r = await submitDays(collectToken.trim(), worth);
+      // ADR-438 D1. Record the RECEIPT, so "did that go?" is answered by
+      // looking rather than by sending again.
+      //
+      // `created` is only known when the batch is unambiguous: the server
+      // returns counts, not per-day outcomes, and it is deliberately "receipt
+      // only". One day sent, or a batch that landed entirely one way, is
+      // knowable; a mixed batch is not, and null says so rather than guessing.
+      const created: boolean | null =
+        r.replaced === 0 ? true
+        : r.accepted === r.replaced ? false
+        : null;
+      const now = new Date().toISOString();
+      await recordSentDays(worth.map((d) => ({
+        id: d.id, date: d.date, name: d.name,
+        routes: d.routes.length, sent_at: now, created,
+      })));
+      setSentDays(await sentDaysForDate(date));
       flash(
         `Sent ${r.accepted} day${r.accepted === 1 ? '' : 's'}`
         + (r.replaced ? `, updated ${r.replaced}` : '')
@@ -946,7 +992,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
     } finally {
       setSendingDays(false);
     }
-  }, [dayList, collectToken, flash]);
+  }, [dayList, collectToken, flash, date]);
 
   const exportAll = async (fmt: 'json' | 'csv' | 'xlsx') => {
     const all = await listAll();
@@ -1726,6 +1772,40 @@ export default function WalkerLog({ dataset = 'routes' }: {
                 a copy, not a handoff, and re-sending updates rather than
                 duplicating.
               </p>
+
+              {/* ADR-438 D1. What has already gone, so "did that send?" is answered
+                  by LOOKING rather than by sending again — which was the only way to
+                  find out, and the reason a collector would send a day twice.
+
+                  Says "sent", not "confirmed present": this device cannot ask whether
+                  the day still exists, because /walker-days is a super-admin read.
+                  Claiming more would be a promise the page cannot keep. */}
+              {sentDays.length > 0 && (
+                <div className="rounded-lg border border-border/60 bg-surface/40 p-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Sent from this device
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {sentDays.map((s) => (
+                      <li key={s.id} className="flex items-baseline justify-between gap-2 text-[11px]">
+                        <span className="truncate">
+                          {s.name}
+                          <span className="text-muted-foreground">
+                            {' · '}{s.routes} route{s.routes === 1 ? '' : 's'}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {new Date(s.sent_at).toLocaleTimeString([], {
+                            hour: 'numeric', minute: '2-digit',
+                          })}
+                          {/* Only stated when the batch made it knowable. */}
+                          {s.created === false && ' · updated'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </aside>
