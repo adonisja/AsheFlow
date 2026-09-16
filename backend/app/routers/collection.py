@@ -878,4 +878,31 @@ def list_collected_profiles(
         .limit(limit)
         .all()
     )
-    return [CollectedProfileOut.model_validate(r) for r in rows]
+
+    # ADR-430. How many observations each door on this PAGE has across the whole
+    # campaign. One grouped query over the page's keys, not a count per row, and
+    # not a count of the page itself — a pair split across a page boundary would
+    # otherwise read as two single observations.
+    keys = {r.door_key for r in rows if r.door_key}
+    counts: dict[str, int] = {}
+    if keys:
+        counts = dict(
+            db.query(
+                CollectedAddressProfile.door_key,
+                sa_func.count(CollectedAddressProfile.id),
+            )
+            .filter(
+                CollectedAddressProfile.token_id.in_({r.token_id for r in rows}),
+                CollectedAddressProfile.door_key.in_(keys),
+            )
+            .group_by(CollectedAddressProfile.door_key)
+            .all()
+        )
+
+    out = []
+    for r in rows:
+        item = CollectedProfileOut.model_validate(r)
+        item.observations = counts.get(r.door_key, 1)
+        item.closed = item.observations >= VERIFICATION_LIMIT
+        out.append(item)
+    return out

@@ -305,6 +305,19 @@ class CollectedProfileOut(BaseModel):
     company_id:     Optional[UUID]
     token_id:       UUID
     address:           str
+    # ADR-430. The folded comparison key, so the reader can group the rows that
+    # describe ONE door. Derived from an address the reader is already looking
+    # at, so it discloses nothing the row did not.
+    door_key:          str
+    # How many observations that door has across the WHOLE campaign, and
+    # whether that closes it to new collectors (ADR-420).
+    #
+    # Computed server-side rather than by counting the rows on screen: the
+    # listing is paged, so a door whose second observation falls on the next
+    # page would count as one and read as still open. A count that is right
+    # only for small campaigns is worse than no count.
+    observations:      int = 1
+    closed:            bool = False
     building_type:     str
     building_category: str
     has_security_desk: bool
