@@ -893,32 +893,72 @@ export default function CollectionData({ platform = true }: {
                   </button>
                 ))}
               </div>
-              {/* THE export surface. The collection pages have none — their
-                  data goes to the server, and a copy leaving on a collector's
-                  phone would be the record without the access control. */}
-              {((dataset === 'addresses' && profiles.length > 0)
-                || (dataset === 'days' && days.length > 0)) && (
-                <div className="flex items-center gap-1">
-                  {(['csv', 'json', 'xlsx'] as const).map((fmt) => (
-                    <button
-                      key={fmt}
-                      onClick={() => void download(fmt)}
-                      disabled={downloading}
-                      className="btn-secondary text-sm inline-flex items-center gap-1.5 disabled:opacity-50"
-                    >
-                      {/* Upload, not Download. lucide's Download arrow points
-                          INTO a tray (receiving) and Upload points OUT of it
-                          (sending) — so an EXPORT takes Upload. The walker log
-                          fixed this same inversion; this page reintroduced it.
-                          One convention, both pages. */}
-                      <Upload className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
-                      {fmt === 'xlsx' ? 'Excel' : fmt.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
+
+          {/* ADR-434 D3. Its own row, in the walker log's Export idiom — a
+              bordered panel with an uppercase title, a hint on the right, and
+              buttons carrying their file extension. It sat inline with the
+              Addresses/Days toggle, which put two unrelated jobs on one line
+              (choosing what to LOOK at, and taking a file AWAY) and left the
+              header cramped. One idiom for "take data out", in both places it
+              appears. */}
+          {((dataset === 'addresses' && profiles.length > 0)
+            || (dataset === 'days' && days.length > 0)) && (
+            <section className="rounded-xl border border-border bg-surface/40 p-3">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                  Export
+                </h3>
+                {/* WHICH campaign, said out loud. "All campaigns" and a single
+                    campaign produce very different files from an
+                    identical-looking button. The export already followed the
+                    selection; it simply never said so. */}
+                <span className="text-[11px] text-muted-foreground/70">
+                  {activeLabel ?? 'All campaigns'}
+                  {' · '}
+                  {dataset === 'addresses'
+                    ? `${profiles.length} address${profiles.length === 1 ? '' : 'es'}`
+                    : `${days.length} day${days.length === 1 ? '' : 's'}`}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {([
+                  { fmt: 'xlsx', label: 'Excel', sub: '.xlsx' },
+                  { fmt: 'csv',  label: 'CSV',   sub: '.csv'  },
+                  { fmt: 'json', label: 'JSON',  sub: '.json' },
+                ] as const).map((it) => (
+                  <button
+                    key={it.fmt}
+                    type="button"
+                    onClick={() => void download(it.fmt)}
+                    disabled={downloading}
+                    className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm hover:border-primary/60 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50"
+                  >
+                    {/* Upload, not Download. lucide's Download arrow points
+                        INTO a tray (receiving) and Upload points OUT of it
+                        (sending) — so an EXPORT takes Upload. */}
+                    <Upload
+                      aria-hidden="true"
+                      className={`h-4 w-4 shrink-0 text-muted-foreground ${downloading ? 'animate-pulse' : ''}`}
+                    />
+                    <span className="truncate">{it.label}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.sub}</span>
+                  </button>
+                ))}
+              </div>
+              {/* The filter note belongs on the control it is about: an export
+                  takes the whole campaign, which is NOT what the filtered table
+                  above is showing. Someone who filtered to "collectors
+                  disagree" and then exported would otherwise reasonably expect
+                  a file of just those. */}
+              {hasActiveFilters(filters) && dataset === 'addresses' && (
+                <p className="mt-2 text-[10px] text-muted-foreground/70">
+                  Exports the whole campaign, not the filtered rows above.
+                </p>
+              )}
+            </section>
+          )}
 
           {loadingRows ? (
             <SkeletonCard />

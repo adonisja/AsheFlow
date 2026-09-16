@@ -17,6 +17,7 @@ import {
   manifestLoad, manifestsForDate, nextRouteId, nowHM,
   putCrew, putDay, putManifest, putUnclaimed, setActiveBtr, toCSV,
   type LogRoute, type StoredManifest, type WalkerDay, markSubmitted, submittedProfiles, reopenSubmitted,
+  forgetSubmitted,
   type SubmittedProfile,
 } from '../utils/walkerLogDb';
 import {
@@ -34,6 +35,7 @@ import {
   emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress, BUILDING_TYPES, collectorHandle, rememberHandle} from '../utils/addressProfile';
 import {
   checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles, fetchLeaderboard,
+  findDeletedSubmissions,
 } from '../utils/collectionSubmit';
 import type { CheckResult, LeaderboardEntry } from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
@@ -219,6 +221,32 @@ export default function WalkerLog({ dataset = 'routes' }: {
   const [openRoutes, setOpenRoutes] = useState<Set<number>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
+  /** Reads the submitted list, dropping anything the server no longer has.
+   *
+   *  ADR-434. An admin can hard-delete a collected row (ADR-431) and nothing
+   *  told this device, so a deleted row stayed listed here forever — and
+   *  re-sending it would have recreated it as a NEW observation rather than
+   *  updating the original, because ADR-426's ownership lookup needs the row to
+   *  still exist. The deleted row would come back looking like a real second
+   *  visit.
+   *
+   *  Runs where the list is about to be READ — mount and after a submit —
+   *  rather than on a timer. A collection page is open for minutes at a time,
+   *  and polling for a rare deletion costs every device constant requests to
+   *  learn nothing.
+   */
+  const reconcileSubmitted = useCallback(async (): Promise<SubmittedProfile[]> => {
+    const rows = await submittedProfiles();
+    if (!collectToken.trim() || rows.length === 0) return rows;
+    const gone = await findDeletedSubmissions(
+      collectToken,
+      rows.map((r) => ({ id: r.id, address: r.address })),
+    );
+    if (gone.length === 0) return rows;
+    await forgetSubmitted(gone);
+    return rows.filter((r) => !gone.includes(r.id));
+  }, [collectToken]);
+
   const refreshSidebar = useCallback(async (d: string) => {
     setDayList(await listByDate(d));
     setUnclaimed(await getUnclaimed(d));
@@ -229,6 +257,13 @@ export default function WalkerLog({ dataset = 'routes' }: {
     setProfiles(await profilesForDate(d));
     // Not date-scoped: a collector wants to see everything they have sent,
     // and a profile is a fact about a building rather than about a day.
+    //
+    // The plain read, NOT reconcileSubmitted: this callback is memoised
+    // with an empty dep array, so it would capture the reconciler from
+    // first render, when collectToken was still empty — and the sweep
+    // would silently never run once a link was pasted. Exactly the
+    // stale-closure bug ADR-428 fixed on the leaderboard. Reconciliation
+    // is its own effect below, keyed on the token.
     setSubmitted(await submittedProfiles());
     const saved = await getActiveBtr(d);
     // Fall back to the first imported truck so a fresh import is immediately
@@ -236,6 +271,22 @@ export default function WalkerLog({ dataset = 'routes' }: {
     setActiveBtrState(saved && ms.some((m) => m.btr === saved) ? saved : (ms[0]?.btr ?? null));
     setNames(await knownNames());
   }, []);
+
+  /** Drops submitted rows the server no longer has (ADR-434).
+   *
+   *  Keyed on the token for the reason the comment below spells out: the
+   *  sidebar refresh is memoised with `[]` and cannot see a token pasted
+   *  later. `cancelled` guards the same race the ranking guards — a slow sweep
+   *  for an old campaign must not delete rows after the collector switched to
+   *  a new one. */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const rows = await reconcileSubmitted();
+      if (!cancelled) setSubmitted(rows);
+    })();
+    return () => { cancelled = true; };
+  }, [reconcileSubmitted]);
 
   /** The campaign ranking, refetched when the token changes.
    *
@@ -752,7 +803,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
       if (sent.length > 0) {
         await markSubmitted(sent);
         setProfiles((ps) => ps.filter((p) => !sentIds.has(p.id)));
-        setSubmitted(await submittedProfiles());
+        setSubmitted(await reconcileSubmitted());
       }
       // Refreshed after a submit so the collector sees their own count move.
       setBoard(await fetchLeaderboard(collectToken));
@@ -772,7 +823,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
     } finally {
       setSending(false);
     }
-  }, [profiles, collectToken, flash, verdicts]);
+  }, [profiles, collectToken, flash, verdicts, reconcileSubmitted]);
 
   // ── Build-first routes ─────────────────────────────────────────────────
   // The truck is usually there before the walkers, so a route gets built and
