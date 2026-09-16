@@ -179,14 +179,23 @@ export default function AddressProfileForm({
                 <p className="flex items-start gap-1.5 text-xs font-semibold text-warning">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>
-                    Already recorded
+                    {/* ADR-426. "You recorded this" and "someone recorded this"
+                        are different facts and want different actions: the
+                        first invites a correction, the second invites a second
+                        opinion. */}
+                    {verdict.mine
+                      ? 'You recorded this door'
+                      : 'Already recorded'}
                     {verdict.collected_on ? `, on ${verdict.collected_on}` : ''}.
-                    Another look is still useful.
+                    {verdict.mine
+                      ? ' Submitting again updates your entry.'
+                      : ' Another look is still useful.'}
                   </span>
                 </p>
                 <p className="mt-1 pl-5 text-[11px] text-warning/80">
-                  Fill it in as you find it. If it disagrees with what is there,
-                  that disagreement is the useful part.
+                  {verdict.mine
+                    ? 'Change what you need to and submit.'
+                    : 'Fill it in as you find it. If it disagrees with what is there, that disagreement is the useful part.'}
                 </p>
               </div>
             ) : alreadyKnown && (
@@ -417,10 +426,19 @@ export default function AddressProfileForm({
                 </label>
                 <input
                   value={profile.collected_by}
-                  placeholder="Your name"
+                  placeholder="An alias or handle"
                   onChange={(e) => set({ collected_by: e.target.value })}
                   className={`${INPUT} mt-1`}
                 />
+                {/* ADR-427. A handle, not a legal name. This value is stored,
+                    exported, and shown on the campaign's ranking — a real name
+                    would put a coworker's identity in all three for no
+                    analytical gain, since the point is telling observers apart
+                    rather than knowing who they are. */}
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Used to tell collectors apart and to rank the campaign. A
+                  nickname is better than your full name.
+                </p>
               </div>
             </div>
           </details>

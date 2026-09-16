@@ -116,6 +116,16 @@ class CollectionSubmitIn(BaseModel):
     token:    str = Field(..., min_length=16, max_length=64)
     profiles: list[CollectedProfileIn] = Field(..., min_length=1, max_length=100)
 
+    # ADR-426. Which device is submitting, so a collector can correct their own
+    # entry after a door locks. Optional: a client that does not send one simply
+    # cannot edit, which is the pre-ADR-426 behaviour.
+    #
+    # NOT trusted as an identity. It decides one thing — whether this row is
+    # yours to update — and the worst a forged value achieves is overwriting a
+    # row whose device_id the forger already knew, which is not a secret worth
+    # more than the row itself.
+    device_id: Optional[str] = Field(None, min_length=8, max_length=64)
+
 
 class CollectionSubmitOut(BaseModel):
     """What the submitter is told.
@@ -140,6 +150,11 @@ class CollectionSubmitOut(BaseModel):
     duplicate: int
     duplicate_addresses: list[str] = []
 
+    # ADR-426. Rows this device already owned and has now corrected. Reported
+    # apart from `accepted` so a collector can tell "I added two doors" from
+    # "I fixed the one I got wrong".
+    updated: int = 0
+
 
 class CollectionCheckIn(BaseModel):
     """Ask whether one address is already collected under this campaign.
@@ -155,6 +170,18 @@ class CollectionCheckIn(BaseModel):
     token:   str = Field(..., min_length=16, max_length=64)
     address: str = Field(..., min_length=3, max_length=200)
 
+    # ADR-426. Optional: without it the answer is simply "is this door locked
+    # for anyone", which is the pre-ADR-426 behaviour.
+    device_id: Optional[str] = Field(None, min_length=8, max_length=64)
+
+
+TOP_COLLECTORS = 3
+"""How many collectors the campaign ranking shows (ADR-427).
+
+Three, because it is an encouragement rather than a scoreboard: a longer list
+tells the person in eleventh place exactly where they stand, which is not the
+point.
+"""
 
 VERIFICATION_LIMIT = 2
 """How many independent observations a door may collect before it is closed.
@@ -189,7 +216,30 @@ class CollectionCheckOut(BaseModel):
     # collector can be told "one more needed" instead of being turned away from
     # a door that still wants verifying.
     count:  int  = 0
+    # NOT locked to a device that already owns a row here — see check_address.
     locked: bool = False
+    # ADR-426. This device has already submitted this door, so re-submitting
+    # updates its row. Lets the form say "you recorded this" rather than
+    # "someone did".
+    mine:   bool = False
+
+
+class LeaderboardEntryOut(BaseModel):
+    """One collector's standing in a campaign (ADR-427).
+
+    A HANDLE and a COUNT. Not the addresses they collected, not when, not which
+    device — a ranking needs neither, and a public endpoint returning more
+    would be describing the table rather than summarising it.
+    """
+    handle: str
+    count:  int
+
+
+class LeaderboardIn(BaseModel):
+    """Ask for a campaign's top collectors."""
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(..., min_length=16, max_length=64)
 
 
 class CollectionTokenCreate(BaseModel):
@@ -247,7 +297,12 @@ class CollectedProfileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id:             UUID
-    company_id:     UUID
+    # ADR-424. NULL for an open campaign. ADR-423 made the COLUMN nullable and
+    # left this read schema declaring a bare UUID, so the first profile
+    # submitted to an open campaign 500'd the super-admin listing on
+    # `model_validate` — and a 500 carries no CORS headers, so the browser
+    # reported it as a CORS failure rather than a server error.
+    company_id:     Optional[UUID]
     token_id:       UUID
     address:           str
     building_type:     str
@@ -269,11 +324,23 @@ class CollectedProfileOut(BaseModel):
 
 
 class CollectionTokenSummary(BaseModel):
-    """A campaign and how much has arrived under it.
+    """A campaign, how much has arrived under it, and its link.
 
-    `token` is deliberately ABSENT. The secret is returned once at creation and
-    never again; a listing that echoed live tokens would turn one compromised
-    admin session into every campaign at once.
+    ADR-424 REVERSES ADR-415's "returned once at creation and never again".
+
+    That rule treated the token as a password. It is not: an OPEN campaign's
+    link is handed to a dozen collectors by design, pasted into group chats and
+    typed off a phone screen — it is a shared URL, closer to a Google Doc
+    "anyone with the link" than to a credential. Withholding it from the one
+    person authorised to manage campaigns protected nothing while guaranteeing
+    that a mislaid link meant revoking and re-issuing to everyone who had it.
+
+    The original worry — one compromised admin session exposing every campaign
+    — is real but was already true: that session can CREATE campaigns, revoke
+    them, and read every collected address. A listing that also shows the links
+    adds nothing an attacker could not already do, and the gate that matters
+    (`_scope_reads`: super admin sees all, a company admin sees only their own)
+    is unchanged.
     """
     model_config = ConfigDict(from_attributes=True)
 
@@ -288,3 +355,8 @@ class CollectionTokenSummary(BaseModel):
     created_at:  object
     created_by_name: Optional[str]
     submission_count: int = 0
+
+    # ADR-424. The link, so it can be re-copied. A revoked campaign returns
+    # None: its link no longer works, and showing a dead string invites someone
+    # to send it.
+    token: Optional[str] = None

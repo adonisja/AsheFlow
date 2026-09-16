@@ -160,12 +160,16 @@ class TestTheResponseSaysNothingUseful:
         supplied, not a read — it supports no enumeration, and learning one bit
         costs a complete profile and a row against the daily cap.
 
+        `updated` was added by ADR-426: how many of the caller's OWN rows this
+        request corrected. It describes what the caller just did, not what the
+        table holds.
+
         The set is pinned exactly so a field that DOES describe the table (an
         id, a count of everything, a neighbouring address) fails here.
         """
         from app.schemas.collection import CollectionSubmitOut
         assert set(CollectionSubmitOut.model_fields) == {
-            "accepted", "duplicate", "duplicate_addresses",
+            "accepted", "duplicate", "duplicate_addresses", "updated",
         }
 
     def test_duplicate_addresses_only_ever_echoes_the_request(self):
@@ -322,11 +326,31 @@ class TestThePlatformOwnerCanReadWhatArrived:
                 f"{fn.__name__} does not scope its read"
             )
 
-    def test_the_token_value_is_never_listed(self):
-        """The secret is returned once at creation. A listing that echoed live
-        tokens would turn one compromised admin session into every campaign."""
+    def test_a_revoked_campaign_shows_no_link(self):
+        """ADR-424 reverses ADR-415's "returned once at creation, never again".
+
+        That rule treated the token as a password. It is not: an open
+        campaign's link is handed to a dozen collectors by design and pasted
+        into group chats — a shared URL, not a credential. Withholding it from
+        the one person authorised to manage campaigns protected nothing while
+        guaranteeing that a mislaid link meant revoking and re-issuing to
+        everyone who had it.
+
+        What the listing must still refuse is a REVOKED link: the string
+        survives in the row but no longer works, and showing it invites someone
+        to send a link that will 404 for whoever receives it.
+        """
+        import inspect
+        from app.routers import collection as C
         from app.schemas.collection import CollectionTokenSummary
-        assert "token" not in CollectionTokenSummary.model_fields
+
+        assert "token" in CollectionTokenSummary.model_fields, (
+            "the listing carries the link so it can be re-copied (ADR-424)"
+        )
+        src = inspect.getsource(C.list_tokens)
+        assert "row.token = None" in src and "revoked_at is not None" in src, (
+            "a revoked campaign must not show its link"
+        )
 
     def test_profile_reads_are_paged(self):
         """This table grows one row per building per collector per day; an
@@ -360,11 +384,15 @@ class TestTheDuplicateCheckIsNotAnOracle:
         worse — without it a collector is turned away from a door that still
         needs verifying, or walks to one that is closed.
 
+        `mine` was added by ADR-426: whether THIS DEVICE already submitted
+        this door. It tells the caller about their own past submission, which
+        they made — not about anyone else's.
+
         The set is pinned exactly so the NEXT field has to argue for itself.
         """
         from app.schemas.collection import CollectionCheckOut
         assert set(CollectionCheckOut.model_fields) == {
-            "known", "collected_on", "count", "locked",
+            "known", "collected_on", "count", "locked", "mine",
         }
 
     def test_the_check_is_scoped_to_the_callers_own_campaign(self):
@@ -667,3 +695,137 @@ class TestCampaignScope:
                     f"{fn.__name__} uses {blocking.__name__}, which 401s on a "
                     f"missing Authorization header"
                 )
+
+
+class TestNullableColumnsAreOptionalInResponses:
+    """ADR-424 regression, and the general shape of it.
+
+    ADR-423 made `company_id` nullable on three tables so an open campaign
+    could carry no tenant — and left `CollectedProfileOut.company_id` declared
+    as a bare `UUID`. The first profile submitted to an open campaign 500'd the
+    super-admin listing on `model_validate`.
+
+    It surfaced as a CORS error in the browser, because a 500 raised inside the
+    error middleware never reaches the CORS middleware and so carries no
+    `Access-Control-Allow-Origin` header. Hours went into the wrong layer.
+
+    A field-by-field comparison catches the whole class: a response schema
+    mirroring a nullable column must accept None.
+    """
+
+    def test_every_response_field_accepts_what_its_column_allows(self):
+        import typing
+
+        from app.models.collection import (
+            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+        )
+        from app.schemas.collection import CollectedProfileOut, CollectionTokenSummary
+        from app.schemas.walker_day import CollectedWalkerDayOut
+
+        pairs = [
+            (CollectedProfileOut, CollectedAddressProfile),
+            (CollectionTokenSummary, CollectionToken),
+            (CollectedWalkerDayOut, CollectedWalkerDay),
+        ]
+        mismatches = []
+        for schema, model in pairs:
+            columns = model.__table__.columns
+            for name, field in schema.model_fields.items():
+                if name not in columns or not columns[name].nullable:
+                    continue
+                annotation = field.annotation
+                # `object` is the escape hatch a few fields use for datetimes;
+                # it accepts None, so it is not a mismatch.
+                accepts_none = (
+                    annotation is object
+                    or type(None) in typing.get_args(annotation)
+                )
+                if not accepts_none:
+                    mismatches.append(
+                        f"{schema.__name__}.{name} is {annotation} but "
+                        f"{model.__tablename__}.{name} is nullable"
+                    )
+
+        assert not mismatches, (
+            "these response fields will 500 on a NULL:\n  "
+            + "\n  ".join(mismatches)
+        )
+
+
+class TestACollectorCanCorrectTheirOwnEntry:
+    """ADR-426. The lock stops a third OBSERVATION, not a correction."""
+
+    def test_the_device_id_is_bounded_and_optional(self):
+        """Optional so a client that sends none behaves as before; bounded like
+        every other free-text field at this trust boundary."""
+        from app.schemas.collection import CollectionSubmitIn
+        f = CollectionSubmitIn.model_fields["device_id"]
+        assert f.default is None
+        with pytest.raises(ValidationError):
+            CollectionSubmitIn(token="k" * 32, device_id="short",
+                               profiles=[{"address": "1 A St", "building_type": "walkup",
+                                          "workloads": ["door_to_door"],
+                                          "collected_on": "2026-09-15"}])
+
+    def test_the_owned_row_check_runs_before_the_lock(self):
+        """Ordering IS the decision. If the lock were checked first, a
+        collector's correction to their own typo would be refused as a
+        duplicate — which is what happened before ADR-426."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.submit_profiles)
+        assert src.index("mine = owned.get(key)") < src.index("if key in locked_keys:"), (
+            "an own-row update must be resolved before the verification lock"
+        )
+
+    def test_an_update_does_not_move_the_collection_date(self):
+        """The date records when the door was SEEN. Correcting a typo days
+        later does not change that."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.submit_profiles)
+        update_block = src[src.index("mine = owned.get(key)"):src.index("if key in locked_keys:")]
+        # ASSIGNMENTS only. A first version of this matched the comment that
+        # explains the rule, so it failed against correct code — the string
+        # "collected_on" appears in prose as well as in statements.
+        assignments = [
+            line.strip() for line in update_block.splitlines()
+            if line.strip().startswith("mine.")
+        ]
+        assert not any("collected_on" in a for a in assignments), (
+            f"an update must not rewrite collected_on; found {assignments}"
+        )
+        # And it must genuinely update the rest, or the test proves nothing.
+        assert any("mine.building_type" in a for a in assignments)
+
+    def test_the_check_reports_ownership_separately_from_the_lock(self):
+        """A door this device owns is not locked TO IT, and the form needs both
+        facts to say "you recorded this" rather than "someone did"."""
+        from app.schemas.collection import CollectionCheckOut
+        assert {"locked", "mine"} <= set(CollectionCheckOut.model_fields)
+
+
+class TestTheCampaignRanking:
+    """ADR-427. Handles and counts, never addresses."""
+
+    def test_the_response_carries_no_collected_data(self):
+        from app.schemas.collection import LeaderboardEntryOut
+        assert set(LeaderboardEntryOut.model_fields) == {"handle", "count"}
+
+    def test_it_is_scoped_to_one_campaign(self):
+        """A ranking must not become a way to enumerate other campaigns."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.campaign_leaderboard)
+        assert "CollectedAddressProfile.token_id == tok.id" in src
+        assert "_authorise_scope(tok, caller)" in src, (
+            "a company campaign's ranking still requires a login"
+        )
+
+    def test_unnamed_submissions_are_omitted(self):
+        """A blank handle is not a competitor, and a large unnamed row at the
+        top would read as one person dominating."""
+        import inspect
+        from app.routers import collection as C
+        src = inspect.getsource(C.campaign_leaderboard)
+        assert "isnot(None)" in src and '!= ""' in src

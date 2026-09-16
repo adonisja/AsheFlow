@@ -378,6 +378,34 @@ export function canonicalAddress(address: string): string {
   return s.replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
+/** The handle this device collects under (ADR-427).
+ *
+ *  Remembered so it is typed once a campaign rather than once an address, and
+ *  so the ranking can attribute a device's submissions to a stable name. It is
+ *  a HANDLE by design — the field asks for an alias, because the value is
+ *  stored, exported and shown on a leaderboard, and none of those want a
+ *  coworker's real name.
+ */
+const HANDLE_KEY = 'walkerlog.collectorHandle';
+
+export function collectorHandle(): string {
+  try {
+    return localStorage.getItem(HANDLE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function rememberHandle(handle: string): void {
+  try {
+    const clean = handle.trim();
+    if (clean) localStorage.setItem(HANDLE_KEY, clean);
+    else localStorage.removeItem(HANDLE_KEY);
+  } catch {
+    /* private window — the handle simply does not persist */
+  }
+}
+
 const KNOWN_KEY = 'walkerlog.knownAddresses';
 
 /** Door keys the server reported as already-received, remembered per browser.
