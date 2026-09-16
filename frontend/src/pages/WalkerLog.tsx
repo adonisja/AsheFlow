@@ -31,11 +31,11 @@ import LabelScanner from '../components/walkerlog/LabelScanner';
 import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
-  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress, BUILDING_TYPES} from '../utils/addressProfile';
+  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress, BUILDING_TYPES, collectorHandle, rememberHandle} from '../utils/addressProfile';
 import {
-  checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles,
+  checkAddress, dayWorthSending, submitConfigured, submitDays, submitProfiles, fetchLeaderboard,
 } from '../utils/collectionSubmit';
-import type { CheckResult } from '../utils/collectionSubmit';
+import type { CheckResult, LeaderboardEntry } from '../utils/collectionSubmit';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
 /** Manual walker/route tracker — a research instrument, not an operational page.
@@ -195,6 +195,9 @@ export default function WalkerLog({ dataset = 'routes' }: {
   /** What this device has already sent (ADR-425). Kept after the working cards
    *  clear, so a collector can see and correct what they submitted. */
   const [submitted, setSubmitted] = useState<SubmittedProfile[]>([]);
+  /** The campaign's top collectors (ADR-427). Encouragement, not data — it
+   *  fails soft to an empty list and never blocks collecting. */
+  const [board, setBoard] = useState<LeaderboardEntry[]>([]);
   /** Profile id currently being checked, so the field can say so. */
   const [checking, setChecking] = useState<string | null>(null);
   /** True when this date was explicitly cleared — suppresses the bundled
@@ -223,6 +226,7 @@ export default function WalkerLog({ dataset = 'routes' }: {
     // Not date-scoped: a collector wants to see everything they have sent,
     // and a profile is a fact about a building rather than about a day.
     setSubmitted(await submittedProfiles());
+    if (collectToken.trim()) setBoard(await fetchLeaderboard(collectToken));
     const saved = await getActiveBtr(d);
     // Fall back to the first imported truck so a fresh import is immediately
     // usable without a second choice.
@@ -544,7 +548,9 @@ export default function WalkerLog({ dataset = 'routes' }: {
   }, []);
 
   const addProfile = useCallback(async () => {
-    const p = emptyProfile(date);
+    // Prefilled from the device's remembered handle (ADR-427): a collector
+    // types it once a campaign, not once an address.
+    const p = { ...emptyProfile(date), collected_by: collectorHandle() };
     // A stable id before an address exists — otherwise two blank rows collide
     // on `${date}|` and the second overwrites the first.
     p.id = `${date}|new-${Date.now()}`;
@@ -561,6 +567,10 @@ export default function WalkerLog({ dataset = 'routes' }: {
    *
    *  Re-keying happens in `rekeyProfile`, on blur. */
   const commitProfile = useCallback(async (p: AddressProfile) => {
+    // The handle sticks to the device. Written on every save rather than on a
+    // dedicated action: there is no "set my handle" step, and the last one
+    // typed is the one they mean.
+    if (p.collected_by.trim()) rememberHandle(p.collected_by);
     await saveProfile(p);
   }, [saveProfile]);
 
@@ -726,11 +736,18 @@ export default function WalkerLog({ dataset = 'routes' }: {
         setProfiles((ps) => ps.filter((p) => !sentIds.has(p.id)));
         setSubmitted(await submittedProfiles());
       }
+      // Refreshed after a submit so the collector sees their own count move.
+      setBoard(await fetchLeaderboard(collectToken));
       flash(
-        `Submitted ${r.accepted} address${r.accepted === 1 ? '' : 'es'}`
-        + (r.duplicate ? ` (${r.duplicate} already recorded)` : '')
-        + (held ? `, held back ${held}` : '')
-        + '.',
+        [
+          r.accepted ? `Submitted ${r.accepted} address${r.accepted === 1 ? '' : 'es'}` : '',
+          // ADR-426: an update is not a new observation, and saying so is the
+          // difference between "I added two doors" and "I fixed the one I got
+          // wrong".
+          r.updated ? `updated ${r.updated}` : '',
+          r.duplicate ? `${r.duplicate} already recorded` : '',
+          held ? `held back ${held}` : '',
+        ].filter(Boolean).join(', ') + '.',
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send.');
@@ -1096,6 +1113,29 @@ export default function WalkerLog({ dataset = 'routes' }: {
 
       {tab === 'addresses' ? (
         <section className="card p-4 space-y-3">
+          {/* ADR-427. The campaign's top three collectors.
+              
+              Handles, not names: the Collected by field asks for an alias and
+              says why, so this shows "Sparky — 14" rather than putting a
+              coworker's real name in front of everyone holding the link.
+              
+              Hidden until someone has submitted under a handle — an empty
+              podium is worse than no podium. */}
+          {board.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Top collectors
+              </span>
+              {board.map((e, i) => (
+                <span key={e.handle} className="text-sm">
+                  <span aria-hidden>{['🥇', '🥈', '🥉'][i] ?? '·'}</span>{' '}
+                  <span className={i === 0 ? 'font-semibold' : ''}>{e.handle}</span>
+                  <span className="text-muted-foreground"> {e.count}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h2 className="text-sm font-semibold">Address profiles</h2>

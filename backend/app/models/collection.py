@@ -153,6 +153,18 @@ class CollectedAddressProfile(Base):
     # Free text, not a user id — the submitter has no account. Lets a later
     # analysis weight by observer without pretending to identify one.
     collected_by = Column(String(100), nullable=True)
+
+    # ADR-426. The device that submitted this row, so a collector can correct
+    # their OWN entry after the door is locked.
+    #
+    # NOT an identity: a random id the page generates once and keeps in
+    # localStorage. It says "the browser that sent this", nothing about who was
+    # holding it, and clearing site data loses the ability to edit — which is
+    # the honest consequence of not having accounts here.
+    #
+    # Indexed with door_key because the only query is "did THIS device already
+    # submit THIS door under this campaign".
+    device_id = Column(String(64), nullable=True, index=True)
     collected_on = Column(Date, nullable=False)
 
     submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
