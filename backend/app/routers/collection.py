@@ -973,6 +973,149 @@ def delete_profiles_by_device(
     return {"deleted": len(rows)}
 
 
+def _campaign_for_cleanup(db, token_id: str, current_user, caller) -> CollectionToken:
+    """The campaign, if this caller may destroy its data (ADR-437 D2).
+
+    The revoke gate is the point: purging a LIVE campaign races the collectors
+    still using it, and submissions landing seconds after the purge become
+    indistinguishable from data meant to survive. A silent partial wipe is worse
+    than either outcome, so an active link is refused with the remedy in the
+    message rather than being quietly allowed.
+    """
+    tok = (
+        _scope_reads(db.query(CollectionToken), CollectionToken, current_user, caller)
+        .filter(CollectionToken.id == token_id)
+        .first()
+    )
+    if tok is None:
+        raise HTTPException(status_code=404, detail="Collection link not found.")
+    if tok.revoked_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Revoke this link before purging or deleting its data.",
+        )
+    return tok
+
+
+def _count_campaign_rows(db, token_id) -> tuple[int, int]:
+    """How much is about to be destroyed.
+
+    Counted BEFORE the delete and never after: both child tables carry
+    ondelete="CASCADE" on token_id, so the rows are gone at the DATABASE level
+    without the ORM ever seeing them. A count taken afterwards is always zero,
+    and an audit entry that cannot say what it destroyed is not an audit entry.
+    """
+    profiles = (
+        db.query(sa_func.count(CollectedAddressProfile.id))
+        .filter(CollectedAddressProfile.token_id == token_id)
+        .scalar()
+    ) or 0
+    days = (
+        db.query(sa_func.count(CollectedWalkerDay.id))
+        .filter(CollectedWalkerDay.token_id == token_id)
+        .scalar()
+    ) or 0
+    return profiles, days
+
+
+@router.delete("/tokens/{token_id}/data", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
+def purge_campaign_data(
+    request: Request,
+    token_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
+):
+    """Empty a campaign, keeping the campaign itself. ADR-437 D1.
+
+    THE CLEANUP AT THE END OF A MIGRATION. The exports are the migration path
+    and had nothing at the end of them: a finished campaign's rows sat in
+    `collected_address_profiles` — customer delivery addresses that ADR-415
+    calls a quarantine to be stripped later — with no mechanism for "later".
+
+    Keeps the token row deliberately. After a migration the rows are a
+    liability and the RECORD that the survey ran (its label, dates and cap) is
+    the useful residue. Deleting both would mean freeing space also erases the
+    evidence a campaign existed, which is the wrong trade for the common case;
+    `delete_campaign` below is for when that IS what you want.
+
+    The audit carries COUNTS, not addresses (ADR-437 D3). ADR-431 D3 put row
+    content in the audit for a single delete because one observation is
+    recoverable information; 400 addresses in a JSONB blob is a copy of the
+    quarantine inside the audit log, which defeats the purge.
+    """
+    tok = _campaign_for_cleanup(db, token_id, current_user, caller)
+    profiles, days = _count_campaign_rows(db, tok.id)
+    if profiles == 0 and days == 0:
+        raise HTTPException(status_code=409, detail="This campaign holds no data.")
+
+    write_audit(
+        db,
+        action_type="collection.campaign.purge",
+        target_table="collection_tokens",
+        target_id=str(tok.id),
+        actor_id=str(caller.id) if caller else None,
+        company_id=str(tok.company_id) if tok.company_id else None,
+        detail={"label": tok.label, "profiles": profiles, "walker_days": days},
+    )
+    # Bulk DELETEs rather than loading every row to delete it one at a time —
+    # a 500-row campaign should not become 500 ORM objects to destroy them.
+    db.query(CollectedAddressProfile).filter(
+        CollectedAddressProfile.token_id == tok.id
+    ).delete(synchronize_session=False)
+    db.query(CollectedWalkerDay).filter(
+        CollectedWalkerDay.token_id == tok.id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"profiles": profiles, "walker_days": days}
+
+
+@router.delete("/tokens/{token_id}", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
+def delete_campaign(
+    request: Request,
+    token_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
+):
+    """Remove a campaign and everything collected under it. ADR-437 D1.
+
+    For a campaign that should not exist — a test, a mistake, a duplicate link
+    — rather than one whose data has been migrated out. That is `purge`.
+
+    THE CASCADE IS WHY THIS MUST COUNT FIRST. Both child tables declare
+    ondelete="CASCADE" on token_id and there are no ORM relationships, so
+    deleting the token takes every profile and walker-day with it at the
+    database level, invisibly to the application. The cascade is correct;
+    issuing it blind is not, so the rows are counted and audited before the
+    delete rather than discovered missing after it.
+    """
+    tok = _campaign_for_cleanup(db, token_id, current_user, caller)
+    profiles, days = _count_campaign_rows(db, tok.id)
+
+    write_audit(
+        db,
+        action_type="collection.campaign.delete",
+        target_table="collection_tokens",
+        target_id=str(tok.id),
+        actor_id=str(caller.id) if caller else None,
+        company_id=str(tok.company_id) if tok.company_id else None,
+        detail={
+            "label": tok.label,
+            "scope": tok.scope,
+            "profiles": profiles,
+            "walker_days": days,
+        },
+    )
+    # The FK cascade removes the children. Counted above, so the audit records
+    # what this destroyed even though the ORM never loads the rows.
+    db.delete(tok)
+    db.commit()
+    return {"deleted": True, "profiles": profiles, "walker_days": days}
+
+
 @router.get("/profiles", status_code=status.HTTP_200_OK)
 @limiter.limit("60/minute")
 def list_collected_profiles(

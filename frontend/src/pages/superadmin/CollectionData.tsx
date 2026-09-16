@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import * as XLSX from 'xlsx';
 import {
   ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock, Trash2,
-  ChevronDown, ChevronRight, ChevronUp, X, Rows3, AlertTriangle,
+  ChevronDown, ChevronRight, ChevronUp, X, Rows3, AlertTriangle, Eraser,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -526,6 +526,74 @@ export default function CollectionData({ platform = true }: {
   const [toDelete, setToDelete] = useState<CollectedProfile | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  /** The campaign queued for cleanup, and which of the two actions. ADR-437. */
+  const [cleanup, setCleanup] = useState<
+    { token: CollectionTokenSummary; mode: 'purge' | 'delete' } | null
+  >(null);
+  /** What the admin has typed to confirm. ADR-437 D4 — a typed confirmation is
+   *  warranted HERE where ADR-431 rejected it for a single row: this destroys
+   *  weeks of field work that cannot be re-walked, it happens a handful of
+   *  times ever, and the blast radius is every row rather than one. */
+  const [cleanupTyped, setCleanupTyped] = useState('');
+
+  const closeCleanup = useCallback(() => {
+    setCleanup(null);
+    setCleanupTyped('');
+  }, []);
+
+  /** Escape closes the cleanup dialog, and focus lands inside it on open.
+   *
+   *  ConfirmDialog guarantees this for every other confirm on the page; this
+   *  one is hand-rolled (it needs a typed input, which that component cannot
+   *  host), so the guarantees have to be restated rather than inherited.
+   *  Without them a keyboard user is trapped in a modal that destroys a
+   *  campaign — the exact failure ConfirmDialog was written to prevent.
+   *
+   *  Focus goes to the TEXT INPUT, not the confirm button: the input is what
+   *  the dialog is asking for, and the destructive button is disabled until it
+   *  is filled in anyway. */
+  const cleanupInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!cleanup) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeCleanup(); };
+    document.addEventListener('keydown', onKey);
+    cleanupInputRef.current?.focus();
+    return () => document.removeEventListener('keydown', onKey);
+  }, [cleanup, closeCleanup]);
+
+  /** Empties a campaign, or removes it entirely (ADR-437).
+   *
+   *  Both are gated server-side on the link being revoked, so the control only
+   *  appears on a revoked campaign — offering one that would 409 is worse than
+   *  not offering it.
+   */
+  const runCleanup = async () => {
+    if (!cleanup) return;
+    setDeleting(true);
+    try {
+      const { token, mode } = cleanup;
+      await axiosClient.delete(
+        mode === 'purge'
+          ? `/collection/tokens/${token.id}/data`
+          : `/collection/tokens/${token.id}`,
+      );
+      setCleanup(null);
+      setCleanupTyped('');
+      // A deleted campaign cannot stay selected, and a purged one now holds
+      // nothing — either way both lists have to be re-read.
+      if (mode === 'delete' && activeToken === token.id) setActiveToken(null);
+      await loadTokens();
+      await loadProfiles(mode === 'delete' ? null : activeToken);
+      setError('');
+    } catch (e) {
+      setError(errorText(e, 'Could not clean up that campaign.'));
+      setCleanup(null);
+      setCleanupTyped('');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   /** The device whose rows are queued for bulk removal, or null. ADR-435. */
   const [purgeDevice, setPurgeDevice] = useState<{ device: string; rows: number } | null>(null);
 
@@ -854,6 +922,20 @@ export default function CollectionData({ platform = true }: {
                         className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
                       >
                         <Ban className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {/* ADR-437. Cleanup appears only once the link is REVOKED,
+                        mirroring the server's gate rather than offering a control that
+                        would 409. Purging a live campaign races its collectors: rows land
+                        seconds after the wipe and are indistinguishable from data meant to
+                        survive. */}
+                    {dead && (
+                      <button
+                        onClick={() => setCleanup({ token: t, mode: 'purge' })}
+                        title="Clean up. Empty this campaign or remove it."
+                        className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
+                      >
+                        <Eraser className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </li>
@@ -1497,6 +1579,93 @@ export default function CollectionData({ platform = true }: {
           test submission from a 30-day survey is neither — the friction would
           be trained away on exactly the person who deletes most. The address is
           what catches the real error. */}
+      {/* ADR-437 D4. Its own dialog rather than ConfirmDialog: that component
+          takes a plain-string message and cannot host the typed confirmation,
+          and widening it for one caller would give every other confirm a mode
+          it does not want.
+
+          A typed confirmation IS warranted here, where ADR-431 D2 rejected one
+          for a single row. NN/g reserves it for the most dangerous and RARE
+          actions: this destroys weeks of field work that cannot be re-walked,
+          happens a handful of times ever, and takes every row rather than one.
+          The counts are stated because "412 addresses and 18 logged days" is
+          what makes the decision, not the campaign's name. */}
+      {cleanup && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cleanup-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        >
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-black/40"
+            onClick={closeCleanup}
+          />
+          <div className="relative w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-lg">
+            <h2 id="cleanup-title" className="text-sm font-semibold">
+              {cleanup.mode === 'purge' ? 'Empty this campaign?' : 'Delete this campaign?'}
+            </h2>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {cleanup.mode === 'purge'
+                ? `Removes every address and logged day from ${cleanup.token.label}. The campaign and its link history stay, so the record that it ran survives.`
+                : `Removes ${cleanup.token.label} and everything collected under it.`}
+              {' Export first if the data has not been migrated. This cannot be undone.'}
+            </p>
+
+            {/* The two actions are one dialog, because the reader is deciding
+                BETWEEN them — and seeing "the campaign stays" next to "the
+                campaign goes" is what makes the difference legible. */}
+            <div className="mt-3 flex gap-1.5 text-xs">
+              {(['purge', 'delete'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setCleanup({ ...cleanup, mode: m })}
+                  aria-pressed={cleanup.mode === m}
+                  className={`rounded-full border px-3 py-1.5 transition-colors ${
+                    cleanup.mode === m
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-input bg-background text-muted-foreground hover:border-primary'
+                  }`}
+                >
+                  {m === 'purge' ? 'Empty it' : 'Delete it'}
+                </button>
+              ))}
+            </div>
+
+            <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Type the campaign name to confirm
+            </label>
+            <input
+              ref={cleanupInputRef}
+              value={cleanupTyped}
+              onChange={(e) => setCleanupTyped(e.target.value)}
+              placeholder={cleanup.token.label}
+              className="mt-1 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeCleanup}
+                className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm hover:border-primary"
+              >
+                Keep it
+              </button>
+              <button
+                type="button"
+                onClick={() => void runCleanup()}
+                disabled={deleting || cleanupTyped.trim() !== cleanup.token.label}
+                className="rounded-lg bg-danger px-3 py-1.5 text-sm text-white transition-opacity disabled:opacity-40"
+              >
+                {cleanup.mode === 'purge' ? 'Empty it' : 'Delete it'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Names the DEVICE and the count, and says the campaign is the limit of
           the blast radius — the two facts that decide whether this is safe to
           press. ADR-435. */}
