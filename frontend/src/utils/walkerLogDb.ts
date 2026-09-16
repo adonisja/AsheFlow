@@ -15,7 +15,7 @@
  */
 
 const DB_NAME = 'asheflow_walker_log';
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 const STORE = 'walker_days';
 /** Routes built before anyone picked them up, keyed by date.
  *
@@ -65,6 +65,8 @@ const PROFILES = 'address_profiles';
  *  collector keeps a record of what they sent — and can correct one by
  *  re-submitting it, which the server upserts. */
 const SUBMITTED = 'submitted_profiles';
+/** ADR-438. RECEIPTS for days that were sent — not copies of them. */
+const SENT_DAYS = 'submitted_days';
 
 import { hydrateProfile } from './addressProfile';
 import type { AddressProfile } from './addressProfile';
@@ -199,6 +201,19 @@ export const RTS_CODES = [
 export const rtsLabel = (code: string): string =>
   RTS_CODES.find((c) => c.value === code)?.label ?? code;
 
+/** Whether this reason means the package comes back tomorrow (ADR-438 D3).
+ *
+ *  Mirrors _REATTEMPTABLE_TYPES server-side, where it is DERIVED from the type
+ *  and never taken from a client. Read-only here: this answers "what does this
+ *  code mean", not "what should happen", so a reader of the log sees the
+ *  consequence without anyone being able to set it.
+ *
+ *  An unknown code returns false. A reason this build does not recognise is one
+ *  the server may have added since; claiming it will be reattempted is a
+ *  stronger statement than the data supports. */
+export const rtsReattemptable = (code: string): boolean =>
+  RTS_CODES.find((c) => c.value === code)?.reattemptable ?? false;
+
 export const dayId = (date: string, name: string): string =>
   `${date}|${name.trim().toLowerCase()}`;
 
@@ -237,6 +252,12 @@ function open(): Promise<IDBDatabase> {
       // v6.
       if (!db.objectStoreNames.contains(PROFILES)) {
         const st = db.createObjectStore(PROFILES, { keyPath: 'id' });
+        st.createIndex('by_date', 'date', { unique: false });
+      }
+      // v8. ADR-438 — receipts for sent days. Additive, so an existing device
+      // simply has none, which reads correctly as "nothing sent yet".
+      if (!db.objectStoreNames.contains(SENT_DAYS)) {
+        const st = db.createObjectStore(SENT_DAYS, { keyPath: 'id' });
         st.createIndex('by_date', 'date', { unique: false });
       }
       // v7.
@@ -780,6 +801,61 @@ export async function forgetSubmitted(ids: string[]): Promise<void> {
     await tx('readwrite', (s) => s.delete(id), SUBMITTED);
   }
 }
+
+/** A receipt: this day went to this campaign at this time (ADR-438 D1).
+ *
+ *  DELIBERATELY NOT A COPY OF THE DAY. The profile store keeps full content
+ *  because ADR-425 lets a collector reopen and correct a submitted profile; a
+ *  day is edited in place on the date it belongs to and re-sent from there, so
+ *  a second full copy would be a second source of truth for the same rows.
+ *  What was missing is the RECEIPT, not the data.
+ */
+export interface SentDay {
+  /** The day's own id, `${date}|${name}` — so re-sending updates the receipt
+   *  rather than appending a second one. */
+  id: string;
+  date: string;
+  name: string;
+  routes: number;
+  sent_at: string;
+  /** Whether this send CREATED the row rather than updating one.
+   *
+   *  Derived from the batch's accepted/replaced counts, not reported per day:
+   *  WalkerDaySubmitOut is deliberately "receipt only... without describing
+   *  anything else in the table", and asking it to name which walkers already
+   *  existed would turn a count into a disclosure about who has submitted.
+   *
+   *  So it is only known when the batch is unambiguous — one day sent, or every
+   *  day in the batch landing the same way. `null` means "sent, but cannot say
+   *  which", and the UI says exactly that rather than guessing. */
+  created: boolean | null;
+}
+
+export const sentDaysForDate = async (date: string): Promise<SentDay[]> =>
+  (await tx<SentDay[]>('readonly',
+    (s) => s.index('by_date').getAll(IDBKeyRange.only(date)) as IDBRequest<SentDay[]>,
+    SENT_DAYS))
+    .sort((a, b) => b.sent_at.localeCompare(a.sent_at));
+
+export async function recordSentDays(days: SentDay[]): Promise<void> {
+  for (const d of days) {
+    await tx('readwrite', (s) => s.put(d), SENT_DAYS);
+  }
+}
+
+/** Drops receipts for days the campaign no longer has (ADR-438 D2).
+ *
+ *  Narrower than ADR-434's sweep, and honestly so: /collection/walker-days is a
+ *  super-admin read, so this public page cannot ask whether a day still exists.
+ *  What it CAN observe is a re-send reporting the day as newly CREATED rather
+ *  than updated — the server saying the previous row is gone.
+ */
+export async function forgetSentDays(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await tx('readwrite', (s) => s.delete(id), SENT_DAYS);
+  }
+}
+
 
 /** Puts a submitted profile back on the working board so it can be corrected.
  *  It stays in the submitted store: re-sending upserts server-side, and the

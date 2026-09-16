@@ -44,6 +44,8 @@ from app.schemas.walker_day import (
 from app.schemas.collection import (
     LeaderboardEntryOut,
     LeaderboardIn,
+    DATASET_ADDRESSES,
+    DATASET_ROUTES,
     SCOPE_COMPANY,
     SCOPE_OPEN,
     TOP_COLLECTORS,
@@ -61,7 +63,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/collection", tags=["collection"])
 
 
-def _resolve_token(db: Session, raw: str) -> CollectionToken:
+def _resolve_token(db: Session, raw: str, dataset: str | None = None) -> CollectionToken:
     """Token → campaign, or 404.
 
     ALWAYS 404, never 401/403, and never a message distinguishing "no such
@@ -75,6 +77,11 @@ def _resolve_token(db: Session, raw: str) -> CollectionToken:
         tok is None
         or tok.revoked_at is not None
         or (tok.expires_at is not None and tok.expires_at <= now)
+        # ADR-439 D3. A link is issued for ONE study. Same 404 as revoked or
+        # nonexistent, and deliberately so: a distinct error would confirm the
+        # token is real while telling the holder which study it belongs to,
+        # which is the oracle this response was shaped to avoid.
+        or (dataset is not None and (tok.dataset or DATASET_ADDRESSES) != dataset)
     ):
         raise HTTPException(status_code=404, detail="Collection link is not active.")
     return tok
@@ -126,7 +133,7 @@ def submit_profiles(
     202, not 201: this is a submission for later review, not a created resource
     the caller can go look at.
     """
-    tok = _resolve_token(db, body.token)
+    tok = _resolve_token(db, body.token, DATASET_ADDRESSES)
     _authorise_scope(tok, caller)
 
     # D3 — a per-IP rate limit does not stop a distributed flood on one leaked
@@ -330,7 +337,7 @@ def check_address(
     information). For "should I walk to this door", a profile from last week
     counts — that is exactly the walk worth skipping.
     """
-    tok = _resolve_token(db, body.token)
+    tok = _resolve_token(db, body.token, DATASET_ADDRESSES)
     _authorise_scope(tok, caller)
 
     key = door_key(body.address)[:200]
@@ -398,7 +405,7 @@ def submit_walker_days(
     sees. `revision` counts the overwrites so a reader can tell a corrected day
     from a first submission.
     """
-    tok = _resolve_token(db, body.token)
+    tok = _resolve_token(db, body.token, DATASET_ROUTES)
     _authorise_scope(tok, caller)
 
     # Same daily ceiling as addresses, counted in the same unit: one row is one
@@ -557,6 +564,7 @@ def create_token(
     raw = secrets.token_urlsafe(32)[:64]
     tok = CollectionToken(
         scope=scope,
+        dataset=body.dataset,          # ADR-439
         company_id=company_id,
         token=raw,
         label=body.label,
@@ -577,7 +585,8 @@ def create_token(
         target_id=str(tok.id),
         actor_id=str(created_by) if created_by else None,
         company_id=str(company_id) if company_id else None,
-        detail={"label": tok.label, "daily_cap": tok.daily_cap, "scope": scope},
+        detail={"label": tok.label, "daily_cap": tok.daily_cap,
+                "scope": scope, "dataset": tok.dataset},
     )
     db.commit()
     db.refresh(tok)
@@ -662,7 +671,7 @@ def campaign_leaderboard(
     are not a competitor, and a large unnamed row at the top would read as one
     person dominating.
     """
-    tok = _resolve_token(db, body.token)
+    tok = _resolve_token(db, body.token, DATASET_ADDRESSES)
     _authorise_scope(tok, caller)
 
     rows = (

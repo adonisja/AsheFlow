@@ -3057,6 +3057,10 @@ export interface CollectionTokenSummary {
   /** 'open' — anyone with the link; 'company' — an authenticated employee of
    *  company_id. Decided by who created it, never by the request. */
   scope: 'open' | 'company';
+  /** ADR-439. Which study this link may submit to. A link is valid on
+   *  one study's endpoints only — 'routes' is the path that accepts
+   *  coworker names and Amazon TBA identifiers. */
+  dataset: 'addresses' | 'routes';
   label: string;
   daily_cap: number;
   revoked_at: string | null;
@@ -3080,6 +3084,10 @@ export interface CollectionTokenCreated {
   daily_cap: number;
   created_at: string;
   scope: 'open' | 'company';
+  /** ADR-439. Which study this link may submit to. A link is valid on
+   *  one study's endpoints only — 'routes' is the path that accepts
+   *  coworker names and Amazon TBA identifiers. */
+  dataset: 'addresses' | 'routes';
   company_id: string | null;
   token: string | null;
 }

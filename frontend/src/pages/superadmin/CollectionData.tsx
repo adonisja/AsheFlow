@@ -15,6 +15,8 @@ import {
   type SortKey, type SortDir, type Filters,
 } from '../../utils/collectedTable';
 import { errorText } from '../../utils/errorText';
+// Pure data and formatters — no IndexedDB is touched by importing these.
+import { rtsLabel, rtsReattemptable } from '../../utils/walkerLogDb';
 import {
   buildingTypeLabel, formatHours, workloadLabels,
 } from '../../utils/addressProfile';
@@ -393,6 +395,11 @@ export default function CollectionData({ platform = true }: {
   // default (Optional, None).
   const [dailyCap, setDailyCap] = useState('500');
   const [expiresInDays, setExpiresInDays] = useState('');
+  /** Which study a new campaign is for (ADR-439). Defaults to the address
+   *  study, so issuing a route-log link — the one that accepts coworker
+   *  names and Amazon TBA identifiers — is a deliberate act rather than
+   *  something created by leaving a control alone. */
+  const [newDataset, setNewDataset] = useState<'addresses' | 'routes'>('addresses');
 
   const loadTokens = useCallback(async () => {
     setLoading(true);
@@ -479,6 +486,10 @@ export default function CollectionData({ platform = true }: {
       const { data } = await axiosClient.post<CollectionTokenCreated>('/collection/tokens', {
         label: label.trim(),
         daily_cap: cap,
+        // ADR-439. Which study the link is for. Sent explicitly rather than
+        // relying on the server default, so the choice is visible at the call
+        // site and a route campaign is never created by omission.
+        dataset: newDataset,
         // Omitted entirely rather than sent as null: the schema is extra="forbid"
         // and treats an absent key as "no expiry".
         ...(days !== null ? { expires_in_days: days } : {}),
@@ -526,7 +537,7 @@ export default function CollectionData({ platform = true }: {
   const [toDelete, setToDelete] = useState<CollectedProfile | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  /** The campaign queued for cleanup, and which of the two actions. ADR-437. */
+
   const [cleanup, setCleanup] = useState<
     { token: CollectionTokenSummary; mode: 'purge' | 'delete' } | null
   >(null);
@@ -842,6 +853,38 @@ export default function CollectionData({ platform = true }: {
             </button>
           </div>
 
+          {/* ADR-439. WHICH STUDY this link is for. A link is valid on one
+              study's endpoints only, so this decides whether it can submit
+              addresses or route days — the latter carrying coworker names and
+              Amazon TBA identifiers.
+
+              Addresses is preselected: a route-log campaign should be a
+              deliberate choice, never something created by leaving a control
+              alone. */}
+          <div>
+            <span className="block text-[11px] text-muted-foreground">Collects</span>
+            <div className="mt-1 flex gap-1.5">
+              {([
+                { v: 'addresses', label: 'Addresses', hint: 'building profiles' },
+                { v: 'routes', label: 'Route days', hint: 'names, TBAs' },
+              ] as const).map((o) => (
+                <button
+                  key={o.v}
+                  type="button"
+                  onClick={() => setNewDataset(o.v)}
+                  aria-pressed={newDataset === o.v}
+                  className={`flex-1 rounded-lg border px-2 py-1.5 text-left text-xs transition-colors ${
+                    dataset === o.v
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-input bg-background text-muted-foreground hover:border-primary'
+                  }`}
+                >
+                  <span className="block font-medium">{o.label}</span>
+                  <span className="block text-[10px] opacity-70">{o.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <span className="block text-[11px] text-muted-foreground">Daily cap</span>
@@ -907,6 +950,13 @@ export default function CollectionData({ platform = true }: {
                             link that also requires signing in. */}
                         <span className={t.scope === 'open' ? 'text-warning' : ''}>
                           {t.scope === 'open' ? 'open link' : 'company only'}
+                        </span>
+                        {' · '}
+                        {/* ADR-439. WHAT the link may submit, beside WHO may submit it.
+                            A route link is called out because it is the path that accepts
+                            coworker names and Amazon TBA identifiers. */}
+                        <span className={t.dataset === 'routes' ? 'text-warning' : ''}>
+                          {t.dataset === 'routes' ? 'route days' : 'addresses'}
                         </span>
                         {' · '}
                         {t.submission_count} total · cap {t.daily_cap}/day
@@ -1189,7 +1239,26 @@ export default function CollectionData({ platform = true }: {
                                     ))}
                                     {(r.rts ?? []).length > 0 && (
                                       <p className="mt-1.5 text-[11px] text-warning">
-                                        RTS: {r.rts.map((x) => `${x.tba || '?'} (${x.code || '?'})`).join(', ')}
+                                        {/* ADR-438 D3. LABELS, not wire values.
+                                            `rtsLabel` has existed in
+                                            walkerLogDb since the file was
+                                            written and this page never called
+                                            it — the same miss as ADR-429,
+                                            where buildingTypeLabel existed and
+                                            the table printed
+                                            `loading_dock_mailroom`.
+
+                                            The reattemptable flag rides along:
+                                            it decides whether the package comes
+                                            back tomorrow, which makes it the
+                                            most consequential thing on the row,
+                                            and it was collected and never
+                                            shown. */}
+                                        RTS: {r.rts.map((x) => {
+                                          const label = x.code ? rtsLabel(x.code) : 'no reason given';
+                                          const again = x.code ? rtsReattemptable(x.code) : false;
+                                          return `${x.tba || 'no TBA'}: ${label}${again ? ' (reattemptable)' : ''}`;
+                                        }).join(', ')}
                                       </p>
                                     )}
                                     {(r.ovs ?? []).length > 0 && (
