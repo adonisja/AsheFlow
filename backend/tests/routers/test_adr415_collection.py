@@ -895,3 +895,65 @@ class TestADR431DeleteNotEdit:
             "write_audit must run BEFORE db.delete() — it reads the row's own "
             "fields and they are gone once the delete flushes"
         )
+
+
+class TestADR435PublicSurfaceHardening:
+    """Guards for a collection link that is public by design (ADR-435)."""
+
+    def test_every_public_endpoint_is_rate_limited(self):
+        """A public write with no limit is a free bulk-write primitive.
+
+        Checks the DECORATOR, not a hardcoded list: a new public endpoint added
+        without a limit fails here rather than being noticed in production.
+        """
+        import inspect
+        from app.routers import collection as C
+
+        public = [
+            C.submit_profiles, C.check_address,
+            C.submit_walker_days, C.campaign_leaderboard,
+        ]
+        for fn in public:
+            src = inspect.getsource(fn)
+            assert "@limiter.limit(" in src, (
+                f"{fn.__name__} is reachable without authentication and carries "
+                f"no rate limit"
+            )
+
+    def test_bulk_delete_is_scoped_to_one_device_and_one_campaign(self):
+        """Never 'delete everything matching a filter'.
+
+        ADR-431 D2 made this a hard delete, so an over-broad bulk path has
+        nothing to restore from. Both narrowing filters must be required
+        arguments, not optional ones that default to 'all'.
+        """
+        import inspect
+        from app.routers.collection import delete_profiles_by_device
+
+        sig = inspect.signature(delete_profiles_by_device)
+        for name in ("token_id", "device_id"):
+            p = sig.parameters[name]
+            # FastAPI normalises Query(...)'s Ellipsis to PydanticUndefined,
+            # so "required" is the absence of a real default, not `is Ellipsis`.
+            from pydantic_core import PydanticUndefined
+            assert getattr(p.default, "default", None) in (Ellipsis, PydanticUndefined), (
+                f"{name} must be a REQUIRED query parameter — an optional one "
+                f"would let a bulk hard-delete run unscoped"
+            )
+        src = inspect.getsource(delete_profiles_by_device)
+        assert "_scope_reads(" in src, "bulk delete must be tenant-scoped"
+
+    def test_device_id_is_not_on_the_public_check_response(self):
+        """Exposed to a super admin for abuse cleanup, never to the public.
+
+        /check answers an anonymous caller, so echoing device ids there would
+        hand out the one value that decides whose row may be overwritten.
+        """
+        from app.schemas.collection import CollectionCheckOut, CollectedProfileOut
+
+        assert "device_id" not in CollectionCheckOut.model_fields, (
+            "the public check response must not carry device_id"
+        )
+        assert "device_id" in CollectedProfileOut.model_fields, (
+            "the super-admin read needs device_id to attribute a flood of rows"
+        )

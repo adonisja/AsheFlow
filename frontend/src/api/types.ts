@@ -3092,6 +3092,10 @@ export interface CollectedProfile {
   address: string;
   /** ADR-430. The folded key, so rows describing one door can be grouped. */
   door_key: string;
+  /** ADR-435. Which device sent this, so a flood of junk rows can be
+   *  attributed and removed as a group. Super-admin read only; deliberately
+   *  absent from the public /check response. */
+  device_id: string | null;
   /** How many observations this door has across the WHOLE campaign, and
    *  whether that closes it. Server-computed: counting the rows on screen
    *  would miscount a pair split across a page boundary. */
