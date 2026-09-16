@@ -907,6 +907,72 @@ def delete_collected_profile(
     return None
 
 
+@router.delete("/profiles", status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
+def delete_profiles_by_device(
+    request: Request,
+    token_id: str = Query(..., description="Campaign the rows belong to."),
+    device_id: str = Query(..., min_length=8, max_length=64),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    caller: Employee | None = Depends(get_caller_employee_optional),
+):
+    """Remove every row one device submitted to one campaign. ADR-435.
+
+    THE CLEANUP PATH FOR AN ABUSED LINK. The collection link is public by
+    design, so the realistic incident is a flood of junk rows, and ADR-431's
+    per-row delete is the wrong tool for 500 of them — it is not a rate problem,
+    it is that the admin would be clicking delete until the campaign ends.
+
+    Scoped to ONE device AND ONE campaign, never "delete everything matching a
+    filter". A spammer submits from one device; a mistake here that took a
+    filter would let a stray click erase a whole campaign of real field work,
+    and ADR-431 D2 made this a hard delete precisely because there is nothing
+    to restore from.
+
+    Returns the count rather than 204: "deleted 412 rows" is what the admin
+    needs to know, and a silent success after a destructive bulk action is how
+    someone runs it twice.
+    """
+    rows = (
+        _scope_reads(db.query(CollectedAddressProfile), CollectedAddressProfile,
+                     current_user, caller)
+        .filter(
+            CollectedAddressProfile.token_id == token_id,
+            CollectedAddressProfile.device_id == device_id,
+        )
+        .all()
+    )
+    if not rows:
+        # 404 rather than "deleted 0": an admin who mistyped a device id should
+        # not be told the operation succeeded.
+        raise HTTPException(status_code=404, detail="No rows for that device.")
+
+    # ONE audit entry for the batch, carrying the addresses. ADR-431 D3 wants a
+    # hard delete to leave a record of what it destroyed; 500 separate entries
+    # would bury the incident rather than document it.
+    write_audit(
+        db,
+        action_type="collection.profile.bulk_delete",
+        target_table="collected_address_profiles",
+        target_id=str(token_id),
+        actor_id=str(caller.id) if caller else None,
+        company_id=str(rows[0].company_id) if rows[0].company_id else None,
+        detail={
+            "device_id": device_id,
+            "count": len(rows),
+            # Capped: an audit detail is not a backup, and a 10k-row flood
+            # would otherwise write a JSONB blob nobody can read.
+            "addresses": [r.address for r in rows[:100]],
+            "truncated": len(rows) > 100,
+        },
+    )
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    return {"deleted": len(rows)}
+
+
 @router.get("/profiles", status_code=status.HTTP_200_OK)
 @limiter.limit("60/minute")
 def list_collected_profiles(

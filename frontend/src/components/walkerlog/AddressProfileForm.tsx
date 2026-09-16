@@ -4,7 +4,7 @@ import BuildingTypePicker from './BuildingTypePicker';
 import LabelScanner from './LabelScanner';
 import type { CheckResult } from '../../utils/collectionSubmit';
 import {
-  BUILDING_CATEGORIES, BUILDING_TYPES, OTHER, SECURITY_DESK_PROTOCOL,
+  BUILDING_TYPES, OTHER, SECURITY_DESK_PROTOCOL,
   TYPE_PROTOCOL, WORKLOAD_TAGS, doorKey, isIncompatible, workloadError,
   type AddressProfile,
 } from '../../utils/addressProfile';
@@ -129,6 +129,25 @@ export default function AddressProfileForm({
               placeholder="e.g. 433 W 32 ST"
               onChange={(e) => set({ address: e.target.value })}
               onBlur={() => onAddressCommitted(profile)}
+              // ADR-436. Enter commits, because an address is ONE LINE and
+              // nothing here wants a newline. Clicking outside was the only way
+              // to leave the field, which is an invisible requirement: the
+              // collector types an address, presses Enter, nothing happens, and
+              // the duplicate check they are waiting for never runs.
+              //
+              // blur() rather than calling onAddressCommitted directly — that
+              // fires the existing onBlur, so there is ONE commit path instead
+              // of two that must be kept in step. It also moves focus out, which
+              // is what the collector asked for by pressing Enter.
+              //
+              // preventDefault stops an enclosing form from submitting.
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+              enterKeyHint="done"
               className={`${INPUT} mt-1`}
             />
             {/* Scanning fills the address from a package label — the same
@@ -227,7 +246,7 @@ export default function AddressProfileForm({
             <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
               {checking
                 ? 'Checking the address…'
-                : 'Enter the address and tap outside the field to continue.'}
+                : 'Enter the address, then press Enter or tap outside to continue.'}
             </p>
           ) : (
           <>
@@ -367,9 +386,26 @@ export default function AddressProfileForm({
             )}
           </div>
 
-          <details className="text-sm">
-            <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              More detail (optional)
+          {/* ADR-436 D2. WAS 11px uppercase muted text with the browser's
+              default triangle, and collectors were not finding it — so the note,
+              the hours and the troublesome flag, which are what make a profile
+              worth more than a building type, went uncollected. A disclosure
+              affordance needs contrast and a clear label; that had neither.
+
+              Still <details>/<summary>: the element IS a disclosure, keyboard-
+              operable and screen-reader-announced without re-implementing any of
+              it. `list-none` and the webkit marker rule drop the default triangle
+              so the chevron is the only marker, rotating on expand. */}
+          <details className="group text-sm">
+            <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg border border-border bg-surface/40 px-3 py-2 transition-colors hover:border-primary/60 hover:bg-muted [&::-webkit-details-marker]:hidden">
+              <ChevronDown
+                aria-hidden="true"
+                className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+              />
+              <span className="font-medium">More detail</span>
+              {/* Names what is inside. "optional" alone tells the collector they
+                  may skip it and nothing about what they would be skipping. */}
+              <span className="text-[11px] text-muted-foreground">note, hours, access</span>
             </summary>
 
             <div className="mt-2 space-y-3">
@@ -420,26 +456,6 @@ export default function AddressProfileForm({
                 </span>
               </label>
 
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Collected by
-                </label>
-                <input
-                  value={profile.collected_by}
-                  placeholder="An alias or handle"
-                  onChange={(e) => set({ collected_by: e.target.value })}
-                  className={`${INPUT} mt-1`}
-                />
-                {/* ADR-427. A handle, not a legal name. This value is stored,
-                    exported, and shown on the campaign's ranking — a real name
-                    would put a coworker's identity in all three for no
-                    analytical gain, since the point is telling observers apart
-                    rather than knowing who they are. */}
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Used to tell collectors apart and to rank the campaign. A
-                  nickname is better than your full name.
-                </p>
-              </div>
             </div>
           </details>
 

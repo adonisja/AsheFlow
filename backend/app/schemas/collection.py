@@ -297,6 +297,16 @@ class CollectedProfileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id:             UUID
+    # ADR-435. WHICH DEVICE SENT THIS, so a flood of junk rows can be attributed
+    # and removed as a group. Without it a super admin facing 500 spam rows can
+    # see that they are spam and has no way to tell them apart from the real
+    # ones, nor any handle to remove them by.
+    #
+    # Safe to expose HERE and nowhere else: this schema is gated on
+    # get_super_admin, and ADR-426 already establishes the value is not an
+    # identity and not a secret — it decides only whether a row is yours to
+    # update. It is deliberately absent from the public /check response.
+    device_id:      Optional[str] = None
     # ADR-424. NULL for an open campaign. ADR-423 made the COLUMN nullable and
     # left this read schema declaring a bare UUID, so the first profile
     # submitted to an open campaign 500'd the super-admin listing on
