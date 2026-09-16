@@ -790,9 +790,51 @@ jobs:
           VITE_AWS_DOMAIN: ${{ secrets.STAGING_VITE_AWS_DOMAIN }}
           VITE_GOOGLE_MAPS_KEY: ${{ secrets.STAGING_VITE_GOOGLE_MAPS_KEY }}
 
+      # --exclude/--include are ORDER-SENSITIVE rules applied in sequence, not
+      # independent conditions. Verified by dryrun before committing: the first
+      # draft wrote `--exclude index.html ... --include assets/*`, which also
+      # swept favicon.svg into the immutable pass -- a one-year cache on a file
+      # whose NAME never changes, so it could never be updated. The second pass
+      # led with `--exclude "*"` and no following --include, and uploaded
+      # nothing at all. Both looked plausible and neither did what it read as.
+      # THREE PASSES, because index.html and the hashed assets need OPPOSITE
+      # cache policies and a single sync can only apply one.
+      #
+      # Every object used to upload with no Cache-Control at all, so CloudFront
+      # and the browser both applied a default TTL to index.html -- the ONE file
+      # that must never be cached, because it is the pointer naming the current
+      # bundle. The new bundle deployed correctly and nothing asked for it: a
+      # browser holding yesterday's index.html keeps requesting yesterday's
+      # hashed filename, which is still in the bucket and still returns 200. The
+      # deploy looks green, the CDN invalidation succeeds, and the user sees the
+      # old page until a hard reload. Measured 2026-09-16 on staging: the ADR-430
+      # strings were present in the deployed bundle while the page rendered the
+      # pre-ADR-429 table.
+      #
+      # 1. Assets first, immutable. Vite content-hashes every file under
+      #    assets/, so a changed file gets a NEW name -- the bytes at a given
+      #    name can never change, which is exactly what immutable asserts.
+      #    Uploading these BEFORE index.html matters: for the moment between
+      #    passes the old page is still being served, and it must keep finding
+      #    the files it references. Deleting is deferred to pass 3 for the same
+      #    reason.
+      # 2. Other root files (images, favicon) -- unhashed, so they get a short
+      #    TTL rather than immutable: overwriting one reuses its name.
+      # 3. index.html last, no-store, and --delete runs here once the assets it
+      #    points at are already in place.
       - name: Sync to staging S3
         working-directory: frontend
-        run: aws s3 sync dist/ s3://asheflow-frontend-staging --delete
+        run: |
+          aws s3 sync dist/ s3://asheflow-frontend-staging \
+            --exclude "*" --include "assets/*" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 sync dist/ s3://asheflow-frontend-staging \
+            --exclude "assets/*" --exclude "index.html" \
+            --cache-control "public,max-age=300"
+          aws s3 cp dist/index.html s3://asheflow-frontend-staging/index.html \
+            --cache-control "no-store,must-revalidate" \
+            --content-type "text/html"
+          aws s3 sync dist/ s3://asheflow-frontend-staging --delete --size-only
 
       - name: Invalidate staging CloudFront cache
         run: |
@@ -954,9 +996,51 @@ jobs:
           VITE_AWS_DOMAIN: ${{ secrets.PROD_VITE_AWS_DOMAIN }}
           VITE_GOOGLE_MAPS_KEY: ${{ secrets.PROD_VITE_GOOGLE_MAPS_KEY }}
 
+      # --exclude/--include are ORDER-SENSITIVE rules applied in sequence, not
+      # independent conditions. Verified by dryrun before committing: the first
+      # draft wrote `--exclude index.html ... --include assets/*`, which also
+      # swept favicon.svg into the immutable pass -- a one-year cache on a file
+      # whose NAME never changes, so it could never be updated. The second pass
+      # led with `--exclude "*"` and no following --include, and uploaded
+      # nothing at all. Both looked plausible and neither did what it read as.
+      # THREE PASSES, because index.html and the hashed assets need OPPOSITE
+      # cache policies and a single sync can only apply one.
+      #
+      # Every object used to upload with no Cache-Control at all, so CloudFront
+      # and the browser both applied a default TTL to index.html -- the ONE file
+      # that must never be cached, because it is the pointer naming the current
+      # bundle. The new bundle deployed correctly and nothing asked for it: a
+      # browser holding yesterday's index.html keeps requesting yesterday's
+      # hashed filename, which is still in the bucket and still returns 200. The
+      # deploy looks green, the CDN invalidation succeeds, and the user sees the
+      # old page until a hard reload. Measured 2026-09-16 on staging: the ADR-430
+      # strings were present in the deployed bundle while the page rendered the
+      # pre-ADR-429 table.
+      #
+      # 1. Assets first, immutable. Vite content-hashes every file under
+      #    assets/, so a changed file gets a NEW name -- the bytes at a given
+      #    name can never change, which is exactly what immutable asserts.
+      #    Uploading these BEFORE index.html matters: for the moment between
+      #    passes the old page is still being served, and it must keep finding
+      #    the files it references. Deleting is deferred to pass 3 for the same
+      #    reason.
+      # 2. Other root files (images, favicon) -- unhashed, so they get a short
+      #    TTL rather than immutable: overwriting one reuses its name.
+      # 3. index.html last, no-store, and --delete runs here once the assets it
+      #    points at are already in place.
       - name: Sync to prod S3
         working-directory: frontend
-        run: aws s3 sync dist/ s3://asheflow-frontend --delete
+        run: |
+          aws s3 sync dist/ s3://asheflow-frontend \
+            --exclude "*" --include "assets/*" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 sync dist/ s3://asheflow-frontend \
+            --exclude "assets/*" --exclude "index.html" \
+            --cache-control "public,max-age=300"
+          aws s3 cp dist/index.html s3://asheflow-frontend/index.html \
+            --cache-control "no-store,must-revalidate" \
+            --content-type "text/html"
+          aws s3 sync dist/ s3://asheflow-frontend --delete --size-only
 
       - name: Invalidate prod CloudFront cache
         run: |
