@@ -305,11 +305,11 @@ class TestThePlatformOwnerCanReadWhatArrived:
         import inspect
         from app.api.deps import get_platform_staff
         from app.routers.collection import (
-            get_collected_day, list_collected_days, list_collected_profiles, list_tokens,
+            list_collected_profiles, list_tokens,
         )
 
         for fn in (list_collected_profiles, list_tokens,
-                   list_collected_days, get_collected_day):
+                   ):
             deps = [
                 p.default.dependency
                 for p in inspect.signature(fn).parameters.values()
@@ -614,9 +614,9 @@ class TestCampaignScope:
         open rows out of a company admin's reads: `company_id == <uuid>` never
         matches NULL."""
         from app.models.collection import (
-            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+            CollectedAddressProfile, CollectionToken,
         )
-        for m in (CollectionToken, CollectedAddressProfile, CollectedWalkerDay):
+        for m in (CollectionToken, CollectedAddressProfile):
             assert m.__table__.columns["company_id"].nullable, (
                 f"{m.__tablename__}.company_id must be nullable to hold an "
                 f"open campaign's rows"
@@ -635,7 +635,7 @@ class TestCampaignScope:
         )
 
     @pytest.mark.parametrize("fn_name", [
-        "submit_profiles", "check_address", "submit_walker_days",
+        "submit_profiles", "check_address",
     ])
     def test_every_public_path_enforces_the_scope(self, fn_name):
         """All three, not just submit. A company campaign's duplicate check
@@ -681,7 +681,7 @@ class TestCampaignScope:
         )
         from app.routers import collection as C
 
-        for fn in (C.submit_profiles, C.check_address, C.submit_walker_days):
+        for fn in (C.submit_profiles, C.check_address):
             deps = [
                 p.default.dependency
                 for p in inspect.signature(fn).parameters.values()
@@ -717,15 +717,14 @@ class TestNullableColumnsAreOptionalInResponses:
         import typing
 
         from app.models.collection import (
-            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+            CollectedAddressProfile, CollectionToken,
         )
         from app.schemas.collection import CollectedProfileOut, CollectionTokenSummary
-        from app.schemas.walker_day import CollectedWalkerDayOut
 
+        # ADR-440 removed the walker-day pair with its table.
         pairs = [
             (CollectedProfileOut, CollectedAddressProfile),
             (CollectionTokenSummary, CollectionToken),
-            (CollectedWalkerDayOut, CollectedWalkerDay),
         ]
         mismatches = []
         for schema, model in pairs:
@@ -922,7 +921,7 @@ class TestADR435PublicSurfaceHardening:
 
         public = [
             C.submit_profiles, C.check_address,
-            C.submit_walker_days, C.campaign_leaderboard,
+            C.campaign_leaderboard,
         ]
         for fn in public:
             src = inspect.getsource(fn)
@@ -1016,7 +1015,7 @@ class TestADR437CampaignCleanup:
 
         src = inspect.getsource(purge_campaign_data)
         detail = src[src.index("detail={"):src.index("}", src.index("detail={")) + 1]
-        assert '"profiles"' in detail and '"walker_days"' in detail, (
+        assert '"profiles"' in detail, (
             "the audit must record how much was destroyed"
         )
         assert "r.address" not in detail and "addresses" not in detail, (

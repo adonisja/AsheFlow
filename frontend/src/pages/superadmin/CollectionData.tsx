@@ -15,13 +15,11 @@ import {
   type SortKey, type SortDir, type Filters,
 } from '../../utils/collectedTable';
 import { errorText } from '../../utils/errorText';
-// Pure data and formatters — no IndexedDB is touched by importing these.
-import { rtsLabel, rtsReattemptable } from '../../utils/walkerLogDb';
 import {
   buildingTypeLabel, formatHours, workloadLabels,
 } from '../../utils/addressProfile';
 import type {
-  CollectedProfile, CollectedWalkerDay, CollectedWalkerDayDetail,
+  CollectedProfile,
   CollectionTokenCreated, CollectionTokenSummary,
 } from '../../api/types';
 
@@ -277,54 +275,6 @@ function toCSV(rows: CollectedProfile[]): string {
   ].join('\n');
 }
 
-/** One row per ADDRESS on a route, not one per day.
- *
- *  The grain is deliberate: the comparison this data exists for is
- *  "which walker carried which address", so a row per day would need unpacking
- *  before it could be compared against the sort output. Day-level facts repeat
- *  down the rows, which is what makes the file joinable.
- */
-const DAY_COLUMNS = [
-  'walker_name', 'collected_on', 'arrival_time', 'departure_time',
-  'route_id', 'route_start', 'route_end', 'difficulty',
-  'bag_id', 'address', 'sort_zone', 'stop',
-  'rts_count', 'ov_count', 'revision', 'submitted_at',
-] as const;
-
-/** Every day flattened to one row per address, in DAY_COLUMNS order. */
-function dayRows(rows: CollectedWalkerDayDetail[]): unknown[][] {
-  const out: unknown[][] = [];
-  for (const d of rows) {
-    for (const r of d.payload.routes ?? []) {
-      const rts = r.rts?.length ?? 0;
-      const ovs = r.ovs?.length ?? 0;
-      // A route with no totes still gets a row: it happened, and dropping it
-      // would make the route count in this file disagree with the listing.
-      const totes = r.totes?.length ? r.totes : [{ bag_id: '', addresses: [] as string[] }];
-      for (const t of totes) {
-        const addrs = t.addresses?.length ? t.addresses : [''];
-        for (const a of addrs) {
-          out.push([
-            d.walker_name, d.collected_on, d.arrival_time ?? '', d.departure_time ?? '',
-            r.route_id, r.route_start, r.route_end, r.difficulty,
-            t.bag_id, a,
-            ('sort_zone' in t ? t.sort_zone : '') ?? '', ('stop' in t ? t.stop : '') ?? '',
-            rts, ovs, d.revision, d.submitted_at,
-          ]);
-        }
-      }
-    }
-  }
-  return out;
-}
-
-function daysToCSV(rows: CollectedWalkerDayDetail[]): string {
-  return [
-    DAY_COLUMNS.join(','),
-    ...dayRows(rows).map((r) => r.map(q).join(',')),
-  ].join('\n');
-}
-
 /** Turns a header and rows into a one-sheet workbook.
  *
  *  Shared by both datasets so the xlsx and the CSV cannot drift: each caller
@@ -375,10 +325,7 @@ export default function CollectionData({ platform = true }: {
   /** Which dataset is on screen. The two campaigns collect different things —
    *  addresses describe a door, days describe a shift — so they get two views
    *  rather than one merged table whose columns are half empty either way. */
-  const [dataset, setDataset] = useState<'addresses' | 'days'>('addresses');
-  const [days, setDays] = useState<CollectedWalkerDay[]>([]);
   /** The expanded day, fetched on demand. The listing carries counts only. */
-  const [openDay, setOpenDay] = useState<CollectedWalkerDayDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingRows, setLoadingRows] = useState(false);
   const [error, setError] = useState('');
@@ -395,11 +342,6 @@ export default function CollectionData({ platform = true }: {
   // default (Optional, None).
   const [dailyCap, setDailyCap] = useState('500');
   const [expiresInDays, setExpiresInDays] = useState('');
-  /** Which study a new campaign is for (ADR-439). Defaults to the address
-   *  study, so issuing a route-log link — the one that accepts coworker
-   *  names and Amazon TBA identifiers — is a deliberate act rather than
-   *  something created by leaving a control alone. */
-  const [newDataset, setNewDataset] = useState<'addresses' | 'routes'>('addresses');
 
   const loadTokens = useCallback(async () => {
     setLoading(true);
@@ -429,43 +371,10 @@ export default function CollectionData({ platform = true }: {
     }
   }, []);
 
-  const loadDays = useCallback(async (tokenId: string | null) => {
-    setLoadingRows(true);
-    try {
-      const { data } = await axiosClient.get<CollectedWalkerDay[]>('/collection/walker-days', {
-        params: tokenId ? { token_id: tokenId, limit: 1000 } : { limit: 1000 },
-      });
-      setDays(data);
-      setError('');
-    } catch (e) {
-      setError(errorText(e, 'Could not load collected days.'));
-    } finally {
-      setLoadingRows(false);
-    }
-  }, []);
-
-  /** One day in full. Fetched on expand rather than with the listing: forty
-   *  days with every tote and address inline is a large response for a table
-   *  that only shows counts. */
-  const expandDay = useCallback(async (id: string) => {
-    if (openDay?.id === id) { setOpenDay(null); return; }
-    try {
-      const { data } = await axiosClient.get<CollectedWalkerDayDetail>(
-        `/collection/walker-days/${id}`);
-      setOpenDay(data);
-      setError('');
-    } catch (e) {
-      setError(errorText(e, 'Could not load that day.'));
-    }
-  }, [openDay]);
-
   useEffect(() => { void loadTokens(); }, [loadTokens]);
   useEffect(() => {
-    // Only the visible dataset is fetched. Loading both on every campaign
-    // click would double the traffic to show one table.
-    if (dataset === 'addresses') void loadProfiles(activeToken);
-    else void loadDays(activeToken);
-  }, [activeToken, dataset, loadProfiles, loadDays]);
+    void loadProfiles(activeToken);
+  }, [activeToken, loadProfiles]);
 
   const createToken = async () => {
     if (!label.trim()) { setError('Give the campaign a name first.'); return; }
@@ -489,7 +398,7 @@ export default function CollectionData({ platform = true }: {
         // ADR-439. Which study the link is for. Sent explicitly rather than
         // relying on the server default, so the choice is visible at the call
         // site and a route campaign is never created by omission.
-        dataset: newDataset,
+        dataset: 'addresses',
         // Omitted entirely rather than sent as null: the schema is extra="forbid"
         // and treats an absent key as "no expiry".
         ...(days !== null ? { expires_in_days: days } : {}),
@@ -740,7 +649,6 @@ export default function CollectionData({ platform = true }: {
 
   const text = (body: string, type: string) => new Blob([body], { type });
 
-  const [downloading, setDownloading] = useState(false);
 
   /** THE export surface for collected data.
    *
@@ -752,40 +660,15 @@ export default function CollectionData({ platform = true }: {
    *  Three formats for each dataset, carrying the same rows and columns — only
    *  the container differs, so a recipient given one file is not given less
    *  than a recipient given another. */
-  const download = async (fmt: 'csv' | 'json' | 'xlsx') => {
-    if (dataset === 'addresses') {
-      if (fmt === 'xlsx') {
-        save('collected-addresses', 'xlsx', sheetBlob('Address profiles', CSV_COLUMNS, profiles.map(profileRow)));
-      } else if (fmt === 'json') {
-        save('collected-addresses', 'json',
-          text(JSON.stringify({ profiles }, null, 2), 'application/json'));
-      } else {
-        save('collected-addresses', 'csv', text(toCSV(profiles), 'text/csv'));
-      }
-      return;
-    }
-    // The day export is one row per ADDRESS, so it needs every payload — and
-    // the listing deliberately carries none. Fetched here, on an explicit
-    // export, rather than eagerly on every page load: this is the one moment
-    // the cost buys something.
-    setDownloading(true);
-    try {
-      const full = await Promise.all(days.map((d) =>
-        axiosClient.get<CollectedWalkerDayDetail>(`/collection/walker-days/${d.id}`)
-          .then((r) => r.data)));
-      if (fmt === 'xlsx') {
-        save('collected-walker-days', 'xlsx', sheetBlob('Walker days', DAY_COLUMNS, dayRows(full)));
-      } else if (fmt === 'json') {
-        save('collected-walker-days', 'json',
-          text(JSON.stringify({ days: full }, null, 2), 'application/json'));
-      } else {
-        save('collected-walker-days', 'csv', text(daysToCSV(full), 'text/csv'));
-      }
-      setError('');
-    } catch (e) {
-      setError(errorText(e, 'Could not build the day export.'));
-    } finally {
-      setDownloading(false);
+  const download = (fmt: 'csv' | 'json' | 'xlsx') => {
+    if (fmt === 'xlsx') {
+      save('collected-addresses', 'xlsx',
+        sheetBlob('Address profiles', CSV_COLUMNS, profiles.map(profileRow)));
+    } else if (fmt === 'json') {
+      save('collected-addresses', 'json',
+        text(JSON.stringify({ profiles }, null, 2), 'application/json'));
+    } else {
+      save('collected-addresses', 'csv', text(toCSV(profiles), 'text/csv'));
     }
   };
 
@@ -804,7 +687,7 @@ export default function CollectionData({ platform = true }: {
         eyebrow={platform ? 'Platform' : 'Survey'}
         title={platform ? 'Collected addresses' : 'Building survey'}
         description={platform
-          ? 'Building profiles and logged days from every campaign, open and company. Read-only; nothing here changes routing.'
+          ? 'Building profiles from every campaign, open and company. Read-only; nothing here changes routing.'
           : 'Building profiles your staff have collected. A link you issue here works only for signed-in employees of your company.'}
         actions={
           <button
@@ -851,39 +734,6 @@ export default function CollectionData({ platform = true }: {
             >
               <Plus className="w-4 h-4" />
             </button>
-          </div>
-
-          {/* ADR-439. WHICH STUDY this link is for. A link is valid on one
-              study's endpoints only, so this decides whether it can submit
-              addresses or route days — the latter carrying coworker names and
-              Amazon TBA identifiers.
-
-              Addresses is preselected: a route-log campaign should be a
-              deliberate choice, never something created by leaving a control
-              alone. */}
-          <div>
-            <span className="block text-[11px] text-muted-foreground">Collects</span>
-            <div className="mt-1 flex gap-1.5">
-              {([
-                { v: 'addresses', label: 'Addresses', hint: 'building profiles' },
-                { v: 'routes', label: 'Route days', hint: 'names, TBAs' },
-              ] as const).map((o) => (
-                <button
-                  key={o.v}
-                  type="button"
-                  onClick={() => setNewDataset(o.v)}
-                  aria-pressed={newDataset === o.v}
-                  className={`flex-1 rounded-lg border px-2 py-1.5 text-left text-xs transition-colors ${
-                    dataset === o.v
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-input bg-background text-muted-foreground hover:border-primary'
-                  }`}
-                >
-                  <span className="block font-medium">{o.label}</span>
-                  <span className="block text-[10px] opacity-70">{o.hint}</span>
-                </button>
-              ))}
-            </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
@@ -1040,18 +890,16 @@ export default function CollectionData({ platform = true }: {
                     what is ON SCREEN, not the campaign. A table showing 12 of
                     500 rows under a heading that still says 500 is how someone
                     reports the wrong number in a meeting. */}
-                {dataset === 'addresses'
-                  ? hasActiveFilters(filters)
-                    ? `${visible.length} of ${profiles.length} addresses shown`
-                    : `${profiles.length} address${profiles.length === 1 ? '' : 'es'} collected`
-                  : `${days.length} walker day${days.length === 1 ? '' : 's'} collected`}
+                {hasActiveFilters(filters)
+                  ? `${visible.length} of ${profiles.length} addresses shown`
+                  : `${profiles.length} address${profiles.length === 1 ? '' : 'es'} collected`}
               </p>
               {/* ADR-433. What the campaign has actually LEARNED, which a raw
                   submission count cannot say: how many doors are verified
                   rather than seen once, and whether any need a third look.
                   Verified is the number that matters — ADR-420 treats a door as
                   known only at two observations. */}
-              {dataset === 'addresses' && profiles.length > 0 && (
+              {profiles.length > 0 && (
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                   <span>
                     <span className="font-medium text-foreground">
@@ -1074,24 +922,6 @@ export default function CollectionData({ platform = true }: {
                 </p>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              {/* Two datasets, two views. Addresses describe a door and days
-                  describe a shift, so one merged table would be half empty
-                  whichever row you were looking at. */}
-              <div className="flex rounded-lg bg-muted p-0.5 text-sm">
-                {(['addresses', 'days'] as const).map((k) => (
-                  <button
-                    key={k}
-                    onClick={() => { setDataset(k); setOpenDay(null); }}
-                    className={`rounded-md px-2.5 py-1 ${
-                      dataset === k ? 'bg-card shadow-sm font-medium' : 'text-muted-foreground'
-                    }`}
-                  >
-                    {k === 'addresses' ? 'Addresses' : 'Days'}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* ADR-434 D3. Its own row, in the walker log's Export idiom — a
@@ -1101,8 +931,7 @@ export default function CollectionData({ platform = true }: {
               (choosing what to LOOK at, and taking a file AWAY) and left the
               header cramped. One idiom for "take data out", in both places it
               appears. */}
-          {((dataset === 'addresses' && profiles.length > 0)
-            || (dataset === 'days' && days.length > 0)) && (
+          {profiles.length > 0 && (
             <section className="rounded-xl border border-border bg-surface/40 p-3">
               <div className="mb-2 flex items-baseline justify-between gap-2">
                 <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
@@ -1115,9 +944,7 @@ export default function CollectionData({ platform = true }: {
                 <span className="text-[11px] text-muted-foreground/70">
                   {activeLabel ?? 'All campaigns'}
                   {' · '}
-                  {dataset === 'addresses'
-                    ? `${profiles.length} address${profiles.length === 1 ? '' : 'es'}`
-                    : `${days.length} day${days.length === 1 ? '' : 's'}`}
+                  {`${profiles.length} address${profiles.length === 1 ? '' : 'es'}`}
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
@@ -1130,7 +957,6 @@ export default function CollectionData({ platform = true }: {
                     key={it.fmt}
                     type="button"
                     onClick={() => void download(it.fmt)}
-                    disabled={downloading}
                     className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm hover:border-primary/60 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50"
                   >
                     {/* Upload, not Download. lucide's Download arrow points
@@ -1138,7 +964,7 @@ export default function CollectionData({ platform = true }: {
                         (sending) — so an EXPORT takes Upload. */}
                     <Upload
                       aria-hidden="true"
-                      className={`h-4 w-4 shrink-0 text-muted-foreground ${downloading ? 'animate-pulse' : ''}`}
+                      className="h-4 w-4 shrink-0 text-muted-foreground"
                     />
                     <span className="truncate">{it.label}</span>
                     <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.sub}</span>
@@ -1150,7 +976,7 @@ export default function CollectionData({ platform = true }: {
                   above is showing. Someone who filtered to "collectors
                   disagree" and then exported would otherwise reasonably expect
                   a file of just those. */}
-              {hasActiveFilters(filters) && dataset === 'addresses' && (
+              {hasActiveFilters(filters) && (
                 <p className="mt-2 text-[10px] text-muted-foreground/70">
                   Exports the whole campaign, not the filtered rows above.
                 </p>
@@ -1160,124 +986,6 @@ export default function CollectionData({ platform = true }: {
 
           {loadingRows ? (
             <SkeletonCard />
-          ) : dataset === 'days' ? (
-            days.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No days submitted yet.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <th className="py-2 pr-3 font-semibold">Walker</th>
-                      <th className="py-2 pr-3 font-semibold">Date</th>
-                      <th className="py-2 pr-3 font-semibold">Shift</th>
-                      <th className="py-2 pr-3 font-semibold">Routes</th>
-                      <th className="py-2 pr-3 font-semibold">Totes</th>
-                      <th className="py-2 pr-3 font-semibold">RTS</th>
-                      <th className="py-2 font-semibold">Submitted</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {days.map((d) => (
-                      <Fragment key={d.id}>
-                        <tr
-                          onClick={() => void expandDay(d.id)}
-                          className="cursor-pointer border-b border-border/50 align-top hover:bg-muted/50"
-                        >
-                          <td className="py-2 pr-3 font-medium">{d.walker_name}</td>
-                          <td className="py-2 pr-3 whitespace-nowrap">{d.collected_on}</td>
-                          <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
-                            {d.arrival_time || '—'}–{d.departure_time || '—'}
-                          </td>
-                          <td className="py-2 pr-3">{d.route_count}</td>
-                          <td className="py-2 pr-3">{d.tote_count}</td>
-                          <td className="py-2 pr-3">{d.rts_count}</td>
-                          <td className="py-2 whitespace-nowrap text-muted-foreground">
-                            {fmt(d.submitted_at)}
-                            {/* A revision above 1 means the day was re-sent.
-                                Worth showing: it separates a corrected day
-                                from a first submission without a diff. */}
-                            {d.revision > 1 && (
-                              <span className="ml-1 rounded bg-muted px-1 text-[10px]">
-                                rev {d.revision}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                        {openDay?.id === d.id && (
-                          <tr className="border-b border-border/50 bg-muted/30">
-                            <td colSpan={7} className="px-3 py-3">
-                              <div className="space-y-3">
-                                {(openDay.payload.routes ?? []).map((r) => (
-                                  <div key={r.route_id} className="rounded-lg border border-border bg-card p-2.5">
-                                    <p className="text-xs font-semibold">
-                                      Route {r.route_id}
-                                      <span className="ml-2 font-normal text-muted-foreground">
-                                        {r.route_start || '—'}–{r.route_end || '—'}
-                                        {/* Route times are stored HH:MM, so
-                                            they need no reformatting — only
-                                            the difficulty reads as a raw
-                                            value. */}
-                                        {r.difficulty && (
-                                          <> · {r.difficulty[0].toUpperCase() + r.difficulty.slice(1)}</>
-                                        )}
-                                      </span>
-                                    </p>
-                                    {r.notes && (
-                                      <p className="mt-1 text-[11px] text-muted-foreground">{r.notes}</p>
-                                    )}
-                                    {(r.totes ?? []).map((t, i) => (
-                                      <div key={`${t.bag_id}-${i}`} className="mt-1.5 text-[11px]">
-                                        <span className="font-medium">{t.bag_id || '(no bag id)'}</span>
-                                        {t.stop && <span className="text-muted-foreground"> · {t.stop}</span>}
-                                        {t.addresses?.length > 0 && (
-                                          <span className="text-muted-foreground">
-                                            {' — '}{t.addresses.join('; ')}
-                                          </span>
-                                        )}
-                                      </div>
-                                    ))}
-                                    {(r.rts ?? []).length > 0 && (
-                                      <p className="mt-1.5 text-[11px] text-warning">
-                                        {/* ADR-438 D3. LABELS, not wire values.
-                                            `rtsLabel` has existed in
-                                            walkerLogDb since the file was
-                                            written and this page never called
-                                            it — the same miss as ADR-429,
-                                            where buildingTypeLabel existed and
-                                            the table printed
-                                            `loading_dock_mailroom`.
-
-                                            The reattemptable flag rides along:
-                                            it decides whether the package comes
-                                            back tomorrow, which makes it the
-                                            most consequential thing on the row,
-                                            and it was collected and never
-                                            shown. */}
-                                        RTS: {r.rts.map((x) => {
-                                          const label = x.code ? rtsLabel(x.code) : 'no reason given';
-                                          const again = x.code ? rtsReattemptable(x.code) : false;
-                                          return `${x.tba || 'no TBA'}: ${label}${again ? ' (reattemptable)' : ''}`;
-                                        }).join(', ')}
-                                      </p>
-                                    )}
-                                    {(r.ovs ?? []).length > 0 && (
-                                      <p className="mt-1 text-[11px] text-muted-foreground">
-                                        OVs: {r.ovs.map((o) => `${o.ov_id || '?'}${o.size ? ` ${o.size}` : ''}`).join(', ')}
-                                      </p>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
           ) : profiles.length === 0 ? (
             /* ADR-433. "Nothing submitted yet" states a fact and leaves the
                reader to work out whether that is normal. The two reasons a

@@ -57,4 +57,4 @@ from app.models.tote_address import ToteAddress   # ADR-291: captain-entered tot
 from app.models.workforce_ov import WorkforceOV  # ADR-400 A4: OVs are their own unit
 from app.models.crew_pin import CrewPin, CrewPinMember
 from app.models.truck_pin import TruckPin
-from app.models.collection import CollectionToken, CollectedAddressProfile, CollectedWalkerDay  # ADR-415/417: public collection quarantine
+from app.models.collection import CollectionToken, CollectedAddressProfile  # ADR-415: public collection quarantine
