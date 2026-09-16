@@ -15,7 +15,7 @@
  */
 
 const DB_NAME = 'asheflow_walker_log';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const STORE = 'walker_days';
 /** Routes built before anyone picked them up, keyed by date.
  *
@@ -60,6 +60,11 @@ const CLEARED = 'cleared_dates';
  *  about a BUILDING, collected with or without a route open, and hanging it off
  *  a walker-day would make it unreachable on any day that walker did not work. */
 const PROFILES = 'address_profiles';
+/** ADR-425. Profiles this device has SUBMITTED, kept after the working cards
+ *  are cleared. The submission is a copy sent onward, not a handoff, so the
+ *  collector keeps a record of what they sent — and can correct one by
+ *  re-submitting it, which the server upserts. */
+const SUBMITTED = 'submitted_profiles';
 
 import { hydrateProfile } from './addressProfile';
 import type { AddressProfile } from './addressProfile';
@@ -232,6 +237,11 @@ function open(): Promise<IDBDatabase> {
       // v6.
       if (!db.objectStoreNames.contains(PROFILES)) {
         const st = db.createObjectStore(PROFILES, { keyPath: 'id' });
+        st.createIndex('by_date', 'date', { unique: false });
+      }
+      // v7.
+      if (!db.objectStoreNames.contains(SUBMITTED)) {
+        const st = db.createObjectStore(SUBMITTED, { keyPath: 'id' });
         st.createIndex('by_date', 'date', { unique: false });
       }
     };
@@ -717,4 +727,51 @@ export async function importJSON(text: string): Promise<number> {
     }
   }
   return n;
+}
+
+
+// ── Submitted profiles (ADR-425) ─────────────────────────────────────────────
+
+/** A profile as it was SENT, with when it went.
+ *
+ *  Separate store, not a flag on the working profile: the working cards are
+ *  cleared after a submit so the next building starts from an empty form, and
+ *  a flag would either be cleared with them or keep a card on screen that the
+ *  collector has finished with.
+ */
+export interface SubmittedProfile extends AddressProfile {
+  /** ISO, when this device sent it. A resubmission overwrites, so this is the
+   *  LAST time it was sent — which is the one that matters for "is what the
+   *  server holds what I last typed". */
+  submitted_at: string;
+}
+
+export const submittedProfiles = async (): Promise<SubmittedProfile[]> =>
+  (await tx<SubmittedProfile[]>('readonly', (s) => s.getAll() as IDBRequest<SubmittedProfile[]>, SUBMITTED))
+    .map((p) => ({ ...hydrateProfile(p), submitted_at: p.submitted_at }));
+
+/** Records what was just sent and clears it from the working set.
+ *
+ *  One transaction per store rather than one across both: a partial failure
+ *  that recorded the submission without clearing the cards would leave the
+ *  collector re-sending, and clearing without recording would lose the record
+ *  of what they sent. Recording FIRST is the safer order — a failure between
+ *  the two leaves a duplicate card, which is visible and fixable, rather than
+ *  silently losing the row.
+ */
+export async function markSubmitted(profiles: AddressProfile[]): Promise<void> {
+  const now = new Date().toISOString();
+  for (const p of profiles) {
+    await tx('readwrite', (s) => s.put({ ...p, submitted_at: now }), SUBMITTED);
+  }
+  for (const p of profiles) {
+    await tx('readwrite', (s) => s.delete(p.id), PROFILES);
+  }
+}
+
+/** Puts a submitted profile back on the working board so it can be corrected.
+ *  It stays in the submitted store: re-sending upserts server-side, and the
+ *  record of what was sent is not something an edit should erase. */
+export async function reopenSubmitted(p: SubmittedProfile): Promise<void> {
+  await tx('readwrite', (s) => s.put({ ...p, updated_at: new Date().toISOString() }), PROFILES);
 }
