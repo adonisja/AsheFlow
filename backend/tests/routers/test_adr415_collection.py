@@ -844,6 +844,7 @@ class TestADR431DeleteNotEdit:
         covered.
         """
         import inspect
+        from app.routers import collection as C
         from app.routers.collection import router
 
         destructive = [
@@ -853,6 +854,16 @@ class TestADR431DeleteNotEdit:
         assert destructive, "expected at least the ADR-431 delete"
         for r in destructive:
             src = inspect.getsource(r.endpoint)
+            # Follows ONE level of indirection: ADR-437's cleanup endpoints
+            # scope through `_campaign_for_cleanup`, which calls _scope_reads
+            # and adds the revoke gate. Verified against Postgres that a
+            # company admin gets 404 for another tenant's campaign and for an
+            # open one. Requiring the literal call in the endpoint body would
+            # push authors to inline the query instead of reusing the helper,
+            # which is the opposite of what this test wants.
+            for helper in ("_campaign_for_cleanup",):
+                if f"{helper}(" in src:
+                    src += inspect.getsource(getattr(C, helper))
             assert "_scope_reads(" in src, (
                 f"{r.path} mutates or destroys a collected row without going "
                 f"through _scope_reads — a company admin could reach another "
@@ -957,3 +968,69 @@ class TestADR435PublicSurfaceHardening:
         assert "device_id" in CollectedProfileOut.model_fields, (
             "the super-admin read needs device_id to attribute a flood of rows"
         )
+
+
+class TestADR437CampaignCleanup:
+    """A campaign can be emptied, and retired (ADR-437)."""
+
+    def test_both_cleanup_paths_require_a_revoked_link(self):
+        """ADR-437 D2. Purging a LIVE campaign races its collectors: rows land
+        seconds after the wipe and become indistinguishable from data meant to
+        survive. A silent partial wipe is worse than either outcome."""
+        import inspect
+        from app.routers.collection import purge_campaign_data, delete_campaign
+
+        for fn in (purge_campaign_data, delete_campaign):
+            src = inspect.getsource(fn)
+            assert "_campaign_for_cleanup(" in src, (
+                f"{fn.__name__} does not go through the revoke gate"
+            )
+        gate = inspect.getsource(
+            __import__("app.routers.collection", fromlist=["x"])._campaign_for_cleanup
+        )
+        assert "revoked_at is None" in gate and "409" in gate, (
+            "the gate must refuse an active link with a 409"
+        )
+
+    def test_rows_are_counted_before_the_delete_not_after(self):
+        """The FK cascade removes children at the DATABASE level, invisibly to
+        the ORM, so a count taken afterwards is always zero. An audit entry
+        that cannot say what it destroyed is not an audit entry."""
+        import inspect
+        from app.routers.collection import delete_campaign
+
+        src = inspect.getsource(delete_campaign)
+        assert src.index("_count_campaign_rows") < src.index("db.delete(tok)"), (
+            "counts must be taken BEFORE the cascade fires"
+        )
+        assert src.index("write_audit") < src.index("db.delete(tok)"), (
+            "the audit must be written while the rows still exist"
+        )
+
+    def test_the_purge_audit_carries_counts_not_addresses(self):
+        """ADR-437 D3. ADR-431 put row content in the audit for a SINGLE
+        delete; 400 addresses in a JSONB blob is a copy of the quarantine
+        inside the audit log, which defeats the purge."""
+        import inspect
+        from app.routers.collection import purge_campaign_data
+
+        src = inspect.getsource(purge_campaign_data)
+        detail = src[src.index("detail={"):src.index("}", src.index("detail={")) + 1]
+        assert '"profiles"' in detail and '"walker_days"' in detail, (
+            "the audit must record how much was destroyed"
+        )
+        assert "r.address" not in detail and "addresses" not in detail, (
+            "the campaign purge audit must not copy the addresses it is deleting"
+        )
+
+    def test_purge_keeps_the_campaign_and_delete_removes_it(self):
+        """The two actions answer different questions and must not converge."""
+        import inspect
+        from app.routers.collection import purge_campaign_data, delete_campaign
+
+        purge = inspect.getsource(purge_campaign_data)
+        assert "db.delete(tok)" not in purge, (
+            "purge must KEEP the campaign row — that is what distinguishes it "
+            "from delete_campaign (ADR-437 D1)"
+        )
+        assert "db.delete(tok)" in inspect.getsource(delete_campaign)
