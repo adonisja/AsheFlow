@@ -42,8 +42,11 @@ from app.schemas.walker_day import (
     WalkerDaySubmitIn, WalkerDaySubmitOut,
 )
 from app.schemas.collection import (
+    LeaderboardEntryOut,
+    LeaderboardIn,
     SCOPE_COMPANY,
     SCOPE_OPEN,
+    TOP_COLLECTORS,
     VERIFICATION_LIMIT,
     CollectionCheckIn,
     CollectionCheckOut,
@@ -146,6 +149,7 @@ def submit_profiles(
 
     accepted = 0
     duplicate = 0
+    updated = 0
     # Which of THIS request's addresses the campaign already had. Not a read
     # path: every entry is an address the submitter just supplied (D4).
     duplicate_addresses: list[str] = []
@@ -173,8 +177,50 @@ def submit_profiles(
         if n >= VERIFICATION_LIMIT
     }
 
+    # ADR-426. Rows THIS device already owns, so a correction updates in place
+    # instead of being refused as a duplicate.
+    #
+    # Checked BEFORE the lock, deliberately: the verification limit exists to
+    # stop a third OBSERVATION, not to freeze a collector's own typo into the
+    # data. A device correcting its own row leaves the door with exactly the
+    # same number of observations it had.
+    owned: dict[str, CollectedAddressProfile] = {}
+    if body.device_id:
+        owned = {
+            r.door_key: r
+            for r in db.query(CollectedAddressProfile).filter(
+                CollectedAddressProfile.token_id == tok.id,
+                CollectedAddressProfile.device_id == body.device_id,
+                CollectedAddressProfile.door_key.in_(keys),
+            )
+        }
+
     for p in body.profiles:
-        if door_key(p.address)[:200] in locked_keys:
+        key = door_key(p.address)[:200]
+
+        mine = owned.get(key)
+        if mine is not None:
+            # An update, not a new observation. `collected_on` is deliberately
+            # NOT changed: the date records when the door was seen, and
+            # correcting a typo days later does not move that.
+            mine.address           = p.address
+            mine.building_type     = p.building_type
+            mine.building_category = category_for(p.building_type)
+            mine.has_security_desk = p.has_security_desk
+            mine.workloads         = p.workloads
+            mine.workload_other    = p.workload_other
+            mine.workload_class    = p.workloads[0]
+            mine.note              = p.note
+            mine.opens_at          = p.opens_at
+            mine.closes_at         = p.closes_at
+            mine.break_start       = p.break_start
+            mine.break_end         = p.break_end
+            mine.troublesome       = p.troublesome
+            mine.collected_by      = p.collected_by
+            updated += 1
+            continue
+
+        if key in locked_keys:
             # Counted as a duplicate rather than failing the batch: the rest of
             # the submission is good, and the collector is told which addresses
             # were already answered.
@@ -206,7 +252,9 @@ def submit_profiles(
             collected_on=p.collected_on,
             # D7 — the folded key, set at the one place rows are created so it
             # can never drift from `address`.
-            door_key=door_key(p.address)[:200],
+            door_key=key,
+            # ADR-426 — who may later correct this row.
+            device_id=body.device_id,
         )
         db.add(row)
         try:
@@ -220,7 +268,7 @@ def submit_profiles(
             duplicate += 1
             duplicate_addresses.append(p.address)
 
-    if accepted:
+    if accepted or updated:
         write_audit(
             db,
             action_type="collection.submit",
@@ -229,7 +277,8 @@ def submit_profiles(
             company_id=str(tok.company_id),
             # No actor_id: there is no account behind this, and inventing one
             # would make the audit log claim something untrue.
-            detail={"label": tok.label, "accepted": accepted, "duplicate": duplicate},
+            detail={"label": tok.label, "accepted": accepted,
+                    "duplicate": duplicate, "updated": updated},
         )
     db.commit()
 
@@ -238,6 +287,7 @@ def submit_profiles(
         accepted=accepted,
         duplicate=duplicate,
         duplicate_addresses=duplicate_addresses,
+        updated=updated,
     )
 
 
@@ -290,7 +340,8 @@ def check_address(
         return CollectionCheckOut(known=False)
 
     rows = (
-        db.query(CollectedAddressProfile.collected_on)
+        db.query(CollectedAddressProfile.collected_on,
+                 CollectedAddressProfile.device_id)
         .filter(
             CollectedAddressProfile.token_id == tok.id,
             CollectedAddressProfile.door_key == key,
@@ -303,11 +354,21 @@ def check_address(
     )
     if not rows:
         return CollectionCheckOut(known=False)
+
+    # ADR-426. A door this device already submitted is not locked TO THIS
+    # DEVICE: a resubmission updates that row rather than adding a third
+    # observation. Without this the form cleared the field on a door the
+    # collector had profiled themselves, which is the worst possible moment to
+    # discard their typing.
+    mine = body.device_id is not None and any(
+        d == body.device_id for _, d in rows
+    )
     return CollectionCheckOut(
         known=True,
         collected_on=rows[0][0],
         count=len(rows),
-        locked=len(rows) >= VERIFICATION_LIMIT,
+        locked=len(rows) >= VERIFICATION_LIMIT and not mine,
+        mine=mine,
     )
 
 
@@ -571,6 +632,56 @@ def revoke_token(
     )
     db.commit()
     return {"revoked": True}
+
+
+@router.post("/leaderboard", status_code=status.HTTP_200_OK)
+@limiter.limit("60/minute")
+def campaign_leaderboard(
+    request: Request,
+    body: LeaderboardIn,
+    db: Session = Depends(get_db),
+    caller: Employee | None = Depends(get_caller_employee_anonymous),
+) -> list[LeaderboardEntryOut]:
+    """A campaign's top collectors (ADR-427).
+
+    ANOTHER READ ON THE PUBLIC PATH, and narrower than the duplicate check:
+    it returns handles and counts, never an address. ADR-415 D4 forbade reads
+    because collected ADDRESSES are customer data; a count of submissions by
+    self-chosen handle is not.
+
+    The handle is what makes this safe. The field asks for an alias and says
+    why, so what appears here is "Sparky — 14", not a coworker's legal name.
+    A collector who types their real name has disclosed it to people who
+    already hold the same campaign link.
+
+    Scoped by token, so a leaderboard shows one campaign and cannot be used to
+    enumerate others. Company campaigns require a login like every other path
+    on this endpoint.
+
+    Rows with no handle are omitted rather than bucketed as "Anonymous": they
+    are not a competitor, and a large unnamed row at the top would read as one
+    person dominating.
+    """
+    tok = _resolve_token(db, body.token)
+    _authorise_scope(tok, caller)
+
+    rows = (
+        db.query(
+            CollectedAddressProfile.collected_by,
+            sa_func.count(CollectedAddressProfile.id).label("n"),
+        )
+        .filter(
+            CollectedAddressProfile.token_id == tok.id,
+            CollectedAddressProfile.collected_by.isnot(None),
+            CollectedAddressProfile.collected_by != "",
+        )
+        .group_by(CollectedAddressProfile.collected_by)
+        .order_by(sa_func.count(CollectedAddressProfile.id).desc())
+        # Top three, plus enough to break a tie sensibly at the boundary.
+        .limit(TOP_COLLECTORS)
+        .all()
+    )
+    return [LeaderboardEntryOut(handle=h, count=n) for h, n in rows]
 
 
 # ── Reads (ADR-415 addendum, rescoped by ADR-423) ────────────────────────────
