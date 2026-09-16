@@ -1,12 +1,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock,
+  ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock, Trash2,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { errorText } from '../../utils/errorText';
 import {
   buildingTypeLabel, formatHours, workloadLabels,
@@ -313,6 +314,38 @@ export default function CollectionData({ platform = true }: {
       setError('');
     } catch (e) {
       setError(errorText(e, 'Could not revoke that link.'));
+    }
+  };
+
+  /** The row queued for deletion, or null. ADR-431.
+   *
+   *  Holding the ROW rather than an id so the dialog can name the address.
+   *  That is the whole safety mechanism here: the realistic mistake is
+   *  deleting the wrong row, and only the address catches it. */
+  const [toDelete, setToDelete] = useState<CollectedProfile | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  /** Remove one observation, permanently (ADR-431 D2).
+   *
+   *  No optimistic removal and no undo toast, which is the usual modern
+   *  default: there is nothing to roll back to. The row is gone server-side
+   *  before the list reloads, so showing it as gone early would only
+   *  mis-report a failure. The refetch is the confirmation. */
+  const confirmDelete = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      await axiosClient.delete(`/collection/profiles/${toDelete.id}`);
+      setToDelete(null);
+      // Reload the CURRENT campaign, not all of them: loadProfiles(null)
+      // silently widens the table to every campaign after a delete.
+      await loadProfiles(activeToken);
+      setError('');
+    } catch (e) {
+      setError(errorText(e, 'Could not delete that address.'));
+      setToDelete(null);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -738,7 +771,11 @@ export default function CollectionData({ platform = true }: {
                     <th className="py-2 pr-3 font-semibold">Workload</th>
                     <th className="py-2 pr-3 font-semibold">Hours</th>
                     <th className="py-2 pr-3 font-semibold">By</th>
-                    <th className="py-2 font-semibold">Collected</th>
+                    <th className="py-2 pr-3 font-semibold">Collected</th>
+                    {/* No header text: an icon-only action column reads as
+                        chrome, and "Actions" would be the widest thing in a
+                        column holding one 12px button. */}
+                    <th className="py-2 font-semibold"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -826,7 +863,7 @@ export default function CollectionData({ platform = true }: {
                       <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
                         {p.collected_by ?? '—'}
                       </td>
-                      <td className="py-2 whitespace-nowrap text-muted-foreground">
+                      <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">
                         {p.collected_on}
                         <span className="block text-[11px]">{fmt(p.submitted_at)}</span>
                         {/* Which of the door's observations this row is. Says
@@ -838,6 +875,29 @@ export default function CollectionData({ platform = true }: {
                             : 'open · 1 more wanted'}
                         </span>
                       </td>
+                      {/* ADR-431. Delete, and deliberately no edit beside it:
+                          this table records what collectors actually
+                          submitted, and an admin retyping a value would make
+                          the row a claim about two people while still reading
+                          as one. A wrong value is fixed by the collector
+                          resubmitting (ADR-426).
+
+                          Quiet by default and red only on hover. UX Movement:
+                          reserve red for the confirmation itself — a row of
+                          permanently red buttons in a table draws the eye to
+                          the one action nobody should take casually. */}
+                      <td className="py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setToDelete(p)}
+                          disabled={deleting}
+                          title="Delete this observation"
+                          aria-label={`Delete the observation for ${p.address}`}
+                          className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger focus:outline-none focus:ring-2 focus:ring-danger/40 disabled:opacity-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
                     </tr>
                     );
                   })}
@@ -847,6 +907,28 @@ export default function CollectionData({ platform = true }: {
           )}
         </section>
       </div>
+
+      {/* NAMES THE ADDRESS, and says plainly that it cannot be undone.
+          ADR-431 D2 rejected a typed confirmation ("type DELETE"): NN/g
+          reserves that for the most dangerous and RARE actions, and removing a
+          test submission from a 30-day survey is neither — the friction would
+          be trained away on exactly the person who deletes most. The address is
+          what catches the real error. */}
+      <ConfirmDialog
+        open={toDelete !== null}
+        variant="danger"
+        title="Delete this observation?"
+        message={
+          toDelete
+            ? `${toDelete.address}, collected by ${toDelete.collected_by ?? 'an anonymous collector'}`
+              + ` on ${toDelete.collected_on}. This cannot be undone, and field work cannot be re-walked.`
+            : ''
+        }
+        confirmLabel="Delete it"
+        cancelLabel="Keep it"
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
+      />
     </div>
   );
 }
