@@ -188,6 +188,48 @@ export async function checkAddress(
   }
 }
 
+/** Drops submitted rows the server no longer has (ADR-434).
+ *
+ *  THE BUG THIS FIXES IS NOT JUST A STALE LIST. ADR-431 lets an admin hard-
+ *  delete a collected row; ADR-425 keeps the collector's own copy in IndexedDB
+ *  and nothing ever compared the two. So a deleted row stayed visible on the
+ *  collector's device — and worse, ADR-426's "resubmitting updates my own row"
+ *  depends on that row still existing server-side. Once deleted, the owning-row
+ *  lookup misses and a resubmission lands as a NEW observation: the deleted row
+ *  comes back wearing a fresh collected_on and looks like a real second visit.
+ *
+ *  `/check` already answers exactly this question per address per device, so
+ *  there is no delete broadcast and no sync protocol — just a sweep.
+ *
+ *  BOUNDED AND FAIL-SILENT (ADR-434 D2). At most `limit` rows per sweep, newest
+ *  first, because a collector with 300 submissions must not fire 300 requests on
+ *  mount. A check that fails leaves the row ALONE: a network error is not
+ *  evidence of a deletion, and treating it as one would wipe a collector's
+ *  history whenever their phone dropped signal. Wrongly keeping a row is visible
+ *  and self-corrects next sweep; wrongly dropping one destroys their record.
+ *
+ *  Returns the ids to forget, so the caller owns the write.
+ */
+export async function findDeletedSubmissions(
+  token: string,
+  rows: { id: string; address: string }[],
+  limit = 25,
+): Promise<string[]> {
+  if (!submitConfigured() || !token.trim()) return [];
+  const gone: string[] = [];
+  for (const r of rows.slice(0, limit)) {
+    const res = await checkAddress(token, r.address);
+    // 'unknown' is offline or rate-limited — cannot say, so say nothing.
+    // 'new' means the server has NO observation of this door at all, from
+    // anyone: this device's row is gone.
+    if (res.state === 'new') gone.push(r.id);
+    // 'known' but not `mine` means other observations survive and this
+    // device's own row was the one removed.
+    else if (res.state === 'known' && !res.mine) gone.push(r.id);
+  }
+  return gone;
+}
+
 // ── Route log (ADR-417 D3) ───────────────────────────────────────────────────
 
 export interface DaySubmitResult {
