@@ -50,14 +50,22 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".config" / "asheflow"
 CLIENT_SECRET = CONFIG_DIR / "google_oauth.json"
 TOKEN_CACHE = CONFIG_DIR / "google_token.json"
-SCOPES = [
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/presentations",
-    # drive.file, not drive: this grants access ONLY to files this script
-    # creates, never to the rest of the account's Drive. A compliance script
-    # asking for read access to everything would be its own bad look.
-    "https://www.googleapis.com/auth/drive.file",
-]
+# ONE SCOPE, AND IT IS ENOUGH.
+#
+# The obvious list is documents + presentations + drive.file, and that is what
+# this asked for first. Google granted only drive.file and silently dropped the
+# other two — no error, just a token with fewer scopes than requested, which
+# oauthlib then rejects as "Scope has changed".
+#
+# drive.file turns out to cover the whole job: it permits creating files AND
+# editing the ones this app created, so the Docs and Slides APIs work on files
+# we made ourselves. Verified by probe before simplifying — created a Doc
+# through Drive, wrote into it through the Docs API, with drive.file alone.
+#
+# It is also the scope to want on its own merits: access is limited to files
+# this script creates, never the rest of the account's Drive. A compliance
+# script asking to read everything would be its own bad look.
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # The production host. Counts come from here or not at all.
 PROD_INSTANCE = "i-095bf2ed310c86741"
@@ -158,11 +166,14 @@ def build(counts: dict[str, str] | None) -> list[tuple[str, str]]:
         ("NORMAL", "AsheFlow is an independent system built and operated by Akkeem. "
                    "It is not an Amazon product, integration, or partner tool, holds no "
                    "Amazon API credentials, and has no approval or relationship with Amazon."),
-        ("NORMAL", "It does collect customer personal data: delivery addresses observed "
-                   "on routes, together with what is visible at the door — building type, "
-                   "access hours and workload. Submissions are stored in a PostgreSQL "
-                   "database on an AWS EC2 instance in us-east-2 (Ohio) operated by "
-                   "Akkeem, not on Amazon or DSP systems."),
+        ("NORMAL", "It collects building addresses seen on delivery routes, together "
+                   "with what is visible at the door: building type, access hours and "
+                   "workload. Each address is standardised in the browser before it is "
+                   "sent, so apartment, floor, suite and any name are removed and the "
+                   "stored record describes a building rather than a household. "
+                   "Submissions are held in a PostgreSQL database on an AWS EC2 "
+                   "instance in us-east-2 (Ohio) operated by Akkeem, not on Amazon or "
+                   "DSP systems."),
 
         ("HEADING_1", "The questions asked"),
         ("HEADING_2", "Is this an Amazon-approved platform?"),
@@ -354,8 +365,8 @@ def slides(counts: dict[str, str] | None) -> list[tuple[str, list[str]]]:
     ]
 
 
-def build_deck(service, counts: dict[str, str] | None, title: str) -> str:
-    """Create the presentation and return its id.
+def build_deck(service, counts: dict[str, str] | None, deck_id: str) -> str:
+    """Fill a presentation that Drive already created.
 
     Slides has no "append a slide with this content" call: a slide is created,
     then its placeholder shapes are discovered by reading the created object,
@@ -363,9 +374,6 @@ def build_deck(service, counts: dict[str, str] | None, title: str) -> str:
     three phases, not one loop. Guessing placeholder ids without the read-back
     is the usual way this breaks.
     """
-    deck = service.presentations().create(body={"title": title}).execute()
-    deck_id = deck["presentationId"]
-
     content = slides(counts)
     # Slide 1 already exists (Slides always makes one); reuse it as the title.
     reqs = [{"createSlide": {"slideLayoutReference": {"predefinedLayout": "TITLE_AND_BODY"}}}
@@ -394,34 +402,65 @@ def build_deck(service, counts: dict[str, str] | None, title: str) -> str:
 
 
 def to_requests(blocks: list[tuple[str, str]]) -> list[dict]:
-    """Docs API batch. Built BACK TO FRONT.
+    """Docs API batch. Text and paragraph styles only.
 
-    Every insertion shifts the indices of everything after it, so inserting
-    forwards means recomputing offsets for each block and getting one wrong
-    silently scrambles the document. Walking backwards means each insert lands
-    at index 1 and nothing downstream moves.
+    Built BACK TO FRONT. Every insertion shifts the indices of everything after
+    it, so inserting forwards means recomputing offsets for each block and
+    getting one wrong silently scrambles the document. Walking backwards means
+    each insert lands at index 1 and nothing downstream moves.
+
+    BULLETS ARE NOT DONE HERE. `createParagraphBullets` takes a RANGE, and a
+    range recorded during the backwards pass points at whatever paragraph later
+    ends up at that index — which is a different paragraph by the time the batch
+    runs. The first attempt bulleted every line in the document, including the
+    title. They are applied in a second pass instead, once the text is in place
+    and the indices are real: see `bullet_requests`.
     """
     reqs: list[dict] = []
     for style, text in reversed(blocks):
         body = text + "\n"
         end = 1 + len(body)
         reqs.append({"insertText": {"location": {"index": 1}, "text": body}})
-        if style == "BULLET":
-            reqs.append({
+        # The API's name for body text is NORMAL_TEXT; "NORMAL" is rejected.
+        named = "NORMAL_TEXT" if style in ("NORMAL", "BULLET") else style
+        reqs.append({
+            "updateParagraphStyle": {
+                "range": {"startIndex": 1, "endIndex": end},
+                "paragraphStyle": {"namedStyleType": named},
+                "fields": "namedStyleType",
+            }
+        })
+    return reqs
+
+
+def bullet_requests(doc: dict, blocks: list[tuple[str, str]]) -> list[dict]:
+    """Bullet the paragraphs that asked for it, by reading the real document.
+
+    Matches on TEXT rather than position: the document is read back after the
+    insert pass, so each paragraph's true start and end index is known. Anything
+    that guesses an index here is guessing about a document it has not seen.
+
+    Applied bottom-up so each request's range stays valid — bulleting does not
+    change character counts, but it costs nothing to be consistent with the
+    insert pass and it removes a class of bug from the reader's mind.
+    """
+    wanted = {text for style, text in blocks if style == "BULLET"}
+    out: list[dict] = []
+    for el in doc["body"]["content"]:
+        para = el.get("paragraph")
+        if not para:
+            continue
+        txt = "".join(r["textRun"]["content"] for r in para["elements"]
+                      if "textRun" in r).strip()
+        if txt in wanted:
+            out.append({
                 "createParagraphBullets": {
-                    "range": {"startIndex": 1, "endIndex": end},
+                    "range": {"startIndex": el["startIndex"],
+                              "endIndex": el["endIndex"]},
                     "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
                 }
             })
-        else:
-            reqs.append({
-                "updateParagraphStyle": {
-                    "range": {"startIndex": 1, "endIndex": end},
-                    "paragraphStyle": {"namedStyleType": style},
-                    "fields": "namedStyleType",
-                }
-            })
-    return reqs
+    return list(reversed(out))
 
 
 def main() -> int:
@@ -500,16 +539,34 @@ def main() -> int:
     stem = args.title or f"AsheFlow Address Study — Data Record — {date.today():%Y-%m-%d}"
     made: list[tuple[str, str]] = []
 
+    drive = gbuild("drive", "v3", credentials=creds)
+
     if not args.no_doc:
+        # Created through DRIVE, not docs.documents().create(): a file this app
+        # created is one drive.file may edit, which is what makes the single
+        # scope sufficient.
+        doc_id = drive.files().create(
+            body={"name": stem,
+                  "mimeType": "application/vnd.google-apps.document"},
+            fields="id").execute()["id"]
         docs = gbuild("docs", "v1", credentials=creds)
-        doc_id = docs.documents().create(body={"title": stem}).execute()["documentId"]
         docs.documents().batchUpdate(
             documentId=doc_id, body={"requests": to_requests(blocks)}).execute()
+        # Second pass: read the document back, then bullet by real index.
+        doc = docs.documents().get(documentId=doc_id).execute()
+        bullets = bullet_requests(doc, blocks)
+        if bullets:
+            docs.documents().batchUpdate(
+                documentId=doc_id, body={"requests": bullets}).execute()
         made.append(("Doc", f"https://docs.google.com/document/d/{doc_id}/edit"))
 
     if not args.no_slides:
+        deck_id = drive.files().create(
+            body={"name": f"{stem} (briefing)",
+                  "mimeType": "application/vnd.google-apps.presentation"},
+            fields="id").execute()["id"]
         pres = gbuild("slides", "v1", credentials=creds)
-        deck_id = build_deck(pres, counts, f"{stem} (briefing)")
+        build_deck(pres, counts, deck_id)
         made.append(("Slides",
                      f"https://docs.google.com/presentation/d/{deck_id}/edit"))
 
