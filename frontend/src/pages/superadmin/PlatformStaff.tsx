@@ -32,6 +32,13 @@ interface StaffRow {
    *  before it can be activated (ADR-397). It holds no privilege meanwhile. */
   pending?: boolean;
   status: string;
+  /** ADR-444 D1. False when SES rejected the credentials email. The account
+   *  exists and cannot sign in to request its own reset, so the password below
+   *  is the only way in. */
+  email_delivered?: boolean;
+  /** Present ONLY when email_delivered is false. Never populated on success --
+   *  a delivered password must not also sit in a response. */
+  temp_password?: string | null;
 }
 
 const GROUPS = [
@@ -325,12 +332,35 @@ export default function PlatformStaff() {
           </button>
         </form>
 
-        {created && (
+        {created && created.email_delivered !== false && (
           <div className="mt-4 rounded-lg border border-success/30 bg-success/10 p-4">
             <p className="text-sm font-medium">Created {created.email}</p>
             <p className="text-sm text-muted-foreground mt-1">
               A temporary password has been emailed. They cannot sign in until they
               set a permanent password and add an authenticator app.
+            </p>
+          </div>
+        )}
+
+        {/* ADR-444 D1. The account exists but the email did not arrive, and it
+            cannot sign in to request a reset -- so this is the ONLY copy of the
+            password. Shown loudly because closing this panel loses it. */}
+        {created && created.email_delivered === false && (
+          <div className="mt-4 rounded-lg border border-warning/40 bg-warning/10 p-4">
+            <p className="text-sm font-medium">
+              Created {created.email} &mdash; but the email could not be sent
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Give them this temporary password another way. It is not stored and
+              will not be shown again once you leave this page.
+            </p>
+            <code className="mt-2 block rounded bg-background px-3 py-2 font-mono
+                             text-sm select-all break-all">
+              {created.temp_password}
+            </code>
+            <p className="text-xs text-muted-foreground mt-2">
+              They still must set a permanent password and add an authenticator
+              app before they can sign in.
             </p>
           </div>
         )}

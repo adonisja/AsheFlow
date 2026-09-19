@@ -732,7 +732,11 @@ def update_employee(
                     {"Name": "email", "Value": new_email},
                     {"Name": "name",  "Value": db_employee.name},
                 ],
-                DesiredDeliveryMediums=["EMAIL"],
+                # ADR-444 D2. Cognito's stock invite is a bare one-liner from an
+                # address nobody recognises. We send the same branded invite a
+                # new hire gets — this person is unregistered, so an invite is
+                # exactly the artefact they should have had the first time.
+                MessageAction="SUPPRESS",
             )
             new_sub = next(
                 (a["Value"] for a in response["User"]["Attributes"] if a["Name"] == "sub"),
@@ -740,6 +744,25 @@ def update_employee(
             )
             db_employee.cognito_sub = new_sub
             db_employee.invited_at = datetime.now(timezone.utc)
+
+            # The old address's token must die with the old address, or a
+            # correction made because the first address was WRONG leaves the
+            # wrong recipient holding a live registration link.
+            db.query(InviteToken).filter(
+                InviteToken.employee_id == db_employee.id,
+                # Redundant — db_employee was already fetched scoped to
+                # caller.company_id — and kept anyway: a delete is the wrong
+                # place to rely on a guarantee established 500 lines earlier.
+                InviteToken.company_id == caller.company_id,
+            ).delete()
+            token_str = secrets.token_urlsafe(48)
+            db.add(InviteToken(
+                token=token_str,
+                company_id=db_employee.company_id,
+                employee_id=db_employee.id,
+                expires_at=datetime.now(timezone.utc)
+                + timedelta(days=settings.invite_expiry_days),
+            ))
             db.commit()
             db.refresh(db_employee)
 
@@ -755,6 +778,21 @@ def update_employee(
             raise HTTPException(
                 status_code=502,
                 detail="Email updated in DB but Cognito re-invite failed. Contact support.",
+            )
+
+        # Outside the Cognito try: a send failure is not a 502. The shell and
+        # the token are correct, so the operator's remedy is Resend Invite
+        # (ADR-442), not redoing the correction.
+        try:
+            send_invite_email(
+                to_email=new_email,
+                employee_name=db_employee.name,
+                token=token_str,
+            )
+        except ClientError as e:
+            logger.error(
+                "Invite email for corrected address failed (employee %s): %s",
+                db_employee.id, e.response.get("Error", {}).get("Code", "Unknown"),
             )
 
     # Sync Cognito group when role changes on an active account
