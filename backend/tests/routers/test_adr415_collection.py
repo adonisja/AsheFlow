@@ -305,11 +305,11 @@ class TestThePlatformOwnerCanReadWhatArrived:
         import inspect
         from app.api.deps import get_platform_staff
         from app.routers.collection import (
-            get_collected_day, list_collected_days, list_collected_profiles, list_tokens,
+            list_collected_profiles, list_tokens,
         )
 
         for fn in (list_collected_profiles, list_tokens,
-                   list_collected_days, get_collected_day):
+                   ):
             deps = [
                 p.default.dependency
                 for p in inspect.signature(fn).parameters.values()
@@ -614,9 +614,9 @@ class TestCampaignScope:
         open rows out of a company admin's reads: `company_id == <uuid>` never
         matches NULL."""
         from app.models.collection import (
-            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+            CollectedAddressProfile, CollectionToken,
         )
-        for m in (CollectionToken, CollectedAddressProfile, CollectedWalkerDay):
+        for m in (CollectionToken, CollectedAddressProfile):
             assert m.__table__.columns["company_id"].nullable, (
                 f"{m.__tablename__}.company_id must be nullable to hold an "
                 f"open campaign's rows"
@@ -635,7 +635,7 @@ class TestCampaignScope:
         )
 
     @pytest.mark.parametrize("fn_name", [
-        "submit_profiles", "check_address", "submit_walker_days",
+        "submit_profiles", "check_address",
     ])
     def test_every_public_path_enforces_the_scope(self, fn_name):
         """All three, not just submit. A company campaign's duplicate check
@@ -681,7 +681,7 @@ class TestCampaignScope:
         )
         from app.routers import collection as C
 
-        for fn in (C.submit_profiles, C.check_address, C.submit_walker_days):
+        for fn in (C.submit_profiles, C.check_address):
             deps = [
                 p.default.dependency
                 for p in inspect.signature(fn).parameters.values()
@@ -717,15 +717,14 @@ class TestNullableColumnsAreOptionalInResponses:
         import typing
 
         from app.models.collection import (
-            CollectedAddressProfile, CollectedWalkerDay, CollectionToken,
+            CollectedAddressProfile, CollectionToken,
         )
         from app.schemas.collection import CollectedProfileOut, CollectionTokenSummary
-        from app.schemas.walker_day import CollectedWalkerDayOut
 
+        # ADR-440 removed the walker-day pair with its table.
         pairs = [
             (CollectedProfileOut, CollectedAddressProfile),
             (CollectionTokenSummary, CollectionToken),
-            (CollectedWalkerDayOut, CollectedWalkerDay),
         ]
         mismatches = []
         for schema, model in pairs:
@@ -922,7 +921,7 @@ class TestADR435PublicSurfaceHardening:
 
         public = [
             C.submit_profiles, C.check_address,
-            C.submit_walker_days, C.campaign_leaderboard,
+            C.campaign_leaderboard,
         ]
         for fn in public:
             src = inspect.getsource(fn)
@@ -1016,7 +1015,7 @@ class TestADR437CampaignCleanup:
 
         src = inspect.getsource(purge_campaign_data)
         detail = src[src.index("detail={"):src.index("}", src.index("detail={")) + 1]
-        assert '"profiles"' in detail and '"walker_days"' in detail, (
+        assert '"profiles"' in detail, (
             "the audit must record how much was destroyed"
         )
         assert "r.address" not in detail and "addresses" not in detail, (
@@ -1034,3 +1033,68 @@ class TestADR437CampaignCleanup:
             "from delete_campaign (ADR-437 D1)"
         )
         assert "db.delete(tok)" in inspect.getsource(delete_campaign)
+
+
+class TestADR439LinkIsIssuedForOneStudy:
+    """A collection link is valid for one study only (ADR-439)."""
+
+    def test_every_public_token_resolve_declares_a_dataset(self):
+        """ADR-421 separated the PAGES; this separates the CREDENTIAL.
+
+        Checks the CALL, not a list of endpoints: a new public endpoint that
+        resolves a token without naming its dataset would silently accept links
+        issued for the other study, which is exactly the property this ADR
+        removes.
+        """
+        import inspect
+        from app.routers import collection as C
+
+        src = inspect.getsource(C)
+        bare = src.count("_resolve_token(db, body.token)")
+        assert bare == 0, (
+            f"{bare} public endpoint(s) resolve a token without a dataset — a "
+            f"link issued for one study would be accepted by the other"
+        )
+
+    def test_the_wrong_dataset_is_indistinguishable_from_a_bad_token(self):
+        """ADR-439 D3. ADR-415 made this 404 deliberately uninformative so it
+        cannot be used as an oracle; a distinct error would confirm the token
+        is real while naming which study it belongs to."""
+        import inspect
+        from app.routers.collection import _resolve_token
+
+        src = inspect.getsource(_resolve_token)
+        # One raise, one message, covering every rejection reason.
+        assert src.count("raise HTTPException") == 1, (
+            "a second raise means the dataset mismatch answers differently "
+            "from a revoked or nonexistent token"
+        )
+        assert "dataset is not None" in src, "the gate is not applied"
+
+    def test_dataset_is_bounded_on_the_create_schema(self):
+        """It is a request field (unlike `scope`), so it is attacker-reachable
+        and must be validated against the known set."""
+        import pytest
+        from pydantic import ValidationError
+        from app.schemas.collection import (
+            CollectionTokenCreate, DATASET_ADDRESSES, DATASET_ROUTES,
+        )
+
+        for ok in (DATASET_ADDRESSES, DATASET_ROUTES):
+            assert CollectionTokenCreate(label="x", dataset=ok).dataset == ok
+        # Defaults to the address study, so a route campaign is explicit.
+        assert CollectionTokenCreate(label="x").dataset == DATASET_ADDRESSES
+        with pytest.raises(ValidationError):
+            CollectionTokenCreate(label="x", dataset="everything")
+
+    def test_the_operator_can_see_what_a_link_permits(self):
+        """ADR-439 D4. A control the operator cannot see the state of is one
+        they cannot reason about."""
+        from app.schemas.collection import (
+            CollectionTokenOut, CollectionTokenSummary,
+        )
+
+        for schema in (CollectionTokenOut, CollectionTokenSummary):
+            assert "dataset" in schema.model_fields, (
+                f"{schema.__name__} does not expose which study the link is for"
+            )

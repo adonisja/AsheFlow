@@ -242,6 +242,11 @@ class LeaderboardIn(BaseModel):
     token: str = Field(..., min_length=16, max_length=64)
 
 
+# ADR-439. What a link may submit, as opposed to who may submit it.
+DATASET_ADDRESSES = "addresses"
+DATASET_ROUTES = "routes"
+DATASETS = frozenset({DATASET_ADDRESSES, DATASET_ROUTES})
+
 class CollectionTokenCreate(BaseModel):
     """Operator-side, authenticated. Issues a campaign token."""
     model_config = ConfigDict(extra="forbid")
@@ -249,6 +254,19 @@ class CollectionTokenCreate(BaseModel):
     label:      str = Field(..., min_length=1, max_length=120)
     daily_cap:  int = Field(500, ge=1, le=5000)
     expires_in_days: Optional[int] = Field(None, ge=1, le=365)
+
+    # ADR-439. WHICH study this link is for. Unlike `scope` below, this IS a
+    # request field: it is a choice about what the campaign collects, not a
+    # privilege boundary, and both principals may legitimately want either.
+    # Defaulting to addresses makes a route-log campaign an explicit act.
+    dataset: str = Field(DATASET_ADDRESSES)
+
+    @field_validator("dataset")
+    @classmethod
+    def _known_dataset(cls, v: str) -> str:
+        if v not in DATASETS:
+            raise ValueError(f"dataset must be one of {sorted(DATASETS)}")
+        return v
 
     # ADR-423. Deliberately ABSENT: `scope` and `company_id` are decided by WHO
     # is calling, not by what they ask for. A super admin creates an open
@@ -279,6 +297,9 @@ class CollectionTokenOut(BaseModel):
     daily_cap:  int
     created_at: object
     scope:      str
+    # ADR-439. Which study this link is for, so an operator can see
+    # what it permits without reading the decision record.
+    dataset:    str = DATASET_ADDRESSES
     company_id: Optional[UUID] = None
     token:      Optional[str] = None
 
@@ -371,6 +392,9 @@ class CollectionTokenSummary(BaseModel):
     # NULL for an open campaign (ADR-423).
     company_id:  Optional[UUID]
     scope:       str
+    # ADR-439. Which study this link is for, so an operator can see what it
+    # permits from the campaign list.
+    dataset:     str = DATASET_ADDRESSES
     label:       str
     daily_cap:   int
     revoked_at:  Optional[object]

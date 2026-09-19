@@ -80,6 +80,15 @@ class CollectionToken(Base):
     #   "open"    — anyone with the link (super admin only)
     #   "company" — an authenticated employee of `company_id` (ADR-423 D2)
     scope       = Column(String(10), nullable=False, server_default="open", index=True)
+
+    # WHAT may be submitted, decided at creation and never inferred (ADR-439).
+    #   "addresses" — /submit, /check, /leaderboard
+    #   "routes"    — /submit-day
+    #
+    # Separate from `scope` because the two axes vary independently: scope is
+    # WHO may submit, this is WHAT they may submit. One combined enum would need
+    # a new value every time either axis gained one.
+    dataset     = Column(String(10), nullable=False, server_default="addresses", index=True)
     created_by_name = Column(String(100), nullable=True)
     created_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -175,64 +184,3 @@ class CollectedAddressProfile(Base):
     reviewed_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     reviewed_at   = Column(DateTime(timezone=True), nullable=True)
 
-
-class CollectedWalkerDay(Base):
-    """One walker's logged day, submitted from the public route log (ADR-417 D3).
-
-    A QUARANTINE TABLE, like `collected_address_profiles`. Nothing else reads
-    it, nothing joins to it, and there is no promotion path into the routing
-    model. That is deliberate and it is what makes the eventual PII strip a
-    DELETE rather than a migration: `walker_name` holds real coworkers' names,
-    stored verbatim because the whole point of the data is per-walker
-    comparison against the sort output.
-
-    The day's routes, totes, addresses, RTS and OVs live in one JSONB `payload`
-    rather than five tables. Research data, one reader, a CSV as its output —
-    normalising it would buy join performance nobody needs and cost a migration
-    every time the field log grows a column.
-    """
-    __tablename__ = "collected_walker_days"
-    __table_args__ = (
-        # ADR-417 D5 — upsert key. One row per walker per date per campaign; a
-        # resubmission REPLACES. The field connection drops mid-submit often
-        # enough that a retry has to be safe, and the page already models one
-        # row per walker per date locally.
-        UniqueConstraint(
-            "token_id", "collected_on", "walker_name",
-            name="uq_collected_days_token_day_walker",
-        ),
-    )
-
-    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Resolved from the token, never from the request body (ADR-415 D2).
-    # NULL for an open campaign — see CollectionToken.company_id.
-    company_id  = Column(UUID(as_uuid=True), nullable=True, index=True)
-    token_id    = Column(UUID(as_uuid=True),
-                         ForeignKey("collection_tokens.id", ondelete="CASCADE"),
-                         nullable=False, index=True)
-
-    # As typed. NOT resolved to employees.id: a FK would give referential
-    # integrity and make the eventual strip a schema change touching live
-    # relationships, where this is a DELETE.
-    walker_name  = Column(String(100), nullable=False)
-    collected_on = Column(Date, nullable=False, index=True)
-
-    arrival_time   = Column(String(5), nullable=True)   # "HH:MM", station-local
-    departure_time = Column(String(5), nullable=True)
-
-    # Denormalised counts, written from the payload at submit time. They exist
-    # so the super-admin listing can show "3 routes, 41 totes" without parsing
-    # every payload — a read-time aggregate over JSONB would be the same work
-    # repeated on every page load.
-    route_count = Column(Integer, nullable=False, server_default="0")
-    tote_count  = Column(Integer, nullable=False, server_default="0")
-    rts_count   = Column(Integer, nullable=False, server_default="0")
-
-    # The whole day, validated by WalkerDayIn before it lands here.
-    payload = Column(JSONB, nullable=False, server_default="{}")
-
-    submitted_at = Column(DateTime(timezone=True), nullable=False,
-                          server_default=func.now())
-    # Bumped on every overwrite, so a reader can tell a corrected day from a
-    # first submission without diffing payloads.
-    revision = Column(Integer, nullable=False, server_default="1")

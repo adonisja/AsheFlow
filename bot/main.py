@@ -112,7 +112,7 @@ class AsheFlowBot(commands.Bot):
             if base_role:
                 roles_to_assign.append(base_role)
 
-        employee = await api.get_employee_by_discord(str(member.id))
+        employee = await api.get_employee_by_discord(str(member.id), company_id=company_id)
         if employee:
             role_attr = self._ROLE_MAP.get(employee.get("role", ""))
             if role_attr:

@@ -16,11 +16,12 @@ Endpoints:
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.ratelimit import limiter
 from app.services.company_config import get_discord_config
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -58,6 +59,87 @@ class GuildConfigResponse(BaseModel):
     role_captain:        int | None
     role_walker:         int | None
     is_configured:       bool
+
+
+class MachineCredentialResponse(BaseModel):
+    """One tenant's Cognito machine credential.
+
+    Returns a LIVE secret, which is why the endpoint is audited and rate
+    limited. It is the narrowest way for the bot to authenticate as the tenant
+    whose guild sent a command (ADR-441 D1).
+    """
+    company_id:    str
+    client_id:     str
+    client_secret: str
+
+
+@router.get(
+    "/machine-credentials/{company_id}",
+    response_model=MachineCredentialResponse,
+    dependencies=[Depends(_verify_secret)],
+)
+@limiter.limit("30/minute")
+def get_machine_credentials(
+    request: Request,
+    company_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> MachineCredentialResponse:
+    """The machine credential for ONE company (ADR-441 D1).
+
+    THE BOT CANNOT USE THE SUPER-ADMIN REVEAL ENDPOINT. That one is gated on
+    get_super_admin, so giving the bot a token for it would hand it every
+    tenant's secret plus everything else a super admin can do. This channel is
+    the narrower instrument, and the bot already authenticates to it with
+    X-Internal-Secret to read guild config.
+
+    This does not restore the blast radius ADR-364 rejected. That was about one
+    COGNITO credential authorising every tenant, with no revocation because an
+    M2M token cannot be revoked (ADR-363 D5). Each tenant still has its own
+    client, scope and rotation; what is shared is INTERNAL_SECRET, which was
+    already shared, is not a Cognito credential, and can be rotated in one place.
+
+    Rate limited because a leaked INTERNAL_SECRET enumerating every tenant's
+    secret should be slow and loud rather than a single loop.
+    """
+    from app.models.company import Company
+    from app.services.audit import write_audit
+    from app.services.tenant_machine_client import reveal_machine_client_secret
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Company not found")
+    if not company.machine_client_id:
+        # 404, not 500: a company without a provisioned client is a normal
+        # state (ADR-364 provisions after the commit, so creation can succeed
+        # and provisioning fail), and the bot's fallback handles it.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="No machine client provisioned for this company")
+
+    try:
+        secret = reveal_machine_client_secret(company.machine_client_id)
+    except RuntimeError as exc:
+        logger.warning("machine credential read failed for %s: %s", company_id, exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="Could not read the machine credential.")
+
+    # ADR-441 D4. A credential read that leaves no trace is indistinguishable
+    # from an exfiltration. Names the company, never the secret.
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.machine_client_secret_read",
+        target_table="companies",
+        target_id=str(company.id),
+        detail={"client_id": company.machine_client_id, "reader": "internal"},
+    )
+    db.commit()
+
+    return MachineCredentialResponse(
+        company_id=str(company.id),
+        client_id=company.machine_client_id,
+        client_secret=secret,
+    )
 
 
 @router.get(

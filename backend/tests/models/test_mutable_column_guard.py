@@ -51,7 +51,6 @@ REASSIGN_ONLY = {
     # the upsert assigns `existing.payload = payload` wholesale, and the create
     # path passes it to the constructor. Verified before declaring: no
     # .append/.update/.setdefault/[key]= anywhere on a payload attribute.
-    "CollectedWalkerDay.payload":           "the day is restated whole on every submit",
     # ADR-263. Set at seed time and replaced wholesale on re-seed
     # (seed_training_curriculum.py assigns `exists.roles = list(roles)`), never
     # appended to. A curriculum item's track membership is restated from the
