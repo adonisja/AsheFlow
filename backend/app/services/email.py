@@ -6,6 +6,30 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _log_ses_failure(to_email: str, exc) -> None:
+    """Log a send failure, naming the sandbox when that is what it is.
+
+    ADR-442 D3. "email delivery failed" sent an operator to the IAM policies
+    first, which were identical across environments and entirely fine. The cause
+    was visible in the error all along: an AccessDenied whose RESOURCE is the
+    recipient's identity ARN is the SES sandbox refusing an unverified
+    recipient, not a missing permission.
+
+    Naming it here means the log answers the question instead of starting a
+    search.
+    """
+    err = getattr(exc, "response", {}).get("Error", {})
+    code = err.get("Code", "Unknown")
+    hint = ""
+    if code == "AccessDenied" and f"identity/{to_email}" in str(exc):
+        hint = (
+            " — this is the SES sandbox refusing an unverified RECIPIENT, not "
+            "an IAM policy problem. Verify the address, or request SES "
+            "production access."
+        )
+    logger.error("SES send_email failed for %s (%s): %s%s", to_email, code, exc, hint)
+
+
 def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: str) -> None:
     """Send a Discord server invite link to a newly activated employee."""
     first_name = employee_name.split()[0]
@@ -75,7 +99,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
         )
         logger.info("Discord invite email sent to %s", to_email)
     except ClientError as e:
-        logger.error("SES send_email (discord invite) failed for %s: %s", to_email, e)
+        _log_ses_failure(to_email, e)
         raise
 
 
@@ -209,7 +233,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
         )
         logger.info("Credentials email sent to %s", to_email)
     except ClientError as e:
-        logger.error("SES send_email (credentials) failed for %s: %s", to_email, e)
+        _log_ses_failure(to_email, e)
         raise
 
 
@@ -288,5 +312,5 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
         )
         logger.info("Invite email sent to %s", to_email)
     except ClientError as e:
-        logger.error("SES send_email failed for %s: %s", to_email, e)
+        _log_ses_failure(to_email, e)
         raise

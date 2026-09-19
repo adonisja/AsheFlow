@@ -358,10 +358,40 @@ def resend_credentials(
             temp_password=temp_password,
         )
     except ClientError as e:
-        logger.error("Credentials resend email failed for %s: %s", employee.email, e)
-        raise HTTPException(status_code=502, detail="Credentials reset but email delivery failed.")
+        # ADR-442 D2. RETURN THE PASSWORD RATHER THAN STRANDING THE ACCOUNT.
+        #
+        # The temp password is generated here, set in Cognito, and never
+        # persisted — this email was its only delivery channel. Raising without
+        # it leaves an account whose password exists and which nobody knows,
+        # and retrying just repeats the failure with a new password. An
+        # employee locked out by an email problem is a worse outcome than the
+        # reset never having run.
+        #
+        # This is not a widening of access: the caller is already management or
+        # admin for this company, already authorised to SET this password, and
+        # has just done so. Withholding the value they created protects nothing.
+        #
+        # Returned ONLY here. A successful send returns no credential, because
+        # when email works it is the better channel and there is no reason to
+        # put a live password in a second place.
+        code = e.response.get("Error", {}).get("Code", "Unknown")
+        logger.error(
+            "Credentials resend email failed for %s (%s): %s",
+            employee.email, code, e,
+        )
+        return {
+            "detail": (
+                f"Credentials were reset, but the email to {employee.email} "
+                f"could not be delivered ({code}). Give this temporary password "
+                f"to {employee.name} directly — it is not stored anywhere and "
+                f"will not be shown again."
+            ),
+            "email_delivered": False,
+            "username": employee.username,
+            "temp_password": temp_password,
+        }
 
-    return {"detail": f"Credentials resent to {employee.email}."}
+    return {"detail": f"Credentials resent to {employee.email}.", "email_delivered": True}
 
 
 @router.get("/validate", response_model=ValidateResponse)
