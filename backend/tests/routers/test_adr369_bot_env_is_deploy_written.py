@@ -59,8 +59,14 @@ class TestTheDeployWritesTheM2MCredentials:
 
 
 class TestAMissingParameterFallsBack:
-    """ADR-369 D2 -- prod has no M2M parameters yet, so the deploy must succeed
-    and leave the bot on the password path rather than half-configured."""
+    """ADR-369 D2 -- an environment without M2M parameters must still deploy,
+    rather than ending up half-configured.
+
+    The original wording said "prod has no M2M parameters yet". That is no
+    longer why this matters: ADR-441 made per-tenant credentials the normal
+    path, so the env pair is a FALLBACK that fires only when a company has no
+    provisioned client. The requirement is unchanged — optional fields, loud
+    failure when half-set — but the reason is."""
 
     def test_the_bot_requires_both_values_before_using_m2m(self):
         src = BOT_CONFIG.read_text(errors="ignore")
@@ -83,3 +89,50 @@ class TestAMissingParameterFallsBack:
             "a half-configured environment must be refused with a named error"
         )
         assert "COGNITO_M2M_CLIENT_ID and COGNITO_M2M_CLIENT_SECRET are required" in client
+
+
+class TestBothEnvironmentsWriteTheBotEnv:
+    """ADR-441. Prod's deploy job BUILDS AND STARTS the bot container but never
+    wrote its .env, so the container had a stale pre-ADR-377 file (BOT_USERNAME,
+    BOT_PASSWORD, no M2M keys) and could not start. Staging had the step; prod
+    did not, and nothing said so.
+    """
+
+    @staticmethod
+    def _jobs():
+        import yaml
+        from pathlib import Path
+        ci = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
+        return yaml.safe_load(ci.read_text())["jobs"]
+
+    def test_every_deploy_job_writes_the_bot_env(self):
+        """Checks BOTH jobs, not a named one: a third environment added later
+        inherits the question instead of rediscovering it."""
+        for job in ("deploy-staging", "deploy-prod"):
+            names = [s.get("name", "") for s in self._jobs()[job]["steps"]]
+            assert any("bot .env" in n for n in names), (
+                f"{job} starts the bot container but never writes its .env"
+            )
+
+    def test_the_bot_env_is_written_before_the_deploy(self):
+        """The deploy is what starts the container. An .env written after it
+        lands on a container that already failed to start."""
+        for job in ("deploy-staging", "deploy-prod"):
+            names = [s.get("name", "") for s in self._jobs()[job]["steps"]]
+            env_at = next(i for i, n in enumerate(names) if "bot .env" in n)
+            dep_at = next(i for i, n in enumerate(names) if n == "Deploy backend via SSM")
+            assert env_at < dep_at, f"{job} writes bot/.env after the deploy"
+
+    def test_prod_reads_its_own_parameter_path(self):
+        """A copied step that still points at /asheflow/staging/ would put
+        staging's secrets on the prod host."""
+        import re
+        from pathlib import Path
+
+        ci = (Path(__file__).resolve().parents[3]
+              / ".github" / "workflows" / "ci.yml").read_text()
+        i = ci.index("Write prod bot .env")
+        block = ci[i:i + 4000]
+        m = re.search(r"Path=((?:chr\(\d+\)\+?)+)", block)
+        path = "".join(chr(int(c)) for c in re.findall(r"chr\((\d+)\)", m.group(1)))
+        assert path == "/asheflow/prod/", f"prod bot step reads {path}"
