@@ -265,7 +265,12 @@ def get_caller_employee(
         employee.account_status = "active"
         employee.is_active = True
         needs_commit = True
-        _send_discord_invite(employee)
+        # ADR-443 — imported here, not at module scope: this module is imported
+        # by nearly every router, and the service pulls in requests and the SES
+        # client.
+        from app.services.discord_invite import send_on_first_login
+
+        send_on_first_login(employee)
 
     if needs_commit:
         db.commit()
@@ -276,49 +281,6 @@ def get_caller_employee(
             detail="No employee record found for your account. Contact your manager.",
         )
     return employee
-
-
-def _send_discord_invite(employee) -> None:
-    """Get a guild invite URL from the bot and email it to the employee — best effort, non-blocking."""
-    import threading
-    import requests
-    from app.services.email import send_discord_invite_email
-    from botocore.exceptions import ClientError
-
-    def _fire():
-        
-        log = __import__("logging").getLogger(__name__)
-        if not employee.email:
-            log.warning("No email on file for %s — skipping Discord invite email.", employee.name)
-            return
-        try:
-            bot_url = settings.bot_internal_url
-            secret  = settings.internal_secret
-            resp = requests.post(
-                f"{bot_url}/internal/invite",
-                json={"name": employee.name, "company_id": str(employee.company_id)},
-                headers={"X-Internal-Secret": secret},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            invite_url = resp.json().get("invite_url")
-            if not invite_url:
-                log.error("Bot returned no invite_url for %s.", employee.name)
-                return
-        except Exception as e:
-            log.warning("Discord invite bot call failed for %s: %s", employee.name, e)
-            return
-
-        try:
-            send_discord_invite_email(
-                to_email=employee.email,
-                employee_name=employee.name,
-                invite_url=invite_url,
-            )
-        except ClientError as e:
-            log.error("Discord invite email failed for %s: %s", employee.email, e)
-
-    threading.Thread(target=_fire, daemon=True).start()
 
 
 def get_caller_employee_anonymous(

@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
-from app.services import device_fleet, mfa_status
+from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
@@ -795,6 +795,69 @@ def update_employee(
         detail={k: str(v) if v is not None else None for k, v in updates.items()},
     )
     return db_employee
+
+
+@router.post("/{employee_id}/discord-invite", status_code=status.HTTP_200_OK)
+def resend_discord_invite(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """Send this employee their Discord invite again (ADR-443).
+
+    THE ONE SENDER WITH NO RECOVERY PATH. The invite fires once, inside the
+    block that flips an employee from pending_verification to active on first
+    login — so the condition guarding it is false forever after. It runs on a
+    daemon thread where every failure is swallowed, and nothing records the
+    outcome. An employee whose invite failed is `active`, looks entirely
+    normal, and is simply absent from Discord, with no badge to prompt the
+    question.
+
+    Synchronous, unlike the login path: an operator pressed this and is looking
+    at the result. The stage is named because the remedies differ — a bot
+    failure sends them to Discord settings, an email failure to the address or
+    the SES sandbox.
+
+    No "did it fail before?" gate: nothing records that (see ADR-443 D4).
+    Sending a second invite to someone who already has one is harmless.
+    """
+    target = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if not target.email:
+        raise HTTPException(
+            status_code=400,
+            detail="This employee has no email address on file.",
+        )
+
+    try:
+        result = discord_invite.fetch_and_send(target)
+    except discord_invite.DiscordInviteError as exc:
+        # 400 for the one the operator can fix on this page; 502 for the two
+        # that are a service failing behind us.
+        status_code = 400 if exc.stage == "email" and "No email" in exc.detail else 502
+        raise HTTPException(status_code=status_code, detail=exc.detail)
+
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.discord_invite_resent",
+        target_table="employees",
+        target_id=str(target.id),
+        # Dim 7: the address is NOT recorded. ADR-336 D1 made the same call for
+        # the delivery alert — it is the payload of the thing that was sent,
+        # not something the audit needs to identify the action.
+        detail={"stage": "sent"},
+    )
+    db.commit()
+
+    return {"detail": f"Discord invite sent to {result.email}.", "sent": True}
 
 
 @router.post("/{employee_id}/mfa/reset", status_code=status.HTTP_200_OK)
