@@ -1,10 +1,32 @@
 import boto3
+import html
 import logging
 from botocore.exceptions import ClientError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def _greeting_name(employee_name: str) -> tuple[str, str]:
+    """First name for the plain-text body, and an HTML-escaped copy for the HTML one.
+
+    DIMENSION 10 (ADR-435). The name is operator-entered free text and lands
+    inside an HTML email body. Unescaped, a name containing `<` silently
+    truncates the message in the recipient's client, and `<img src=x
+    onerror=...>` is an injected tag in whatever renders it. React protects the
+    web app; nothing protects an email body, so it is escaped HERE, at the sink
+    that interprets it, rather than at the point the name was typed -- a person
+    genuinely called O'Brien is data, not an attack.
+
+    Returns (plain, escaped) because the text/plain part must NOT be escaped:
+    `O&#x27;Brien` in a plain-text email is a rendering bug.
+
+    Also absorbs the empty case. `"".split()[0]` is an IndexError, which would
+    turn a blank name into a failed send rather than a slightly impersonal one.
+    """
+    parts = employee_name.split()
+    plain = parts[0] if parts else "there"
+    return plain, html.escape(plain)
 
 def _log_ses_failure(to_email: str, exc) -> None:
     """Log a send failure, naming the sandbox when that is what it is.
@@ -32,7 +54,7 @@ def _log_ses_failure(to_email: str, exc) -> None:
 
 def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: str) -> None:
     """Send a Discord server invite link to a newly activated employee."""
-    first_name = employee_name.split()[0]
+    first_name, first_name_html = _greeting_name(employee_name)
 
     subject = "Join the AsheFlow Discord server"
     body_text = (
@@ -57,7 +79,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
           <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px;">Field operations, simplified</p>
         </td></tr>
         <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">You're all set, {first_name}!</p>
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">You're all set, {first_name_html}!</p>
           <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
             Your AsheFlow account is active. Join the team Discord server to receive dispatch notifications and stay connected with your crew.
           </p>
@@ -110,7 +132,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
     with MessageAction=SUPPRESS so only this email is sent).
     """
     login_url  = f"{settings.app_base_url}/login"
-    first_name = employee_name.split()[0]
+    first_name, first_name_html = _greeting_name(employee_name)
 
     subject = "Your AsheFlow account is ready"
     body_text = (
@@ -148,7 +170,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
 
         <!-- Body -->
         <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">Welcome aboard, {first_name}!</p>
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">Welcome aboard, {first_name_html}!</p>
           <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
             Your account has been created. Use the credentials below to sign in for the first time.
           </p>
@@ -163,7 +185,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
                     <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">
                       <span style="font-size:12px;color:#9ca3af;font-weight:500;">USERNAME</span>
                       <div style="background:#ffffff;border:1px solid #e0daf7;border-radius:8px;padding:10px 14px;margin-top:6px;">
-                        <span style="font-size:16px;font-weight:700;color:#111827;font-family:'Courier New',monospace;letter-spacing:0.02em;">{username}</span>
+                        <span style="font-size:16px;font-weight:700;color:#111827;font-family:'Courier New',monospace;letter-spacing:0.02em;">{html.escape(username)}</span>
                       </div>
                       <p style="margin:4px 0 0;font-size:11px;color:#a78bfa;">Triple-click to select &amp; copy</p>
                     </td>
@@ -172,7 +194,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
                     <td style="padding:10px 0 0;">
                       <span style="font-size:12px;color:#9ca3af;font-weight:500;">TEMPORARY PASSWORD</span>
                       <div style="background:#ffffff;border:1px solid #e0daf7;border-radius:8px;padding:10px 14px;margin-top:6px;">
-                        <span style="font-size:16px;font-weight:700;color:#111827;font-family:'Courier New',monospace;letter-spacing:0.05em;">{temp_password}</span>
+                        <span style="font-size:16px;font-weight:700;color:#111827;font-family:'Courier New',monospace;letter-spacing:0.05em;">{html.escape(temp_password)}</span>
                       </div>
                       <p style="margin:4px 0 0;font-size:11px;color:#a78bfa;">Triple-click to select &amp; copy</p>
                     </td>
@@ -240,7 +262,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
 def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
     """Send a registration invite email via SES."""
     register_url = f"{settings.app_base_url}/register?token={token}"
-    first_name = employee_name.split()[0]
+    first_name, first_name_html = _greeting_name(employee_name)
 
     subject = "You've been invited to AsheFlow"
     body_text = (
@@ -266,7 +288,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
           <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px;">Field operations, simplified</p>
         </td></tr>
         <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">You've been invited, {first_name}!</p>
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">You've been invited, {first_name_html}!</p>
           <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
             Your manager has created an AsheFlow account for you. Click the button below to complete your setup.
           </p>

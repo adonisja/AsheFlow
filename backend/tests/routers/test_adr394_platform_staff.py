@@ -122,9 +122,59 @@ class TestNoCredentialIsReturned:
     def test_the_response_model_has_no_password_field(self):
         assert "password" not in {f.lower() for f in P.PlatformStaffOut.model_fields}
 
-    def test_cognito_emails_the_temporary_password(self):
+    def test_the_password_reaches_the_person_by_email_not_the_response(self):
+        """ADR-444 D1 changed the SENDER, not this property.
+
+        Cognito used to mail its own stock template; we now suppress that and
+        send the branded credentials email. What ADR-394 actually guards is that
+        the credential travels to the person's inbox and not back to the caller,
+        which is unchanged.
+        """
         src = inspect.getsource(P.create_platform_staff)
-        assert 'DesiredDeliveryMediums=["EMAIL"]' in src
+        assert 'MessageAction="SUPPRESS"' in src, \
+            "Cognito's stock template carries a live password in plain text (ADR-444)"
+        assert "send_credentials_email" in src, \
+            "suppressing Cognito's email without sending ours strands the account"
+
+    def test_a_successful_send_returns_no_password(self):
+        """The recovery field (ADR-442 D2) must stay shut on the happy path.
+
+        It exists so a FAILED send does not strand an account that cannot
+        request its own reset — not as a second delivery channel.
+        """
+        from unittest.mock import MagicMock, patch
+        from botocore.exceptions import ClientError
+        body = P.PlatformStaffCreate(
+            email="p@example.com", name="Pending Person", group="super_admin")
+        c = MagicMock()
+        c.admin_get_user.side_effect = ClientError(
+            {"Error": {"Code": "UserNotFoundException"}}, "AdminGetUser")
+        with patch("boto3.client", return_value=c), \
+                patch.object(P, "write_audit"), \
+                patch.object(P, "send_credentials_email") as send:
+            out = P.create_platform_staff(body=body, _super={}, db=MagicMock())
+        assert send.called, "the branded credentials email was never sent"
+        assert out.email_delivered is True
+        assert out.temp_password is None, \
+            "a delivered password must not also come back in the response"
+
+    def test_a_failed_send_returns_the_password_instead(self):
+        """Otherwise the account exists, cannot sign in, and cannot self-recover."""
+        from unittest.mock import MagicMock, patch
+        from botocore.exceptions import ClientError
+        body = P.PlatformStaffCreate(
+            email="p@example.com", name="Pending Person", group="super_admin")
+        c = MagicMock()
+        c.admin_get_user.side_effect = ClientError(
+            {"Error": {"Code": "UserNotFoundException"}}, "AdminGetUser")
+        with patch("boto3.client", return_value=c), \
+                patch.object(P, "write_audit"), \
+                patch.object(P, "send_credentials_email", side_effect=ClientError(
+                    {"Error": {"Code": "MessageRejected"}}, "SendEmail")):
+            out = P.create_platform_staff(body=body, _super={}, db=MagicMock())
+        assert out.email_delivered is False
+        assert out.temp_password, \
+            "a failed send must hand back the credential or the account is lost"
 
 
 class TestCreateDoesNotGrantTheGroup:
