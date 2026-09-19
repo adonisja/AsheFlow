@@ -196,6 +196,15 @@ class Settings(BaseSettings):
 
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
+    # ADR-445. The configuration set SES stamps on every send so bounce and
+    # complaint events reach our SNS topic. Empty disables the header entirely
+    # rather than sending a name that does not exist -- SES rejects the message
+    # if the set is missing, so a typo here would stop all mail.
+    ses_configuration_set: str = ""
+    # Checked AFTER the signature verifies (ADR-445 D2). Empty means "accept any
+    # genuinely-AWS topic", which is correct before the topic exists and should
+    # be set once it does.
+    sns_ses_topic_arn: str = ""
 
     # Public base URL of the web app — used to build invite links in emails.
     app_base_url: str = "http://localhost:5173"
