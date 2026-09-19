@@ -28,6 +28,19 @@ def _greeting_name(employee_name: str) -> tuple[str, str]:
     plain = parts[0] if parts else "there"
     return plain, html.escape(plain)
 
+def _configuration_set_kwargs() -> dict:
+    """ADR-445 D1. Stamp the configuration set so SES publishes bounce and
+    complaint events to our SNS topic.
+
+    Passed as **kwargs rather than a literal argument because SES REJECTS a
+    send naming a configuration set that does not exist -- so an unset value
+    must omit the parameter entirely, not send an empty string. That is the
+    difference between "events are not wired up yet" and "no mail goes out".
+    """
+    name = getattr(settings, "ses_configuration_set", "") or ""
+    return {"ConfigurationSetName": name} if name else {}
+
+
 def _log_ses_failure(to_email: str, exc) -> None:
     """Log a send failure, naming the sandbox when that is what it is.
 
@@ -109,6 +122,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
         client.send_email(
+            **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
             Message={
@@ -243,6 +257,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
         client.send_email(
+            **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
             Message={
@@ -322,6 +337,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
         client.send_email(
+            **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
             Message={

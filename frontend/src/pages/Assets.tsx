@@ -27,17 +27,28 @@ type Employee = {
   account_status: string;
   phone_number: string | null;
   invited_at: string | null;
+  /** ADR-445. SES told us, out of band, that mail to this address failed.
+   *  Null means no bounce has been observed — weaker than "known good". */
+  email_bounced_at: string | null;
+  /** 'Permanent' (bad address) or 'Complaint' (marked as spam). Transient
+   *  bounces set neither — a full mailbox is not a bad address. */
+  email_bounce_type: string | null;
   injury_status: 'injured' | 'disabled' | null;
   injury_status_since: string | null;
 };
 
-type EmployeeLifecycle = 'not_invited' | 'invited' | 'registered' | 'active' | 'deactivated';
+type EmployeeLifecycle =
+  'not_invited' | 'invited' | 'bounced' | 'registered' | 'active' | 'deactivated';
 
 function getLifecycle(e: Employee): EmployeeLifecycle {
   if (e.account_status === 'active' && !e.is_active) return 'deactivated';
   if (e.account_status === 'active'  &&  e.is_active) return 'active';
   // pending_verification below
   if (e.username) return 'registered';   // form submitted, Cognito account exists, not signed in yet
+  // ADR-445 — ahead of 'invited' deliberately. The invite WAS sent, so the old
+  // order showed "Invited" and the admin waited for a reply that cannot come.
+  // A bounce is the more actionable fact, and it is the one they can fix.
+  if (e.email_bounced_at) return 'bounced';
   if (e.invited_at) return 'invited';    // invite email sent, link not yet used
   return 'not_invited';                  // record created, invite never sent
 }
@@ -45,6 +56,7 @@ function getLifecycle(e: Employee): EmployeeLifecycle {
 const LIFECYCLE_BADGE: Record<EmployeeLifecycle, { label: string; cls: string }> = {
   not_invited: { label: 'Not invited',  cls: 'bg-accent text-muted-foreground' },
   invited:     { label: 'Invited',      cls: 'bg-warning/10 text-warning' },
+  bounced:     { label: 'Email bounced', cls: 'bg-danger/10 text-danger' },
   registered:  { label: 'Registered',   cls: 'bg-info/10 text-info' },
   active:      { label: 'Active',       cls: 'bg-success/10 text-success' },
   deactivated: { label: 'Deactivated',  cls: 'bg-danger/10 text-danger' },
