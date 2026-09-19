@@ -117,7 +117,7 @@ class SetupCog(commands.Cog, name="Setup"):
 
         # ── Truck channels ────────────────────────────────────────────────
         try:
-            trucks = await api.get_trucks()
+            trucks = await api.get_trucks(company_id=company_id)
         except Exception as e:
             errors.append(f"Could not fetch trucks from API: {e}")
             trucks = []

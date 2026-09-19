@@ -21,7 +21,7 @@ import discord
 from discord.ext import commands
 
 from services.api_client import api
-from services.guild_config import GuildConfig, get_guild_config
+from services.guild_config import GuildConfig, get_company_id_for_guild, get_guild_config
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,32 @@ class ConfirmationView(discord.ui.View):
         # Guard against persistent-view mis-dispatch: after a bot restart, Discord
         # routes button clicks to whichever view last registered custom_id="confirm_yes".
         # Verify the clicker's Discord ID maps to this view's employee before recording.
+        #
+        # ADR-441. The company is RE-RESOLVED from the guild rather than taken
+        # from self.company_id, for the same reason this guard exists: after a
+        # restart this view instance may be the one registered by a DIFFERENT
+        # tenant's message, so its stored company_id can name the wrong company.
+        # Authenticating with that tenant's credential is the cross-tenant write
+        # this ADR removes. The guild is what the click actually happened in.
+        #
+        # A DM has no guild. That is the normal case for a confirmation button,
+        # so it falls back to the view's own company — which is correct there,
+        # because a DM view is only ever reachable by the employee it was built
+        # for, and the employee check below confirms it.
+        company_id = (
+            get_company_id_for_guild(interaction.guild_id)
+            if interaction.guild_id else None
+        ) or self.company_id
+        if not company_id:
+            await interaction.response.send_message(
+                "⚠️ Could not identify your company. Please contact dispatch.",
+                ephemeral=True,
+            )
+            return
+
         try:
-            clicker = await api.get_employee_by_discord(str(interaction.user.id))
+            clicker = await api.get_employee_by_discord(
+                str(interaction.user.id), company_id=company_id)
         except Exception:
             clicker = None
         if clicker is None or str(clicker.get("id")) != self.employee_id:
@@ -83,7 +107,8 @@ class ConfirmationView(discord.ui.View):
             return
 
         try:
-            await api.post_confirmation(self.dispatch_date, self.employee_id, status)
+            await api.post_confirmation(self.dispatch_date, self.employee_id, status,
+                                        company_id=company_id)
         except Exception as e:
             logger.error("Failed to record confirmation for %s: %s", self.employee_id, e)
             await interaction.response.send_message(
@@ -118,11 +143,11 @@ class ConfirmationView(discord.ui.View):
 # Helpers: phase-lookup for trainer DMs
 # ---------------------------------------------------------------------------
 
-async def _fetch_trainee_phases(trainees: list[dict]) -> list[tuple[str, str]]:
+async def _fetch_trainee_phases(trainees: list[dict], *, company_id: str) -> list[tuple[str, str]]:
     """Return (name, phase_label) for each trainee. Falls back to '?' on error."""
     results = []
     for t in trainees:
-        phase = await api.get_trainee_current_phase(t["employee_id"])
+        phase = await api.get_trainee_current_phase(t["employee_id"], company_id=company_id)
         results.append((t["name"], str(phase) if phase is not None else "?"))
     return results
 
@@ -305,7 +330,7 @@ def _build_drivers_chat_embed(
 # ---------------------------------------------------------------------------
 
 async def _build_trainers_chat_embed(
-    trucks_data: list[dict], dispatch_date: str,
+    trucks_data: list[dict], dispatch_date: str, *, company_id: str,
 ) -> tuple[discord.Embed, bool]:
     """One embed listing every truck with trainers and/or trainees for the day.
 
@@ -328,7 +353,8 @@ async def _build_trainers_chat_embed(
         for m in entry["crew"] if m["role"] == "trainee"
     ]
     phase_results = await asyncio.gather(
-        *[api.get_trainee_current_phase(t["employee_id"]) for t in all_trainees],
+        *[api.get_trainee_current_phase(t["employee_id"], company_id=company_id)
+          for t in all_trainees],
         return_exceptions=True,
     )
     phase_map: dict[str, int | None] = {
@@ -432,8 +458,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             return
 
         try:
-            dispatch = await api.get_dispatch(dispatch_date)
-            trucks   = await api.get_trucks()
+            dispatch = await api.get_dispatch(dispatch_date, company_id=company_id)
+            trucks   = await api.get_trucks(company_id=company_id)
         except Exception as e:
             await report_error(f"Failed to fetch dispatch data for `{dispatch_date}`: {e}")
             return
@@ -495,7 +521,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         truck_name, dispatch_date, dock_by_truck.get(str(truck_id)),
                     )
                 else:
-                    dm_embed = await self._build_crew_dm(member, crew, dispatch_date)
+                    dm_embed = await self._build_crew_dm(member, crew, dispatch_date,
+                                                         company_id=company_id)
 
                 view = ConfirmationView(
                     dispatch_date=dispatch_date,
@@ -538,7 +565,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             color=discord.Color.blurple(),
         )
 
-    async def _build_crew_dm(self, member: dict, crew: list[dict], dispatch_date: str) -> discord.Embed:
+    async def _build_crew_dm(self, member: dict, crew: list[dict], dispatch_date: str,
+                             *, company_id: str) -> discord.Embed:
         role = member.get("role", "walker")
         member_id = member.get("employee_id")
 
@@ -550,7 +578,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 if m["role"] == "trainee" and m.get("paired_trainer_id") == member_id
             ]
             if paired_trainees:
-                phase_info = await _fetch_trainee_phases(paired_trainees)
+                phase_info = await _fetch_trainee_phases(paired_trainees, company_id=company_id)
                 lines = "\n".join(f"  📋 **{name}** — Day {phase}" for name, phase in phase_info)
                 pairing_note = f"\n\n📋 **Your trainee today:**\n{lines}"
             else:
@@ -599,9 +627,9 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         that has already posted crews and cannot be undone.
         """
         try:
-            dispatch = await api.get_dispatch(dispatch_date)
-            confs = await api.get_confirmations(dispatch_date)
-            trucks = await api.get_trucks()
+            dispatch = await api.get_dispatch(dispatch_date, company_id=company_id)
+            confs = await api.get_confirmations(dispatch_date, company_id=company_id)
+            trucks = await api.get_trucks(company_id=company_id)
         except Exception as e:
             logger.warning("refresh_day_summaries: could not fetch day state: %s", e)
             return
@@ -616,7 +644,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
 
         try:
-            recorded = await api.get_day_summary(dispatch_date) or {}
+            recorded = await api.get_day_summary(dispatch_date, company_id=company_id) or {}
         except Exception as e:
             logger.warning("refresh_day_summaries: could not read receipts: %s", e)
             recorded = {}
@@ -631,12 +659,12 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     channel=drivers_channel,
                     embed=embed,
                     message_id=recorded.get("drivers_summary_message_id"),
-                    dispatch_date=dispatch_date, kind="drivers",
+                    dispatch_date=dispatch_date, kind="drivers", company_id=company_id,
                 )
 
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
         if trainers_channel:
-            embed, has_pairings = await _build_trainers_chat_embed(day, dispatch_date)
+            embed, has_pairings = await _build_trainers_chat_embed(day, dispatch_date, company_id=company_id)
             # ADR-327 D1 — silence when there is nothing to say.
             # ADR-334 D1/D2 — ask the BUILDER. This tested `embed.fields`, which
             # this builder never populates (it renders into `description`), so
@@ -646,7 +674,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     channel=trainers_channel,
                     embed=embed,
                     message_id=recorded.get("trainers_summary_message_id"),
-                    dispatch_date=dispatch_date, kind="trainers",
+                    dispatch_date=dispatch_date, kind="trainers", company_id=company_id,
                 )
 
         captains_channel = guild.get_channel(cfg.captains_channel_id) if cfg.captains_channel_id else None
@@ -661,10 +689,11 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         color=0x5865F2,
                     ),
                     message_id=recorded.get("captains_summary_message_id"),
-                    dispatch_date=dispatch_date, kind="captains",
+                    dispatch_date=dispatch_date, kind="captains", company_id=company_id,
                 )
 
-    async def _upsert_summary(self, *, channel, embed, message_id, dispatch_date, kind):
+    async def _upsert_summary(self, *, channel, embed, message_id, dispatch_date, kind,
+                              company_id: str):
         """Edit the standing day summary, or post one and record its id (ADR-327 D2).
 
         Mirrors ADR-295 D2's crew-embed handling, including its most important
@@ -693,7 +722,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
             msg = await channel.send(embed=embed)
             try:
-                await api.record_day_summary(dispatch_date, kind, msg.id)
+                await api.record_day_summary(dispatch_date, kind, msg.id, company_id=company_id)
                 logger.info("day summary (%s): posted %s and recorded", kind, msg.id)
             except Exception as e:
                 # Non-fatal, exactly as ADR-295 D2 reasons about the crew embed:
@@ -728,9 +757,9 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             return
 
         try:
-            dispatch = await api.get_dispatch(dispatch_date)
-            trucks   = await api.get_trucks()
-            confs    = await api.get_confirmations(dispatch_date)
+            dispatch = await api.get_dispatch(dispatch_date, company_id=company_id)
+            trucks   = await api.get_trucks(company_id=company_id)
+            confs    = await api.get_confirmations(dispatch_date, company_id=company_id)
         except Exception as e:
             await report_error(f"Failed to fetch data for `{dispatch_date}`: {e}")
             return
@@ -821,7 +850,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 # the right degradation. Failing the finalize over a bookkeeping
                 # call would be far worse than losing the ability to edit.
                 try:
-                    await api.record_crew_embed(dispatch_date, truck_id, crew_msg.id)
+                    await api.record_crew_embed(dispatch_date, truck_id, crew_msg.id, company_id=company_id)
                 except Exception as e:
                     logger.warning(
                         "finalize: could not record crew embed id for %s — "
@@ -885,7 +914,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         # ADR-327 D2 — edit the standing summary instead of stacking a new one.
         recorded = {}
         try:
-            recorded = await api.get_day_summary(dispatch_date) or {}
+            recorded = await api.get_day_summary(dispatch_date, company_id=company_id) or {}
         except Exception as e:
             logger.warning("finalize_assignments: could not read day-summary receipts: %s", e)
 
@@ -897,6 +926,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 message_id=recorded.get("drivers_summary_message_id"),
                 dispatch_date=dispatch_date,
                 kind="drivers",
+                company_id=company_id,
             )
 
         # Post trainer↔trainee pairings to #trainers-chat if configured
@@ -908,7 +938,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
         if trainers_channel:
             try:
-                embed, has_pairings = await _build_trainers_chat_embed(day_summary, dispatch_date)
+                embed, has_pairings = await _build_trainers_chat_embed(day_summary, dispatch_date, company_id=company_id)
                 # ADR-334 — logged has_fields=%d against a builder that never sets
                 # fields, so this printed 0 forever and read as "nothing to
                 # report" during the ADR-327 investigation. Log the real signal.
@@ -933,6 +963,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         message_id=recorded.get("trainers_summary_message_id"),
                         dispatch_date=dispatch_date,
                         kind="trainers",
+                        company_id=company_id,
                     )
                     logger.info("finalize_assignments: trainer pairings posted to #trainers-chat")
                 else:
@@ -971,6 +1002,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         message_id=recorded.get("captains_summary_message_id"),
                         dispatch_date=dispatch_date,
                         kind="captains",
+                        company_id=company_id,
                     )
                 except Exception as e:
                     logger.error("finalize_assignments: failed to post captains: %s", e, exc_info=True)
@@ -1057,7 +1089,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     "update_crew_embed: crew embed %s for %s is gone — reposting.",
                     message_id, truck_name,
                 )
-                await self._clear_crew_embed_id(dispatch_date, truck_id, truck_name)
+                await self._clear_crew_embed_id(dispatch_date, truck_id, truck_name,
+                                                company_id=company_id)
             except discord.Forbidden:
                 logger.warning(
                     "update_crew_embed: no permission to edit in %s — reposting.", truck_name
@@ -1073,7 +1106,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 new_msg = await channel.send(embed=fresh_embed)
                 if truck_id:
                     try:
-                        await api.record_crew_embed(dispatch_date, truck_id, new_msg.id)
+                        await api.record_crew_embed(dispatch_date, truck_id, new_msg.id, company_id=company_id)
                     except Exception as e:
                         logger.warning("update_crew_embed: could not record new id: %s", e)
             except Exception as e:
@@ -1096,7 +1129,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         except Exception as e:
             logger.warning("update_crew_embed: could not post notice for %s: %s", truck_name, e)
 
-    async def _clear_crew_embed_id(self, dispatch_date: str, truck_id: str | None, truck_name: str) -> None:
+    async def _clear_crew_embed_id(self, dispatch_date: str, truck_id: str | None,
+                                   truck_name: str, *, company_id: str) -> None:
         """Clear a stored crew embed id after finding the message deleted.
 
         ADR-295 D4. Uses message_id=0 as the sentinel the backend maps to NULL:
@@ -1106,7 +1140,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         if not truck_id:
             return
         try:
-            await api.record_crew_embed(dispatch_date, truck_id, 0)
+            await api.record_crew_embed(dispatch_date, truck_id, 0, company_id=company_id)
         except Exception as e:
             logger.warning("could not clear stale crew embed id for %s: %s", truck_name, e)
 
@@ -1232,7 +1266,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     truck_id = payload.get("truck_id")
                     if truck_id:
                         try:
-                            await api.record_crew_embed(dispatch_date, truck_id, crew_msg.id)
+                            await api.record_crew_embed(dispatch_date, truck_id, crew_msg.id, company_id=company_id)
                         except Exception as e:
                             logger.warning(
                                 "hub_finalize_truck: could not record crew embed id "

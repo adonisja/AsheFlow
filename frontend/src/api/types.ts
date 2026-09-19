@@ -3057,6 +3057,10 @@ export interface CollectionTokenSummary {
   /** 'open' — anyone with the link; 'company' — an authenticated employee of
    *  company_id. Decided by who created it, never by the request. */
   scope: 'open' | 'company';
+  /** ADR-439. Which study this link may submit to. A link is valid on
+   *  one study's endpoints only — 'routes' is the path that accepts
+   *  coworker names and Amazon TBA identifiers. */
+  dataset: 'addresses' | 'routes';
   label: string;
   daily_cap: number;
   revoked_at: string | null;
@@ -3080,6 +3084,10 @@ export interface CollectionTokenCreated {
   daily_cap: number;
   created_at: string;
   scope: 'open' | 'company';
+  /** ADR-439. Which study this link may submit to. A link is valid on
+   *  one study's endpoints only — 'routes' is the path that accepts
+   *  coworker names and Amazon TBA identifiers. */
+  dataset: 'addresses' | 'routes';
   company_id: string | null;
   token: string | null;
 }
@@ -3124,40 +3132,6 @@ export interface CollectedProfile {
 }
 
 /** One logged walker day (ADR-417 D3). Listing shape — counts, no payload. */
-export interface CollectedWalkerDay {
-  id: string;
-  company_id: string | null;
-  token_id: string;
-  walker_name: string;
-  collected_on: string;
-  arrival_time: string | null;
-  departure_time: string | null;
-  route_count: number;
-  tote_count: number;
-  rts_count: number;
-  submitted_at: string;
-  /** Bumped on every overwrite, so a corrected day is distinguishable from a
-   *  first submission without diffing payloads. */
-  revision: number;
-}
 
 /** The listing row plus the whole day. Fetched one at a time: a page of forty
  *  days with every tote and address inline is a large response. */
-export interface CollectedWalkerDayDetail extends CollectedWalkerDay {
-  payload: {
-    walker_name: string;
-    collected_on: string;
-    arrival_time: string;
-    departure_time: string;
-    routes: {
-      route_id: number;
-      route_start: string;
-      route_end: string;
-      difficulty: string;
-      notes: string;
-      totes: { bag_id: string; addresses: string[]; sort_zone?: string | null; stop?: string | null }[];
-      ovs: { ov_id: string; size: string; address: string; sort_zone: string }[];
-      rts: { tba: string; code: string; reason: string }[];
-    }[];
-  };
-}
