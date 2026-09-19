@@ -99,17 +99,31 @@ class TestBothEnvironmentsWriteTheBotEnv:
     """
 
     @staticmethod
-    def _jobs():
-        import yaml
+    def _step_names(job: str) -> list[str]:
+        """Step names for one job, read as TEXT.
+
+        Not yaml.safe_load: PyYAML is not a backend dependency, and adding one
+        so a test can read a file is the wrong trade — the first CI run said so
+        with ModuleNotFoundError while this passed locally. Step names and their
+        order are all these assertions need, and both are visible in the text.
+        """
+        import re
         from pathlib import Path
-        ci = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
-        return yaml.safe_load(ci.read_text())["jobs"]
+
+        ci = (Path(__file__).resolve().parents[3]
+              / ".github" / "workflows" / "ci.yml").read_text()
+        start = ci.index(f"\n  {job}:")
+        # the next top-level job key, or end of file
+        nxt = re.search(r"\n  [a-z][a-z0-9-]*:\n", ci[start + 1:])
+        block = ci[start:start + 1 + nxt.start()] if nxt else ci[start:]
+        return re.findall(r"^      - name: (.+)$", block, re.M)
 
     def test_every_deploy_job_writes_the_bot_env(self):
         """Checks BOTH jobs, not a named one: a third environment added later
         inherits the question instead of rediscovering it."""
         for job in ("deploy-staging", "deploy-prod"):
-            names = [s.get("name", "") for s in self._jobs()[job]["steps"]]
+            names = self._step_names(job)
+            assert names, f"{job}: no steps found — the parser missed the job"
             assert any("bot .env" in n for n in names), (
                 f"{job} starts the bot container but never writes its .env"
             )
@@ -118,7 +132,7 @@ class TestBothEnvironmentsWriteTheBotEnv:
         """The deploy is what starts the container. An .env written after it
         lands on a container that already failed to start."""
         for job in ("deploy-staging", "deploy-prod"):
-            names = [s.get("name", "") for s in self._jobs()[job]["steps"]]
+            names = self._step_names(job)
             env_at = next(i for i, n in enumerate(names) if "bot .env" in n)
             dep_at = next(i for i, n in enumerate(names) if n == "Deploy backend via SSM")
             assert env_at < dep_at, f"{job} writes bot/.env after the deploy"
