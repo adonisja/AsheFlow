@@ -667,6 +667,14 @@ def update_employee(
     for key, value in updates.items():
         setattr(db_employee, key, value)
 
+    # ADR-445 D4. The flag describes the address that bounced, so a NEW address
+    # starts clean. Cleared on the change rather than on the next successful
+    # send: there are eight send call sites and one place the address changes,
+    # and a flag that outlives its cause is one admins learn to ignore.
+    if new_email and new_email != old_email:
+        db_employee.email_bounced_at = None
+        db_employee.email_bounce_type = None
+
     db.commit()
     db.refresh(db_employee)
 
@@ -1606,6 +1614,9 @@ def confirm_email_change(
 
     # Cognito confirmed — sync to our DB
     caller.email = new_email
+    # ADR-445 D4 — a new address has not bounced.
+    caller.email_bounced_at = None
+    caller.email_bounce_type = None
     db.commit()
 
     return {"detail": "Email updated successfully.", "email": new_email}

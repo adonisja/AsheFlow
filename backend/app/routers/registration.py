@@ -158,6 +158,18 @@ def send_invite(
         raise HTTPException(status_code=400, detail="Employee has no email address on file.")
     if employee.account_status == "active":
         raise HTTPException(status_code=400, detail="Employee has already registered.")
+    # ADR-445 D8. Resending to an address that hard-bounced is a no-op that
+    # LOOKS like it worked: AWS suppresses the address account-wide, SES accepts
+    # the call, and the message is dropped. The admin would see "sent" and wait
+    # for a second reply that cannot come. Refuse and name the fix.
+    if employee.email_bounced_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=("Email to this address previously failed, so it has been "
+                    "suppressed and a resend would not be delivered. Correct "
+                    "the address on the employee's profile, which clears this "
+                    "and sends a fresh invite."),
+        )
 
     # Invalidate any existing token for this employee
     db.query(InviteToken).filter(InviteToken.employee_id == employee.id).delete()
@@ -308,6 +320,11 @@ def resend_credentials(
         raise HTTPException(status_code=400, detail="Employee has already signed in.")
     if not employee.email:
         raise HTTPException(status_code=400, detail="Employee has no email address on file.")
+    # ADR-445 D8 — deliberately NOT blocked on email_bounced_at, unlike
+    # resend_invite. This path already returns the temporary password when the
+    # send fails (ADR-442 D2), so it is the operator's way IN to an account
+    # whose address is dead. Refusing it here would remove the only remaining
+    # route to that account.
 
     import string
     temp_password = (

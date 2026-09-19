@@ -67,6 +67,15 @@ class Employee(Base):
     phone_number         = Column(String(20),         nullable=True)
     account_status       = Column(String(30),         nullable=False, default="pending_verification", index=True)
     invited_at           = Column(DateTime(timezone=True), nullable=True)
+    # ADR-445 — SES told us, out of band, that mail to `email` failed. NULL is
+    # "no bounce observed", which is weaker than "known good": most rows have
+    # simply never been written to. Cleared on the next successful send (D4),
+    # because a flag that outlives its cause is one admins learn to ignore.
+    email_bounced_at     = Column(DateTime(timezone=True), nullable=True, index=True)
+    # 'Permanent' or 'Complaint'. Transient bounces set neither column (D3):
+    # a full mailbox is not a bad address. The pair is kept because the
+    # remedies differ -- a typo gets corrected, a complaint gets a conversation.
+    email_bounce_type    = Column(String(20),          nullable=True)
     # ADR-377 D2 — the row's own birthday, for anything that needs to measure
     # age. A DIFFERENT FACT from `invited_at`, not a rename of it: an invite is
     # an event that may never happen and is reissued on re-invite
