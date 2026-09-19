@@ -83,6 +83,11 @@ class EmployeeResponse(BaseModel):
     phone_number: Optional[str] = None
     account_status: str = "active"
     invited_at: Optional[datetime] = None
+    # ADR-445. Exposed so the admin who typed the address can SEE that it
+    # bounced -- the whole point of the feature. NULL means no bounce has been
+    # observed, which is weaker than "known good".
+    email_bounced_at: Optional[datetime] = None
+    email_bounce_type: Optional[str] = None
     injury_status: Optional[str] = None
     injury_status_since: Optional[datetime] = None
 
