@@ -83,3 +83,77 @@ class TestAnUnprovisionedCompanyIsNotAnError:
         assert "HTTP_404_NOT_FOUND" in window, (
             "a company without a provisioned client must answer 404"
         )
+
+
+class TestTheBotCannotForgetTheTenant:
+    """The bot-side half (ADR-441 D2).
+
+    Parsed from source rather than imported: the bot needs discord.py, which the
+    backend test env does not install. The AST is the contract that matters here
+    anyway — whether a call can omit the company, not what it returns.
+    """
+
+    @staticmethod
+    def _bot_files():
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[3] / "bot"
+        return [root / "main.py", root / "cogs" / "setup.py",
+                root / "cogs" / "dispatch.py"]
+
+    def test_every_api_call_names_a_company(self):
+        """A call that omits it would authenticate as whichever tenant the env
+        credential belongs to — the cross-tenant write this ADR removes."""
+        import ast
+
+        missing = []
+        for f in self._bot_files():
+            for node in ast.walk(ast.parse(f.read_text())):
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "api"
+                        and node.func.attr not in ("start", "close")
+                        and not any(k.arg == "company_id" for k in node.keywords)):
+                    missing.append(f"{f.name}:{node.lineno} api.{node.func.attr}")
+        assert not missing, (
+            "these api calls do not name a company, so they would use whichever "
+            f"tenant the env credential belongs to: {missing}"
+        )
+
+    def test_company_id_is_keyword_only_and_required(self):
+        """A positional default would let a call site forget it silently.
+        Keyword-only and required makes a missed call a TypeError."""
+        import ast
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[3]
+               / "bot" / "services" / "api_client.py").read_text()
+        bad = []
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.AsyncFunctionDef) or node.name.startswith("_"):
+                continue
+            if node.name in ("start", "close"):
+                continue
+            kw = {a.arg for a in node.args.kwonlyargs}
+            if "company_id" not in kw:
+                bad.append(node.name)
+            else:
+                i = [a.arg for a in node.args.kwonlyargs].index("company_id")
+                if node.args.kw_defaults[i] is not None:
+                    bad.append(f"{node.name} (has a default)")
+        assert not bad, f"these API methods do not require a company: {bad}"
+
+    def test_the_env_credential_is_only_a_404_fallback(self):
+        """ADR-441 D3. Falling back on a FAILED fetch is how a request ends up
+        authorised against the wrong tenant; falling back when the company has
+        no client is correct."""
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[3]
+               / "bot" / "services" / "api_client.py").read_text()
+        block = src[src.index("async def _credentials_for"):]
+        block = block[:block.index("@staticmethod")]
+        assert "resp.status == 404" in block
+        assert "_env_credentials()" in block
+        # A non-404 failure must raise, not fall back.
+        assert "raise RuntimeError" in block

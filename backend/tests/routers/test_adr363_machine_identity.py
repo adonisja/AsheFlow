@@ -140,7 +140,11 @@ class TestTheBotUsesTheMachineIdentity:
         fallback, so `_refresh_token` dispatches to exactly one place.
         """
         src = _read(BOT_CLIENT)
-        i = src.index("async def _refresh_token(self)")
+        # Matches the NAME, not the full signature: ADR-441 added a company_id
+        # parameter, and pinning the exact argument list makes this test fail on
+        # a signature change while the invariant it guards — one auth path — is
+        # untouched.
+        i = src.index("async def _refresh_token(self")
         body = src[i: src.index("async def _refresh_token_m2m")]
         assert "_refresh_token_m2m" in body
         assert "else:" not in body, (
