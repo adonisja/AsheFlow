@@ -1,5 +1,5 @@
 import { errorText } from '../../utils/errorText';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -672,13 +672,50 @@ function EmployeeCard({ companyId }: { companyId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    axiosClient
-      .get<EmployeeSummary>(`/admin/companies/${companyId}/employees/summary`)
-      .then(res => setSummary(res.data))
-      .catch(() => setError('Failed to load employee data.'))
-      .finally(() => setLoading(false));
-  }, [companyId]);
+  const [resending, setResending] = useState<string | null>(null);
+  const [resent, setResent] = useState<Record<string, 'sent' | 'failed'>>({});
+
+  const load = useCallback(
+    () =>
+      axiosClient
+        .get<EmployeeSummary>(`/admin/companies/${companyId}/employees/summary`)
+        .then(res => setSummary(res.data))
+        .catch(() => setError('Failed to load employee data.'))
+        .finally(() => setLoading(false)),
+    [companyId],
+  );
+
+  useEffect(() => { void load(); }, [load]);
+
+  /** Re-send an admin's invite (ADR-442 D1).
+   *
+   *  HERE, not only on the companies list. That one renders from React state
+   *  held after a bootstrap call, so it is gone on reload — and "the invite
+   *  never arrived" is noticed hours later, on the page that shows the admin
+   *  as Pending. A recovery action that only exists in the session that caused
+   *  the failure is not a recovery action.
+   *
+   *  Calls the bootstrap endpoint, which is idempotent for an email that
+   *  already has an admin row: it reuses the row, invalidates the prior token
+   *  and issues a fresh one. Reloads the summary afterwards so the badge
+   *  reflects the server rather than what we hoped happened.
+   */
+  const resendInvite = async (admin: AdminSummary) => {
+    if (!admin.email) return;
+    setResending(admin.employee_id);
+    try {
+      const res = await axiosClient.post<{ invite_sent: boolean }>(
+        `/admin/companies/${companyId}/bootstrap`,
+        { name: admin.name, email: admin.email },
+      );
+      setResent(r => ({ ...r, [admin.employee_id]: res.data.invite_sent ? 'sent' : 'failed' }));
+      await load();
+    } catch {
+      setResent(r => ({ ...r, [admin.employee_id]: 'failed' }));
+    } finally {
+      setResending(null);
+    }
+  };
 
   const roles = summary
     ? ROLE_ORDER.filter(r => summary.by_role[r])
@@ -748,10 +785,33 @@ function EmployeeCard({ companyId }: { companyId: string }) {
                           <p className="text-xs text-muted-foreground font-mono">{admin.email}</p>
                         )}
                       </div>
-                      <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${badge.className}`}>
-                        {badge.icon}
-                        {badge.label}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {/* ADR-442 D1. Beside the status it explains: an admin
+                            reading "Pending" is the moment someone asks why the
+                            invite never arrived. */}
+                        {admin.account_status === 'pending_verification' && admin.email && (
+                          resent[admin.employee_id] === 'sent' ? (
+                            <span className="text-xs text-success">Invite sent</span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void resendInvite(admin)}
+                              disabled={resending === admin.employee_id}
+                              className="text-xs underline underline-offset-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                            >
+                              {resending === admin.employee_id
+                                ? 'Resending…'
+                                : resent[admin.employee_id] === 'failed'
+                                  ? 'Send failed. Try again'
+                                  : 'Resend invite'}
+                            </button>
+                          )
+                        )}
+                        <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${badge.className}`}>
+                          {badge.icon}
+                          {badge.label}
+                        </span>
+                      </div>
                     </div>
                   );
                 })}

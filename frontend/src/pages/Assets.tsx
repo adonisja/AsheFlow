@@ -1,10 +1,7 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
-  RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail, ArrowUp, ArrowDown,
-  Copy, Check, Hash, Search, ToggleLeft, ToggleRight, ShieldAlert, ShieldOff, Phone,
-  MapPin, Loader2, Map, MousePointer2, Navigation,
+  AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import type { CompanyZone, CornerPoint } from '../api/types';
@@ -688,6 +685,33 @@ function PeopleTab() {
     }
   };
 
+  /** Send an employee their Discord invite again (ADR-443).
+   *
+   *  The only sender with no recovery path. It fires once, inside the block
+   *  that activates an employee on first login, on a daemon thread where every
+   *  failure is swallowed — and nothing records the outcome. Someone whose
+   *  invite failed looks entirely normal and is simply absent from Discord.
+   *
+   *  Shown for any active employee with an email rather than "ones we think
+   *  failed", because nothing records that. Sending a second invite to someone
+   *  who already has one is harmless.
+   */
+  const handleResendDiscordInvite = async (emp: Employee) => {
+    setResendingId(emp.id);
+    setResendMsg(null);
+    try {
+      await axiosClient.post(`/employees/${emp.id}/discord-invite`);
+      setResendMsg({ id: emp.id, ok: true, text: `Discord invite sent to ${emp.email}.` });
+    } catch (err: unknown) {
+      // The server names which step failed — a bot problem points at Discord
+      // settings, an email one at the address or the SES sandbox. Surfacing it
+      // verbatim is the whole reason the endpoint distinguishes them.
+      setResendMsg({ id: emp.id, ok: false, text: errorText(err, 'Failed to send Discord invite.') });
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const handleToggleActive = async (emp: Employee) => {
     const action = emp.is_active ? 'deactivate' : 'reactivate';
     const ok = await confirm({
@@ -1071,6 +1095,31 @@ function PeopleTab() {
                                 ? <div className="w-3 h-3 border-2 border-info border-t-transparent rounded-full animate-spin" />
                                 : <Mail className="w-3 h-3" />}
                               Resend Credentials
+                            </button>
+                          )}
+                          {/* ADR-443. The Discord invite fires once on first
+                              login and can never fire again — the status change
+                              that triggers it is what closes the guard. Every
+                              failure there is swallowed on a daemon thread and
+                              nothing records the outcome, so an employee whose
+                              invite failed is `active`, looks normal, and is
+                              simply missing from Discord.
+
+                              Shown for `active` because that is the state the
+                              first-login send leaves them in. Not gated on "we
+                              think it failed": nothing records that, and a
+                              second invite is harmless. */}
+                          {lc === 'active' && emp.email && (
+                            <button
+                              onClick={() => handleResendDiscordInvite(emp)}
+                              disabled={resendingId === emp.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-info hover:bg-info/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                              title="Send the Discord server invite again"
+                            >
+                              {resendingId === emp.id
+                                ? <div className="w-3 h-3 border-2 border-info border-t-transparent rounded-full animate-spin" />
+                                : <MessageSquare className="w-3 h-3" />}
+                              Discord Invite
                             </button>
                           )}
                           {/* ADR-256: one button per legal target role. Rendered from
