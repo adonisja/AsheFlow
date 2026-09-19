@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
-from app.services import device_fleet, mfa_status
+from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
@@ -732,7 +732,11 @@ def update_employee(
                     {"Name": "email", "Value": new_email},
                     {"Name": "name",  "Value": db_employee.name},
                 ],
-                DesiredDeliveryMediums=["EMAIL"],
+                # ADR-444 D2. Cognito's stock invite is a bare one-liner from an
+                # address nobody recognises. We send the same branded invite a
+                # new hire gets — this person is unregistered, so an invite is
+                # exactly the artefact they should have had the first time.
+                MessageAction="SUPPRESS",
             )
             new_sub = next(
                 (a["Value"] for a in response["User"]["Attributes"] if a["Name"] == "sub"),
@@ -740,6 +744,25 @@ def update_employee(
             )
             db_employee.cognito_sub = new_sub
             db_employee.invited_at = datetime.now(timezone.utc)
+
+            # The old address's token must die with the old address, or a
+            # correction made because the first address was WRONG leaves the
+            # wrong recipient holding a live registration link.
+            db.query(InviteToken).filter(
+                InviteToken.employee_id == db_employee.id,
+                # Redundant — db_employee was already fetched scoped to
+                # caller.company_id — and kept anyway: a delete is the wrong
+                # place to rely on a guarantee established 500 lines earlier.
+                InviteToken.company_id == caller.company_id,
+            ).delete()
+            token_str = secrets.token_urlsafe(48)
+            db.add(InviteToken(
+                token=token_str,
+                company_id=db_employee.company_id,
+                employee_id=db_employee.id,
+                expires_at=datetime.now(timezone.utc)
+                + timedelta(days=settings.invite_expiry_days),
+            ))
             db.commit()
             db.refresh(db_employee)
 
@@ -755,6 +778,21 @@ def update_employee(
             raise HTTPException(
                 status_code=502,
                 detail="Email updated in DB but Cognito re-invite failed. Contact support.",
+            )
+
+        # Outside the Cognito try: a send failure is not a 502. The shell and
+        # the token are correct, so the operator's remedy is Resend Invite
+        # (ADR-442), not redoing the correction.
+        try:
+            send_invite_email(
+                to_email=new_email,
+                employee_name=db_employee.name,
+                token=token_str,
+            )
+        except ClientError as e:
+            logger.error(
+                "Invite email for corrected address failed (employee %s): %s",
+                db_employee.id, e.response.get("Error", {}).get("Code", "Unknown"),
             )
 
     # Sync Cognito group when role changes on an active account
@@ -795,6 +833,69 @@ def update_employee(
         detail={k: str(v) if v is not None else None for k, v in updates.items()},
     )
     return db_employee
+
+
+@router.post("/{employee_id}/discord-invite", status_code=status.HTTP_200_OK)
+def resend_discord_invite(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """Send this employee their Discord invite again (ADR-443).
+
+    THE ONE SENDER WITH NO RECOVERY PATH. The invite fires once, inside the
+    block that flips an employee from pending_verification to active on first
+    login — so the condition guarding it is false forever after. It runs on a
+    daemon thread where every failure is swallowed, and nothing records the
+    outcome. An employee whose invite failed is `active`, looks entirely
+    normal, and is simply absent from Discord, with no badge to prompt the
+    question.
+
+    Synchronous, unlike the login path: an operator pressed this and is looking
+    at the result. The stage is named because the remedies differ — a bot
+    failure sends them to Discord settings, an email failure to the address or
+    the SES sandbox.
+
+    No "did it fail before?" gate: nothing records that (see ADR-443 D4).
+    Sending a second invite to someone who already has one is harmless.
+    """
+    target = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if not target.email:
+        raise HTTPException(
+            status_code=400,
+            detail="This employee has no email address on file.",
+        )
+
+    try:
+        result = discord_invite.fetch_and_send(target)
+    except discord_invite.DiscordInviteError as exc:
+        # 400 for the one the operator can fix on this page; 502 for the two
+        # that are a service failing behind us.
+        status_code = 400 if exc.stage == "email" and "No email" in exc.detail else 502
+        raise HTTPException(status_code=status_code, detail=exc.detail)
+
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.discord_invite_resent",
+        target_table="employees",
+        target_id=str(target.id),
+        # Dim 7: the address is NOT recorded. ADR-336 D1 made the same call for
+        # the delivery alert — it is the payload of the thing that was sent,
+        # not something the audit needs to identify the action.
+        detail={"stage": "sent"},
+    )
+    db.commit()
+
+    return {"detail": f"Discord invite sent to {result.email}.", "sent": True}
 
 
 @router.post("/{employee_id}/mfa/reset", status_code=status.HTTP_200_OK)

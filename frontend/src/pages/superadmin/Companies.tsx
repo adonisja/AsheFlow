@@ -359,6 +359,35 @@ function CompanyRow({
   const navigate = useNavigate();
   const [bootstrapResult, setBootstrapResult] = useState<BootstrapResult | null>(null);
   const [toggling, setToggling] = useState(false);
+  const [resending, setResending] = useState(false);
+
+  /** Re-send the invite when the first email did not go out (ADR-442 D1).
+   *
+   *  Calls the SAME bootstrap endpoint. It is already idempotent: given an
+   *  email that already has an admin row for this company, it reuses that row,
+   *  invalidates the prior token and issues a fresh one. A dedicated resend
+   *  endpoint would duplicate that and drift from it.
+   *
+   *  The UI was the whole gap — once a result existed the form was replaced by
+   *  a status line, so the message said "Retry to resend" with nothing to
+   *  click. */
+  const resendInvite = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!bootstrapResult) return;
+    setResending(true);
+    try {
+      const res = await axiosClient.post<BootstrapResult>(
+        `/admin/companies/${company.id}/bootstrap`,
+        { name: bootstrapResult.name, email: bootstrapResult.email },
+      );
+      setBootstrapResult(res.data);
+    } catch {
+      // Leave the failed state standing: it already says what to do, and
+      // replacing it with a second error would lose the address to retry.
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -455,10 +484,22 @@ function CompanyRow({
               className={`flex items-center gap-2 text-xs ${bootstrapResult.invite_sent ? 'text-success' : 'text-warning'}`}
               onClick={e => e.stopPropagation()}
             >
-              {bootstrapResult.invite_sent
-                ? <><CheckCircle2 className="w-3.5 h-3.5" /> Invite sent to {bootstrapResult.email}</>
-                : <><AlertTriangle className="w-3.5 h-3.5" /> Admin created but email delivery failed. Retry to resend.</>
-              }
+              {bootstrapResult.invite_sent ? (
+                <><CheckCircle2 className="w-3.5 h-3.5" /> Invite sent to {bootstrapResult.email}</>
+              ) : (
+                <>
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Admin created, but the invite to {bootstrapResult.email} could not be sent.</span>
+                  <button
+                    type="button"
+                    onClick={resendInvite}
+                    disabled={resending}
+                    className="shrink-0 underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+                  >
+                    {resending ? 'Resending…' : 'Resend'}
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <BootstrapForm companyId={company.id} onDone={setBootstrapResult} />

@@ -5,6 +5,8 @@ tenant (a Discord outage is one incident across every company), so there is no
 `company_id` to check a caller against — which is exactly why these endpoints
 gate on `get_super_admin` rather than `RoleChecker`.
 """
+import secrets
+import string
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,6 +25,7 @@ from app.core.config import settings
 from app.models.platform_alert import PlatformAlert
 from app.services import mfa_containment
 from app.services.audit import write_audit, super_admin_identity
+from app.services.email import send_credentials_email
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +222,13 @@ class PlatformStaffOut(BaseModel):
     # privilege and cannot rescue anyone, which is why the UI labels it.
     pending: bool = False
     status: str
+    # ADR-444 D1 / ADR-442 D2. Cognito's email is suppressed, so OUR send is the
+    # only delivery. If it fails the account exists with a password nobody has
+    # and no reset path (it cannot sign in to request one), so the credential
+    # comes back here instead. None on the happy path — never returned when the
+    # email actually went out.
+    email_delivered: bool = True
+    temp_password: str | None = None
 
 
 @router.get("/staff", status_code=status.HTTP_200_OK)
@@ -319,10 +329,33 @@ def create_platform_staff(
     client = boto3.client("cognito-idp", region_name=settings.aws_region)
     username = _derive_platform_username(client, body.name)
 
+    # ADR-444 D1. GENERATED HERE, because the create below suppresses Cognito's
+    # email and nobody would ever see the one it makes. Same shape as the
+    # employee generator in registration.py: mixed case, digits and symbols, so
+    # it satisfies the pool policy without depending on its exact settings.
+    temp_password = (
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice("!@#$%^&*") +
+        secrets.choice("!@#$%^&*")
+    )
+
     try:
         client.admin_create_user(
             UserPoolId=settings.aws_cognito_user_pool_id,
             Username=username,
+            TemporaryPassword=temp_password,
+            # ADR-444 D1. Cognito's stock template is a plain-text line carrying
+            # a live credential — the exact shape of a phishing email. Training
+            # people to accept it trains them to accept the forgery; the branded
+            # template is what makes "if it doesn't look like this, it isn't us"
+            # a usable rule.
+            MessageAction="SUPPRESS",
             UserAttributes=[
                 {"Name": "email", "Value": body.email},
                 {"Name": "email_verified", "Value": "true"},
@@ -334,7 +367,6 @@ def create_platform_staff(
                 # factor exists.
                 {"Name": "custom:pending_group", "Value": body.group},
             ],
-            DesiredDeliveryMediums=["EMAIL"],
         )
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "")
@@ -348,6 +380,22 @@ def create_platform_staff(
         logger.error("platform staff create failed: %s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Could not create the account.")
 
+    # ADR-444 D1. The branded credentials email, the same one every employee
+    # gets. ADR-442 D2's rule applies: if the send fails, the password comes
+    # back in the response rather than stranding an account nobody can reach.
+    email_delivered = True
+    try:
+        send_credentials_email(
+            to_email=body.email,
+            employee_name=body.name,
+            username=username,
+            temp_password=temp_password,
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "Unknown")
+        logger.error("platform staff credentials email failed (%s)", code)
+        email_delivered = False
+
     write_audit(
         db=db,
         company_id=None,
@@ -356,7 +404,10 @@ def create_platform_staff(
         target_table="cognito_users",
         target_id=username,
         detail={"actor": super_admin_identity(_super),
-                "pending_group": body.group, "activated": False},
+                "pending_group": body.group, "activated": False,
+                # ADR-444 D1. Recorded because a suppressed Cognito email means
+                # a failed send is otherwise invisible in the audit trail.
+                "email_delivered": email_delivered},
     )
     db.commit()
 
@@ -364,6 +415,8 @@ def create_platform_staff(
         username=username, email=body.email, name=body.name,
         group=body.group, pending=True,
         status="FORCE_CHANGE_PASSWORD",
+        email_delivered=email_delivered,
+        temp_password=None if email_delivered else temp_password,
     )
 
 
