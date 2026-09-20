@@ -13,6 +13,7 @@ Endpoints:
     (bot should skip Discord operations for that company).
 """
 
+import logging
 import os
 import uuid
 
@@ -23,6 +24,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.api.ratelimit import limiter
 from app.services.company_config import get_discord_config
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -59,6 +62,21 @@ class GuildConfigResponse(BaseModel):
     role_captain:        int | None
     role_walker:         int | None
     is_configured:       bool
+
+
+class GuildOwnerResponse(BaseModel):
+    """Which company owns a Discord guild (ADR-446 D2).
+
+    The INVERSE of /guild-config/{company_id}, for the one caller that has a
+    guild and needs the company: the bot warming its reverse map at startup.
+
+    Deliberately NOT a "list every company and its guild" endpoint. That would
+    hand anyone holding INTERNAL_SECRET a complete tenant roster in a single
+    request, and ADR-441 raised the value of that secret precisely because it
+    now spans tenants. Asking one guild at a time returns only what the caller
+    could already observe by being in the guild.
+    """
+    company_id: str
 
 
 class MachineCredentialResponse(BaseModel):
@@ -176,3 +194,60 @@ def get_guild_config(
         role_walker         = cfg.role_walker,
         is_configured       = cfg.is_configured,
     )
+
+
+@router.get(
+    "/guild-owner/{guild_id}",
+    response_model=GuildOwnerResponse,
+    dependencies=[Depends(_verify_secret)],
+)
+@limiter.limit("30/minute")
+def get_guild_owner(
+    request: Request,
+    guild_id: int,
+    db: Session = Depends(get_db),
+) -> GuildOwnerResponse:
+    """Resolve a Discord guild id to the company that owns it (ADR-446 D2).
+
+    Rate limited on the same grounds as the machine-credential route: a leaked
+    INTERNAL_SECRET probing guild ids should not be able to enumerate the
+    tenant estate quickly.
+
+    404 when no company claims the guild. That is a real answer, not an error
+    condition -- the bot may sit in a guild we do not manage, and the caller
+    logs it and moves on.
+    """
+    from app.models.company import Company
+
+    # DIMENSION 1 — deliberately unscoped, like ADR-445's bounce lookup. There
+    # is no caller tenant to scope to: the whole question is "which tenant owns
+    # this guild?", asked by the bot, which holds a guild id and nothing else.
+    #
+    # `.all()` rather than `.first()` because discord_guild_id carries NO unique
+    # constraint. Two companies CAN be configured with the same guild id, and
+    # `.first()` would silently resolve members of one tenant's guild to the
+    # other tenant's company -- a cross-tenant mix-up that looks like working
+    # software. Ambiguity is refused instead of guessed.
+    companies = db.query(Company).filter(
+        Company.discord_guild_id == guild_id,
+    ).all()
+
+    if not companies:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No company is configured for this guild.",
+        )
+    if len(companies) > 1:
+        # Only the ids, never the names: the caller is entitled to know the
+        # mapping is broken, not to a list of tenants (Dimension 7).
+        logger.error(
+            "Guild %s is claimed by %d companies: %s. Discord routing for this "
+            "guild is ambiguous until one of them is corrected.",
+            guild_id, len(companies), [str(c.id) for c in companies],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This guild is claimed by more than one company.",
+        )
+
+    return GuildOwnerResponse(company_id=str(companies[0].id))
