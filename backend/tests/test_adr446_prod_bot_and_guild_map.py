@@ -221,6 +221,8 @@ class TestTheLookupActuallyRuns:
         from fastapi.testclient import TestClient
         from app.api.deps import get_db
         from app.routers import internal as I
+        from slowapi import _rate_limit_exceeded_handler
+        from slowapi.errors import RateLimitExceeded
         from app.api.ratelimit import limiter
 
         monkeypatch.setenv("INTERNAL_SECRET", "test-secret-for-route")
@@ -230,11 +232,37 @@ class TestTheLookupActuallyRuns:
         session = MagicMock()
         session.query.return_value.filter.return_value.all.return_value = rows
 
+        # THE LIMITER IS SWITCHED OFF for these tests, and it has to be done on
+        # the shared object: @limiter.limit captured it at import time, so
+        # pointing app.state at a different Limiter changes nothing.
+        #
+        # Its storage is Redis wherever Redis is reachable -- true in CI, and
+        # true here too -- so the 30/min counter is SHARED AND PERSISTENT across
+        # the whole suite. Once spent, these tests get 429 where they assert
+        # 200/404/409, and a bare app has no RateLimitExceeded handler so it
+        # surfaces as 500. That is exactly how this passed locally and failed in
+        # CI: the counter had been consumed there and not here.
+        #
+        # The limit itself is pinned by test_guild_owner_is_gated_and_rate_limited,
+        # which reads the decorator -- the right tool for "is it limited". These
+        # tests are for "does the route run".
+        monkeypatch.setattr(limiter, "enabled", False)
+
         local = FastAPI()
         local.state.limiter = limiter          # the @limiter.limit decorator needs this
+        # The real app registers this (main.py:53). Without it a tripped limit
+        # raises RateLimitExceeded uncaught and surfaces as a 500 -- which is
+        # what happened in CI, where Redis IS reachable so the limiter uses
+        # shared storage and the 30/min counter survives across the suite.
+        # Locally Redis is absent, the limiter falls back to in-memory, and the
+        # counter never trips: green locally, red in CI.
+        local.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
         local.include_router(I.router, prefix="/api/v1")
         local.dependency_overrides[get_db] = lambda: session
-        return TestClient(local, raise_server_exceptions=False)
+        # raise_server_exceptions=True so a failure surfaces the ACTUAL
+        # exception. With it False the assertion only ever says "500", which is
+        # exactly as uninformative in CI as the bug this file exists to catch.
+        return TestClient(local, raise_server_exceptions=True)
 
     def test_an_unknown_guild_returns_404_not_500(self, monkeypatch):
         """The bug exactly: the query must be runnable, not merely well-shaped."""
