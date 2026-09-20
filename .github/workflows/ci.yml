@@ -991,7 +991,7 @@ jobs:
               "for c in asheflow_postgres asheflow_redis asheflow_backend asheflow_celery_worker asheflow_celery_beat asheflow_caddy asheflow_bot; do docker rm -f $c >/dev/null 2>&1 || true; done",
               "docker network rm asheflow_default >/dev/null 2>&1 || true",
               "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend celery_worker",
-              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy"
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy bot"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 1 SSM: $CID"
