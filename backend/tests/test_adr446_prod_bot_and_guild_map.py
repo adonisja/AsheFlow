@@ -1,0 +1,190 @@
+"""ADR-446: prod runs the bot, and the guild map is warmed before events.
+
+Two failures are pinned here, and neither raises anything at runtime:
+
+  D1  the prod deploy removed `asheflow_bot` and never started it. Every bot
+      call site fails soft, so dispatch reports success and delivers nothing.
+  D2  `_guild_to_company` was filled only as a side effect of ordinary traffic,
+      so after a restart `on_member_join` assigned no roles and logged at debug.
+
+Both are read from source (AST and text) rather than executed: the workflow is
+YAML, and the bot needs a Discord connection to run. That is the same approach
+as tests/routers/test_adr362_bot_auth_challenge.py.
+"""
+import ast
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+BOT_MAIN = ROOT / "bot" / "main.py"
+GUILD_CFG = ROOT / "bot" / "services" / "guild_config.py"
+INTERNAL = ROOT / "backend" / "app" / "routers" / "internal.py"
+
+
+def _deploy_lines() -> list[str]:
+    return [ln.strip() for ln in CI.read_text().splitlines()
+            if "up -d postgres redis backend" in ln]
+
+
+class TestProdStartsTheBot:
+    def test_both_environments_start_the_bot(self):
+        """Staging and prod must agree.
+
+        They differed by one word for months: staging ended `caddy bot`, prod
+        ended `caddy`. Nothing failed because prod had not launched.
+        """
+        lines = _deploy_lines()
+        assert len(lines) == 2, (
+            f"expected 2 deploy lines (staging + prod), found {len(lines)}. "
+            "If a third environment was added it needs the bot too (ADR-446)."
+        )
+        missing = [ln for ln in lines if not ln.rstrip('"').endswith("bot")]
+        assert not missing, (
+            "a deploy line starts the stack without the bot container. Every "
+            "bot call site fails soft, so dispatch would report success and "
+            "deliver nothing to Discord (ADR-446 D1):\n  " + "\n  ".join(missing)
+        )
+
+    def test_the_bot_container_is_not_removed_without_being_restarted(self):
+        """`docker rm -f asheflow_bot` is only safe if something starts it again."""
+        text = CI.read_text()
+        removes = text.count("asheflow_bot")
+        assert removes > 0, "the deploy no longer cleans up the bot container"
+        for line in _deploy_lines():
+            assert " bot" in line, (
+                "asheflow_bot is force-removed but a deploy line does not "
+                "bring it back (ADR-446 D1)"
+            )
+
+
+class TestTheGuildMapIsWarmed:
+    def test_on_ready_warms_the_map(self):
+        """The map must be populated BEFORE any event is handled.
+
+        Without this, a member joining right after a restart gets no roles and
+        leaves only a debug line — indistinguishable from "Discord is not set
+        up for this company".
+        """
+        tree = ast.parse(BOT_MAIN.read_text())
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.AsyncFunctionDef) and n.name == "on_ready"), None)
+        assert fn is not None, "on_ready is gone — did the bot class change?"
+        called = {
+            n.func.id for n in ast.walk(fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        assert "warm_guild_map" in called, (
+            "on_ready does not warm the guild map, so on_member_join will skip "
+            "role assignment after every restart (ADR-446 D2)"
+        )
+
+    def test_joining_a_guild_maps_it_immediately(self):
+        """Onboarding a company IS joining a guild.
+
+        Warming only at startup would leave a newly onboarded company unmapped
+        until the next restart — the launch path, not an edge case.
+        """
+        tree = ast.parse(BOT_MAIN.read_text())
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.AsyncFunctionDef) and n.name == "on_guild_join"), None)
+        assert fn is not None, (
+            "no on_guild_join handler — a guild joined at runtime stays "
+            "unmapped until the bot restarts (ADR-446 D2)"
+        )
+        called = {
+            n.func.id for n in ast.walk(fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        assert "warm_guild_map" in called
+
+    def test_warming_never_stops_the_bot_starting(self):
+        """Best effort by design.
+
+        A backend that is slow at bot startup must not prevent the bot from
+        coming up: a failed warm leaves exactly the pre-ADR behaviour, which is
+        strictly better than not running at all.
+        """
+        tree = ast.parse(BOT_MAIN.read_text())
+        for name in ("on_ready", "on_guild_join"):
+            fn = next(n for n in ast.walk(tree)
+                      if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
+            guarded = any(
+                isinstance(h, ast.Try)
+                and any("warm_guild_map" in ast.dump(b) for b in h.body)
+                for h in ast.walk(fn)
+            )
+            assert guarded, f"{name} calls warm_guild_map outside a try (ADR-446 D2)"
+
+    def test_the_warm_is_idempotent(self):
+        """Called at startup AND on join, so it must not re-ask for known guilds."""
+        src = GUILD_CFG.read_text()
+        assert "if guild_id in _guild_to_company" in src, (
+            "warm_guild_map re-fetches guilds it already knows; it runs on "
+            "every join as well as at startup (ADR-446 D2)"
+        )
+
+
+class TestTheLookupEndpoint:
+    def test_guild_owner_is_gated_and_rate_limited(self):
+        """Same gate as every internal route, plus a limit.
+
+        ADR-441 widened what INTERNAL_SECRET is worth: a leaked secret probing
+        guild ids must not enumerate the tenant estate quickly.
+        """
+        tree = ast.parse(INTERNAL.read_text())
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "get_guild_owner"), None)
+        assert fn is not None, "GET /internal/guild-owner/{guild_id} is missing (ADR-446 D2)"
+        deco_src = " ".join(ast.dump(d) for d in fn.decorator_list)
+        assert "_verify_secret" in deco_src, "guild-owner is not behind _verify_secret"
+        assert "limit" in deco_src, "guild-owner is not rate limited (ADR-446 D2)"
+
+    def test_there_is_no_endpoint_listing_every_company_guild(self):
+        """The rejected alternative, pinned.
+
+        A "list all companies and their guilds" route would hand anyone holding
+        INTERNAL_SECRET a complete tenant roster in one request. Asking per
+        guild returns only what the caller could see by being in the guild.
+        """
+        src = INTERNAL.read_text()
+        for banned in ("/guild-owners", "/guilds", "/all-guilds"):
+            assert banned not in src, (
+                f"{banned} enumerates tenants in one call — ADR-446 D2 chose a "
+                "per-guild lookup deliberately"
+            )
+
+    def test_an_ambiguous_guild_is_refused_not_guessed(self):
+        """discord_guild_id has NO unique constraint.
+
+        Two companies can be configured with the same guild id. `.first()`
+        would silently resolve members of one tenant's guild to the other
+        tenant's company — a cross-tenant mix-up that looks like working
+        software rather than failing.
+        """
+        tree = ast.parse(INTERNAL.read_text())
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "get_guild_owner")
+        body = ast.dump(fn)
+        assert "'first'" not in body, (
+            "get_guild_owner uses .first(), which silently picks one of several "
+            "companies claiming a guild (ADR-446 D2)"
+        )
+        assert "HTTP_409_CONFLICT" in body, (
+            "an ambiguous guild must be refused, not resolved arbitrarily"
+        )
+
+    def test_the_conflict_does_not_leak_tenant_names(self):
+        """Dimension 7 at the error path.
+
+        The caller is entitled to know the mapping is broken, not to a list of
+        tenants. Ids go to the log; the response says nothing specific.
+        """
+        src = INTERNAL.read_text()
+        start = src.index("def get_guild_owner")
+        body = src[start:start + 2000]
+        detail_line = next(
+            (ln for ln in body.splitlines() if "detail=" in ln and "claimed" in ln), ""
+        )
+        assert "name" not in detail_line.lower(), (
+            "the 409 detail appears to expose company names (ADR-446 / Dim 7)"
+        )

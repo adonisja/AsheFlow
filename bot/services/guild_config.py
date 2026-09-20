@@ -144,10 +144,67 @@ async def _fetch_guild_config(company_id: str) -> Optional[GuildConfig]:
 def get_company_id_for_guild(guild_id: int) -> Optional[str]:
     """Reverse-lookup: given a Discord guild_id, return the company_id.
 
-    Returns None if the guild isn't in the map (bot hasn't fetched that
-    company's config yet, or no company maps to this guild).
+    Returns None if the guild isn't in the map (no company maps to this guild,
+    or warm_guild_map has not run and nothing has fetched that company's config
+    yet -- see ADR-446 D2 for why the second case used to be the common one).
     """
     return _guild_to_company.get(guild_id)
+
+
+async def _fetch_guild_owner(guild_id: int) -> Optional[str]:
+    """Ask the backend which company owns a guild. Inverse of the config fetch."""
+    url = f"{_API_BASE}/internal/guild-owner/{guild_id}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers={"X-Internal-Secret": _INTERNAL_SECRET},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 404:
+                    # A guild we are in that no company claims. A real answer,
+                    # not an error: someone invited the bot somewhere we do not
+                    # manage, which is worth seeing once.
+                    logger.info("Guild %s maps to no company — ignoring it.", guild_id)
+                    return None
+                if resp.status != 200:
+                    logger.error("guild-owner fetch for %s returned %d", guild_id, resp.status)
+                    return None
+                data = await resp.json()
+    except Exception as e:
+        logger.error("Failed to resolve owner for guild %s: %s", guild_id, e)
+        return None
+    return data.get("company_id")
+
+
+async def warm_guild_map(guild_ids: list[int]) -> int:
+    """Populate the guild -> company map before the bot handles events.
+
+    ADR-446 D2. `_guild_to_company` was only ever filled as a SIDE EFFECT of
+    get_guild_config(company_id), so after every restart it was empty --
+    and `on_member_join`, its only reader, would find None and skip role
+    assignment entirely for a brand new member.
+
+    It filled itself eventually from ordinary traffic, which is why this
+    survived a year: with one tenant the first dispatch of the day closed the
+    window. With two it does not, because each company only closes its own.
+
+    BEST EFFORT ON PURPOSE. A backend that is slow or down at bot startup must
+    not stop the bot from starting; a failed warm leaves exactly the old
+    behaviour, so the worst case here is the bug we already had. Returns the
+    number of guilds mapped, for the caller to log.
+    """
+    mapped = 0
+    for guild_id in guild_ids:
+        # Already known (a previous warm, or live traffic) -- do not re-ask.
+        if guild_id in _guild_to_company:
+            mapped += 1
+            continue
+        company_id = await _fetch_guild_owner(guild_id)
+        if company_id:
+            _guild_to_company[guild_id] = company_id
+            mapped += 1
+    return mapped
 
 
 def invalidate(company_id: str) -> None:

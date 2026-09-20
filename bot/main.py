@@ -20,7 +20,11 @@ from discord.ext import commands
 
 from config import settings
 from services.api_client import api
-from services.guild_config import get_guild_config, get_company_id_for_guild
+from services.guild_config import (
+    get_guild_config,
+    get_company_id_for_guild,
+    warm_guild_map,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +67,18 @@ class AsheFlowBot(commands.Bot):
                 name="dispatch assignments",
             )
         )
+        # ADR-446 D2 — BEFORE any event is handled. `on_member_join` resolves
+        # guild -> company through a map that was previously filled only as a
+        # side effect of ordinary traffic, so a member joining right after a
+        # restart got no roles and left only a debug line. Best effort: a slow
+        # backend must not stop the bot from starting.
+        try:
+            mapped = await warm_guild_map([g.id for g in self.guilds])
+            logger.info("Warmed guild map: %d/%d guild(s) mapped to a company.",
+                        mapped, len(self.guilds))
+        except Exception as e:
+            logger.error("Guild map warm failed (continuing): %s", e)
+
         # Sync slash commands to all guilds the bot is in
         for guild in self.guilds:
             try:
@@ -71,6 +87,25 @@ class AsheFlowBot(commands.Bot):
                 logger.info("Synced %d slash command(s) to guild %s.", len(synced), guild.id)
             except Exception as e:
                 logger.error("Failed to sync slash commands to guild %s: %s", guild.id, e)
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        """Map a guild the moment we join it (ADR-446 D2).
+
+        Without this, warming only happens at startup — so onboarding a company
+        by inviting the bot to their guild would leave that guild unmapped until
+        the next restart, and every member who joined meanwhile would get no
+        roles. That is the launch path, not an edge case.
+
+        A guild that maps to nothing is normal here: the company row may not
+        carry discord_guild_id yet. `on_member_join` skips cleanly, and the next
+        restart (or the company's first dispatch) picks it up.
+        """
+        try:
+            mapped = await warm_guild_map([guild.id])
+            logger.info("Joined guild %s — mapped to a company: %s",
+                        guild.id, bool(mapped))
+        except Exception as e:
+            logger.error("Could not map newly joined guild %s: %s", guild.id, e)
 
     async def close(self) -> None:
         await api.close()
