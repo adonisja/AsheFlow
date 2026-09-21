@@ -66,8 +66,12 @@ class TestASpelledOutNumberIsRefused:
         """
         with pytest.raises(AddressShapeError) as exc:
             normalise_submitted_address(raw)
-        assert "digits" in str(exc.value), \
-            "the message must name the remedy, not just refuse"
+        msg = str(exc.value)
+        assert "digits" in msg, "the message must name the remedy, not just refuse"
+        # The remedy is a LOOKUP. "Write it in digits" tells someone who does
+        # not KNOW the number to invent one; naming where to find it does not.
+        assert any(w in msg for w in ("entrance", "label", "map")), \
+            "the message must say where to find the number, not only that one is needed"
 
     def test_the_schema_rejects_it_too(self):
         with pytest.raises(ValidationError) as exc:
@@ -87,8 +91,12 @@ class TestANameWithNoNumberIsADifferentMistake:
             normalise_submitted_address("Riverside Apartments")
         msg = str(exc.value)
         assert "house number" in msg
-        assert "digits" not in msg, \
+        # Distinguished by what it does NOT say: there is no number word here
+        # to convert, so offering "1 Penn Plaza" as the fix would be nonsense.
+        assert "Penn Plaza" not in msg, \
             "this is the wrong remedy: there is no number word to rewrite"
+        assert any(w in msg for w in ("entrance", "label")), \
+            "the message must say where to find the number"
 
 
 class TestFoldingStaysTotal:

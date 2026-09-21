@@ -105,11 +105,15 @@ def normalise_submitted_address(address: str) -> str:
     # No digit anywhere. Two different mistakes, two different remedies.
     first = (address.strip().lower().split() or [""])[0].strip(".,#")
     if first in NUMBER_WORDS:
+        # The remedy is a LOOKUP, not a rewrite. "Fifty Fifth Ave" could be
+        # 50 5th, 55th, or a street named Fifty-Fifth, and the collector is
+        # standing in front of the building with the door number on it.
         raise AddressShapeError(
-            "Write the house number in digits — for example "
-            f'"{address.strip()}" should start with a number like "1".'
+            "Use the number on the building, in digits. Check the entrance, a "
+            'package label, or a map. "One Penn Plaza" is entered as '
+            '"1 Penn Plaza".'
         )
     raise AddressShapeError(
-        "An address needs to start with its house number, for example "
-        "433 W 32 ST."
+        "An address needs to start with its house number. Check the entrance "
+        "or a package label. For example: 433 W 32 ST."
     )
