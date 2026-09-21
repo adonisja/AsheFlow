@@ -18,7 +18,6 @@ import pathlib
 import sys
 
 import pytest
-import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BOT_MAIN = ROOT / "bot" / "main.py"
@@ -32,6 +31,34 @@ from services.login_retry import (  # noqa: E402
     backoff_delay,
     is_last_attempt,
 )
+
+
+
+def _bot_restart_policy() -> str:
+    """The `restart:` value from the bot service in docker-compose.yml.
+
+    Stdlib only. Walks to the `bot:` service block and returns the first
+    `restart:` at the service's own indent, stopping at the next sibling key so
+    another service's policy can never be read by mistake.
+    """
+    lines = COMPOSE.read_text().splitlines()
+    in_bot = False
+    bot_indent = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if stripped.rstrip(":") == "bot" and stripped.endswith(":"):
+            in_bot, bot_indent = True, indent
+            continue
+        if in_bot:
+            # A key at or above the service's own indent ends the block.
+            if indent <= bot_indent:
+                break
+            if stripped.startswith("restart:"):
+                return stripped.split(":", 1)[1].strip()
+    return ""
 
 
 class TestTheBackoffIsExponentialWithFullJitter:
@@ -181,9 +208,14 @@ class TestARetryableFailureBacksOffAndGivesUp:
 
 class TestTheRestartPolicyIsBounded:
     def test_the_bot_service_caps_its_restarts(self):
-        """`unless-stopped` has maxretry=0 — unbounded, which reached 13,999."""
-        compose = yaml.safe_load(COMPOSE.read_text())
-        policy = compose["services"]["bot"].get("restart", "")
+        """`unless-stopped` has maxretry=0 — unbounded, which reached 13,999.
+
+        Parsed by hand rather than with PyYAML: that is NOT a backend
+        dependency, and importing it here broke CI collection outright (the
+        same mistake ADR-441 made). A test that cannot import is worse than no
+        test, and this only needs one line of one service block.
+        """
+        policy = _bot_restart_policy()
         assert policy.startswith("on-failure:"), (
             f"bot restart policy is {policy!r}; an uncapped policy can produce "
             "an unbounded login loop (ADR-447 D3)"
