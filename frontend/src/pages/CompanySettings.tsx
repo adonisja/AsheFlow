@@ -61,6 +61,13 @@ interface CompanyConfig {
 }
 
 interface DiscordConfig {
+  /** ADR-448 D2. Built from the RUNNING bot's application id, not a constant —
+   *  staging and prod are different Discord applications, and a build-time
+   *  value would send prod admins to invite the staging bot. */
+  bot_invite_url?: string | null;
+  /** ADR-448 D3. THREE-STATE: true / false / null for "could not ask". A
+   *  restarting bot must not show a red cross next to a correct config. */
+  bot_in_guild?: boolean | null;
   discord_guild_id: number | null;
   discord_drivers_channel_id: number | null;
   discord_trainers_channel_id: number | null;
@@ -573,6 +580,9 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
   const [saved, setSaved] = useState(false);
 
   const [discordValues, setDiscordValues] = useState<Record<string, string>>({});
+  // ADR-448. The raw response, kept because bot_invite_url / bot_in_guild are
+  // live server-resolved fields, not editable form values.
+  const [discordCfg, setDiscordCfg] = useState<DiscordConfig | null>(null);
   const [discordSaving, setDiscordSaving] = useState(false);
   const [discordError, setDiscordError] = useState<string | null>(null);
   const [discordSaved, setDiscordSaved] = useState(false);
@@ -658,6 +668,9 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
       const payload = discordValuesToPayload(discordValues);
       const res = await axiosClient.patch<DiscordConfig>('/companies/my-discord-config', payload);
       setDiscordValues(discordToFormValues(res.data));
+      // The PATCH response carries a FRESH bot_in_guild, so saving a guild id
+      // updates the panel above without a reload (ADR-448 D3).
+      setDiscordCfg(res.data);
       setDiscordSaved(true);
       setTimeout(() => setDiscordSaved(false), 3000);
     } catch (err: unknown) {
@@ -809,6 +822,62 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
             >
               <form onSubmit={handleDiscordSave} className="space-y-4">
                 {discordError && <ErrorBanner message={discordError} />}
+
+                {/* ADR-448 D1. FIRST, above the id fields: every id below can be
+                    correct and Discord will still do nothing until a server admin
+                    authorises the bot. Screen order is operation order. */}
+                {discordCfg && (
+                  <div className="card p-5">
+                    <div className="flex items-start gap-3">
+                      <MessageSquare className="w-5 h-5 text-muted-foreground mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <h3 className="section-title mb-1">Connect the AsheFlow bot</h3>
+
+                        {discordCfg.bot_in_guild === true && (
+                          <p className="text-sm text-success">
+                            The bot is in your Discord server. Channel and role IDs
+                            below take effect immediately.
+                          </p>
+                        )}
+
+                        {discordCfg.bot_in_guild === false && (
+                          <p className="text-sm text-muted-foreground">
+                            The bot is <strong className="text-warning">not yet in your
+                            Discord server</strong>. Until it is, dispatch notifications,
+                            crew rooms and employee Discord invites will not work, even
+                            with every ID below filled in correctly.
+                          </p>
+                        )}
+
+                        {discordCfg.bot_in_guild == null && (
+                          <p className="text-sm text-muted-foreground">
+                            {discordCfg.discord_guild_id
+                              ? 'Could not check whether the bot is in your server right now.'
+                              : 'Set your Server ID below, then authorise the bot.'}
+                          </p>
+                        )}
+
+                        {discordCfg.bot_invite_url && discordCfg.bot_in_guild !== true && (
+                          <>
+                            <a
+                              href={discordCfg.bot_invite_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn-primary mt-3 inline-flex items-center gap-2"
+                            >
+                              Authorise in Discord
+                            </a>
+                            <p className="text-xs text-muted-foreground mt-2">
+                              Opens Discord. You need <strong>Manage Server</strong> on the
+                              server you pick. If that is not you, send this link to
+                              whoever has it.
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <ConfigSection
                   title="Discord — Channels"

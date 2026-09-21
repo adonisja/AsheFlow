@@ -13,6 +13,7 @@ with their own Discord server.
 import asyncio
 import logging
 import os
+import random
 import sys
 
 import discord
@@ -20,6 +21,11 @@ from discord.ext import commands
 
 from config import settings
 from services.api_client import api
+from services.login_retry import (
+    MAX_LOGIN_ATTEMPTS,
+    backoff_delay,
+    is_last_attempt,
+)
 from services.guild_config import (
     get_guild_config,
     get_company_id_for_guild,
@@ -689,6 +695,47 @@ async def handle_hub_finalize(request: web.Request) -> web.Response:
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
+async def handle_guild_status(request: web.Request) -> web.Response:
+    """GET /internal/guild-status?guild_id=... — is the bot in that server? (ADR-448 D3)
+
+    The question Company Settings cannot answer on its own. An admin can enter a
+    perfectly correct guild id and Discord will still do nothing, because only a
+    server administrator can authorise the bot — and until they do, `get_guild`
+    returns None and every Discord feature fails with "Check Discord settings",
+    which is the one thing that is NOT wrong.
+
+    Also returns `application_id`, so the backend can build the OAuth invite URL
+    from the bot actually running rather than from a constant that can drift to
+    the wrong environment's application.
+
+    Secret-gated: unlike /internal/health this names a specific guild, and
+    whether we are in someone's server is not public.
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    app_id = None
+    try:
+        app_id = str(bot.user.id) if bot.user else None
+    except Exception:
+        app_id = None
+
+    raw = request.query.get("guild_id")
+    in_guild = None          # None = "could not ask", distinct from False
+    if raw and bot.is_ready():
+        try:
+            in_guild = bot.get_guild(int(raw)) is not None
+        except (TypeError, ValueError):
+            # A malformed id is a client error, not "the bot is missing".
+            return web.Response(status=400, text="guild_id must be numeric")
+
+    return web.json_response({
+        "application_id": app_id,
+        "in_guild": in_guild,
+        "ready": bool(bot.is_ready()),
+    })
+
+
 async def handle_health(request: web.Request) -> web.Response:
     """GET /internal/health — is the bot actually usable? (ADR-337 D2)
 
@@ -795,6 +842,7 @@ async def start_webhook_server() -> None:
     app.router.add_post("/internal/crew-embed-update", handle_crew_embed_update)
     app.router.add_post("/internal/clear-day",        handle_clear_day)
     app.router.add_get("/internal/health",            handle_health)
+    app.router.add_get("/internal/guild-status",      handle_guild_status)  # ADR-448 D3
     app.router.add_post("/internal/role-sync",        handle_role_sync)
     app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)
@@ -812,10 +860,63 @@ async def start_webhook_server() -> None:
     logger.info("Internal webhook server listening on :8001")
 
 
+# ADR-447. The retry POLICY lives in services/login_retry.py so it can be
+# tested without importing discord.py — the backend test environment has no
+# such module, and logic that no test can execute is what looped 13,999 times.
+async def _run_bot() -> int:
+    """Start the bot, retrying only what retrying can fix. Returns an exit code.
+
+    Exit 0 on a permanent failure, so `restart: unless-stopped` does NOT restart
+    us (Docker restarts on non-zero). A clean exit is the honest description
+    anyway: the process decided to stop because a human must change something.
+    """
+    for attempt in range(MAX_LOGIN_ATTEMPTS):
+        try:
+            async with bot:
+                await start_webhook_server()
+                await bot.start(settings.discord_bot_token)
+            return 0                      # clean shutdown, nothing to retry
+
+        except (discord.LoginFailure, discord.PrivilegedIntentsRequired) as exc:
+            # PERMANENT. No amount of retrying fixes a bad token or a missing
+            # intent, and retrying is precisely what triggered the reset.
+            logger.error(
+                "Discord rejected the bot credentials (%s): %s. NOT retrying — "
+                "this needs a human. Check DISCORD_BOT_TOKEN in SSM "
+                "(/asheflow/<env>/DISCORD_BOT_TOKEN) and that the token matches "
+                "the application whose intents are enabled in the Developer "
+                "Portal. Exiting cleanly so the container does not loop.",
+                type(exc).__name__, exc,
+            )
+            return 0
+
+        except asyncio.CancelledError:
+            # SIGTERM during a deploy. Not a failure.
+            logger.info("Bot cancelled — shutting down.")
+            raise
+
+        except Exception as exc:
+            # RETRYABLE: network error, Discord 5xx, DNS blip.
+            if is_last_attempt(attempt):
+                logger.error(
+                    "Bot failed to start after %d attempts (%s: %s). Giving up; "
+                    "the integration_health probe will raise "
+                    "DISCORD_INTEGRATION_FAILED (ADR-336).",
+                    MAX_LOGIN_ATTEMPTS, type(exc).__name__, exc,
+                )
+                return 1
+            delay = backoff_delay(attempt)
+            logger.warning(
+                "Bot start failed (%s: %s) — attempt %d/%d, retrying in %.1fs.",
+                type(exc).__name__, exc, attempt + 1, MAX_LOGIN_ATTEMPTS, delay,
+            )
+            await asyncio.sleep(delay)
+
+    return 1
+
+
 async def main() -> None:
-    async with bot:
-        await start_webhook_server()
-        await bot.start(settings.discord_bot_token)
+    raise SystemExit(await _run_bot())
 
 
 if __name__ == "__main__":
