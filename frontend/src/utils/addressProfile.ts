@@ -351,9 +351,12 @@ export function addressShapeError(address: string): string | null {
 
   const first = (address.trim().toLowerCase().split(/\s+/)[0] ?? '').replace(/[.,#]/g, '');
   if (NUMBER_WORDS.has(first)) {
-    return 'Write the house number in digits, for example "1 Penn Plaza".';
+    // The remedy is a LOOKUP, not a rewrite: "Fifty Fifth Ave" could be 50 5th,
+    // 55th, or a street named Fifty-Fifth, and the collector is standing in
+    // front of the building with the number on it.
+    return 'Use the number on the building, in digits. Check the entrance, a package label, or a map. "One Penn Plaza" is entered as "1 Penn Plaza".';
   }
-  return 'An address needs to start with its house number, for example 433 W 32 ST.';
+  return 'An address needs to start with its house number. Check the entrance or a package label. For example: 433 W 32 ST.';
 }
 
 export function doorKey(address: string): string {
