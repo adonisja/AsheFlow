@@ -844,7 +844,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
                           <p className="text-sm text-muted-foreground">
                             The bot is <strong className="text-warning">not yet in your
                             Discord server</strong>. Until it is, dispatch notifications,
-                            crew rooms and employee Discord invites will not work — even
+                            crew rooms and employee Discord invites will not work, even
                             with every ID below filled in correctly.
                           </p>
                         )}
@@ -869,7 +869,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
                             </a>
                             <p className="text-xs text-muted-foreground mt-2">
                               Opens Discord. You need <strong>Manage Server</strong> on the
-                              server you pick — if that is not you, send this link to
+                              server you pick. If that is not you, send this link to
                               whoever has it.
                             </p>
                           </>
