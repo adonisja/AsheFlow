@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.building_taxonomy import BUILDING_TYPES, OTHER, validate_workloads
+from app.services.door_key import AddressShapeError, normalise_submitted_address
 
 
 class CollectedProfileIn(BaseModel):
@@ -23,6 +24,21 @@ class CollectedProfileIn(BaseModel):
 
     address:        str = Field(..., min_length=3, max_length=200)
     building_type:  str = Field(..., max_length=40)
+
+    @field_validator("address")
+    @classmethod
+    def address_starts_at_its_number(cls, v: str) -> str:
+        """ADR-449. Drop a leading name; require a digit house number.
+
+        On the REQUEST so the name is never stored — the data-handling record
+        states standardisation strips customer PII before it reaches the
+        server, and that was not true for `John Smith 380 W 33rd St`.
+        """
+        try:
+            return normalise_submitted_address(v)
+        except AddressShapeError as exc:
+            raise ValueError(str(exc)) from exc
+
 
     # ADR-418. `building_category` is deliberately ABSENT from the request: it
     # is derived from building_type server-side. Accepting it would let a client
@@ -169,6 +185,21 @@ class CollectionCheckIn(BaseModel):
 
     token:   str = Field(..., min_length=16, max_length=64)
     address: str = Field(..., min_length=3, max_length=200)
+
+    @field_validator("address")
+    @classmethod
+    def address_starts_at_its_number(cls, v: str) -> str:
+        """ADR-449. Drop a leading name; require a digit house number.
+
+        On the REQUEST so the name is never stored — the data-handling record
+        states standardisation strips customer PII before it reaches the
+        server, and that was not true for `John Smith 380 W 33rd St`.
+        """
+        try:
+            return normalise_submitted_address(v)
+        except AddressShapeError as exc:
+            raise ValueError(str(exc)) from exc
+
 
     # ADR-426. Optional: without it the answer is simply "is this door locked
     # for anyone", which is the pre-ADR-426 behaviour.

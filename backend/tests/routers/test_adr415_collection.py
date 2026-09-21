@@ -424,6 +424,10 @@ class TestTheDuplicateCheckIsNotAnOracle:
             ("12 Fifth Ave", "12 Fifth Avenue"),
             ("500 E 14TH ST APT 3B", "500 East 14th Street"),
             ("45 Park Pl", "45 Park Place"),
+            # ADR-449: a name typed ahead of the address is not part of it, and
+            # leaving it in gave ONE doorway TWO keys.
+            ("John Smith 380 W 33rd St", "380 W 33rd St"),
+            ("Mrs. Lee 12 Main St", "12 Main Street"),
         ]
         differ = [
             ("380 W 33 ST", "380 E 33 ST"),

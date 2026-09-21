@@ -320,8 +320,48 @@ export function profilesToCSV(profiles: AddressProfile[]): string {
  *
  *  Deliberately lossy. A false positive costs a dismissible warning; a false
  *  negative costs someone a walk to a door that was already done. */
+/** ADR-449. Everything before the first digit is not part of the address — a US
+ *  street address begins with its house number, so a leading `John Smith` is a
+ *  customer name. Left in place it also gives ONE doorway TWO keys, silently
+ *  disabling the duplicate check this file exists for.
+ *
+ *  Returns the input unchanged when there is no digit at all; rejecting that is
+ *  validation's job (the server refuses it), not folding's. */
+export function stripLeadingNonNumber(address: string): string {
+  if (!/\d/.test(address)) return address;
+  return address.replace(/^\D*/, '');
+}
+
+/** Spelled-out house numbers, refused rather than converted: "Fifty Fifth Ave"
+ *  could be 50 5th, 55th, or a street named Fifty-Fifth (ADR-449 D2). */
+const NUMBER_WORDS = new Set([
+  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+  'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty',
+  'seventy', 'eighty', 'ninety', 'hundred',
+  'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth',
+  'ninth', 'tenth',
+]);
+
+/** The message to show under the field, or null when the address is usable.
+ *  The client WARNS so it can warn offline; the server is what rejects. */
+export function addressShapeError(address: string): string | null {
+  const cleaned = stripLeadingNonNumber(address).trim();
+  if (cleaned && /^\d/.test(cleaned)) return null;
+
+  const first = (address.trim().toLowerCase().split(/\s+/)[0] ?? '').replace(/[.,#]/g, '');
+  if (NUMBER_WORDS.has(first)) {
+    // The remedy is a LOOKUP, not a rewrite: "Fifty Fifth Ave" could be 50 5th,
+    // 55th, or a street named Fifty-Fifth, and the collector is standing in
+    // front of the building with the number on it.
+    return 'Use the number on the building, in digits. Check the entrance, a package label, or a map. "One Penn Plaza" is entered as "1 Penn Plaza".';
+  }
+  return 'An address needs to start with its house number. Check the entrance or a package label. For example: 433 W 32 ST.';
+}
+
 export function doorKey(address: string): string {
-  let s = address.toLowerCase();
+  // ADR-449 FIRST: a leading name must not reach the key.
+  let s = stripLeadingNonNumber(address).toLowerCase();
   s = s.replace(/[.,#]/g, ' ');
   s = s.replace(/\b(\d+)(st|nd|rd|th)\b/g, '$1');           // 33rd -> 33
   s = s.replace(/\b(north|south|east|west)\b/g, (m) => m[0]); // west -> w
