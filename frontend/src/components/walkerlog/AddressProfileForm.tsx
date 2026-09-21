@@ -5,7 +5,8 @@ import LabelScanner from './LabelScanner';
 import type { CheckResult } from '../../utils/collectionSubmit';
 import {
   BUILDING_TYPES, OTHER, SECURITY_DESK_PROTOCOL,
-  TYPE_PROTOCOL, WORKLOAD_TAGS, doorKey, isIncompatible, workloadError,
+  TYPE_PROTOCOL, WORKLOAD_TAGS, addressShapeError, doorKey, isIncompatible,
+  workloadError,
   type AddressProfile,
 } from '../../utils/addressProfile';
 
@@ -150,6 +151,17 @@ export default function AddressProfileForm({
               enterKeyHint="done"
               className={`${INPUT} mt-1`}
             />
+            {/* ADR-449 D4. Shown as the collector types, once they have typed
+                enough to mean something — flagging an empty field is noise. The
+                server is what actually rejects; this exists so the collector is
+                not told at submit time, by which point they may be at the next
+                building. */}
+            {profile.address.trim().length > 2 &&
+              addressShapeError(profile.address) && (
+                <p className="mt-1 text-[11px] text-warning">
+                  {addressShapeError(profile.address)}
+                </p>
+              )}
             {/* Scanning fills the address from a package label — the same
                 reader the tote list uses. The TBA half is ignored here: a
                 profile is about the building, not the parcel. */}
