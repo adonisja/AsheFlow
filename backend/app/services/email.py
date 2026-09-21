@@ -352,3 +352,105 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
+
+
+def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
+                         company_name: str) -> None:
+    """Tell a company admin to authorise the bot in their Discord server (ADR-448 D4).
+
+    Sent when `discord_guild_id` is first saved — the moment the step becomes
+    actionable. NOT at company creation, when nobody has chosen a server yet.
+
+    The link is an OAuth consent URL, not a credential: a client id is public by
+    construction and Discord's own consent screen is the access control. It is
+    still only USABLE by someone with Manage Server on that guild, which is why
+    it goes to a person rather than sitting in a log.
+    """
+    first_name, first_name_html = _greeting_name(admin_name)
+    company_html = html.escape(company_name)
+
+    subject = "One more step to connect Discord"
+    body_text = (
+        f"Hi {first_name},\n\n"
+        f"You've set the Discord server for {company_name}. One step is left, and "
+        f"only a Discord server admin can do it: authorise the AsheFlow bot to "
+        f"join that server.\n\n"
+        f"{invite_url}\n\n"
+        f"Until the bot is in the server, dispatch notifications, crew rooms and "
+        f"employee Discord invites will not work — even though your settings are "
+        f"correct.\n\n"
+        f"If you are not the Discord admin for {company_name}, forward this link "
+        f"to whoever is.\n\n"
+        f"— AsheFlow"
+    )
+
+    body_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f8;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f8;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+        <tr><td style="background:linear-gradient(135deg,#4F35D2 0%,#7C3AED 100%);border-radius:16px 16px 0 0;padding:32px 40px;">
+          <div style="display:inline-block;background:rgba(255,255,255,0.15);border-radius:12px;padding:8px 14px;margin-bottom:16px;">
+            <span style="color:#fff;font-size:18px;font-weight:800;">AF</span>
+          </div>
+          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">AsheFlow</h1>
+          <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px;">Field operations, simplified</p>
+        </td></tr>
+        <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">One more step, {first_name_html}</p>
+          <p style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.6;">
+            You've set the Discord server for <strong style="color:#111827;">{company_html}</strong>.
+            The last step can only be done by a Discord server admin: authorise the
+            AsheFlow bot to join it.
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding-bottom:24px;">
+              <a href="{invite_url}"
+                 style="display:inline-block;background:#5865F2;color:#ffffff;
+                        text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;
+                        border-radius:10px;">
+                Authorise AsheFlow in Discord →
+              </a>
+            </td></tr>
+          </table>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#fff8f1;border:1px solid #fde4cd;border-radius:10px;">
+            <tr><td style="padding:14px 18px;">
+              <p style="margin:0;font-size:13px;color:#9a5b1e;line-height:1.6;">
+                Until the bot is in the server, dispatch notifications, crew rooms
+                and employee Discord invites will not work &mdash; even though your
+                settings are correct.
+              </p>
+            </td></tr>
+          </table>
+          <p style="margin:20px 0 0;font-size:13px;color:#9ca3af;text-align:center;">
+            Not the Discord admin for {company_html}? Forward this to whoever is.
+          </p>
+        </td></tr>
+        <tr><td style="background:#f8f7ff;border:1px solid #e8e8f0;border-top:none;border-radius:0 0 16px 16px;padding:20px 40px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#9ca3af;">© AsheFlow · Field operations, simplified</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+    client = boto3.client("ses", region_name=settings.aws_region)
+    try:
+        client.send_email(
+            **_configuration_set_kwargs(),
+            Source=settings.ses_from_email,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": body_text, "Charset": "UTF-8"},
+                    "Html": {"Data": body_html, "Charset": "UTF-8"},
+                },
+            },
+        )
+    except ClientError as exc:
+        _log_ses_failure(to_email, exc)
+        raise
