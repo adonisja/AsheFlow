@@ -298,6 +298,15 @@ class DiscordConfigResponse(BaseModel):
     discord_role_captain:        Optional[str] = None
     discord_role_walker:         Optional[str] = None
 
+    # ADR-448 D2/D3. Not stored — resolved from the RUNNING bot on each read.
+    # The invite URL is built from its application id rather than a constant,
+    # because staging and prod are different Discord applications and a
+    # build-time value would send prod admins to invite the staging bot.
+    bot_invite_url: Optional[str] = None
+    # THREE-STATE: True / False / None for "could not ask". A deploy restarting
+    # the bot must not put a red cross next to a correct configuration.
+    bot_in_guild: Optional[bool] = None
+
     model_config = {"from_attributes": True}
 
     @classmethod
@@ -1622,6 +1631,26 @@ def delete_check_in_deadline(
 # Company admin: read + update their own Discord config
 # ---------------------------------------------------------------------------
 
+def _with_bot_status(resp: "DiscordConfigResponse") -> "DiscordConfigResponse":
+    """Attach the bot's OAuth URL and guild membership (ADR-448 D2/D3).
+
+    Live, not stored: the answer changes the moment someone authorises the bot,
+    and a cached "not connected" is exactly the misleading state this ADR
+    exists to remove.
+
+    Degrades to None on every failure. This feeds a settings page — one that
+    says "could not check" beats one that 500s because the bot is restarting.
+    """
+    from app.services import discord_bot_invite
+
+    guild_id = int(resp.discord_guild_id) if resp.discord_guild_id else None
+    status = discord_bot_invite.get_status(guild_id)
+    return resp.model_copy(update={
+        "bot_invite_url": status.invite_url,
+        "bot_in_guild": status.in_guild,
+    })
+
+
 @company_admin_router.get("/my-discord-config", response_model=DiscordConfigResponse)
 def get_my_discord_config(
     caller: Employee = Depends(get_caller_employee),
@@ -1632,7 +1661,9 @@ def get_my_discord_config(
     config = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
-    return DiscordConfigResponse.from_config(config)
+    # ADR-448: this is the page that asks for a guild id, so it is the page that
+    # must say whether the bot is actually in that guild.
+    return _with_bot_status(DiscordConfigResponse.from_config(config))
 
 
 @company_admin_router.patch("/my-discord-config", response_model=DiscordConfigResponse)
@@ -1667,7 +1698,80 @@ def update_my_discord_config(
     )
     db.commit()
     db.refresh(config)
-    return DiscordConfigResponse.from_config(config)
+
+    # ADR-448 D4. The guild id has just been chosen, which is the moment the
+    # OAuth step becomes actionable -- and the moment the admin would otherwise
+    # discover it only as "Check Discord settings" when the settings are right.
+    #
+    # On the TRANSITION, not on every save: an admin adjusting channel ids must
+    # not get this email each time. A later change of guild id is a new
+    # transition and does send again, which is correct -- the bot is not in the
+    # new server either.
+    if "discord_guild_id" in changed:
+        _maybe_send_bot_setup_email(
+            db=db,
+            caller=caller,
+            old_guild_id=before.get("discord_guild_id"),
+            new_guild_id=changed.get("discord_guild_id"),
+        )
+
+    return _with_bot_status(DiscordConfigResponse.from_config(config))
+
+
+def _maybe_send_bot_setup_email(*, db: Session, caller: Employee,
+                                old_guild_id, new_guild_id) -> None:
+    """Email the bot OAuth link, once, when a guild id is newly set (ADR-448 D4).
+
+    Silent on every path that is not "a new server needs the bot":
+      * unchanged guild id -- the admin was editing channels;
+      * cleared guild id -- nothing to authorise;
+      * the bot is already in that guild -- the step is done, and an email
+        telling someone to do it anyway is how a sender becomes noise.
+
+    Never raises. A failed send must not roll back a saved configuration: the
+    settings page also shows the link (D1/D3), so email is the reminder, not
+    the only route.
+    """
+    if not new_guild_id or new_guild_id == old_guild_id:
+        return
+    if not caller.email:
+        logger.warning(
+            "Discord guild set for company %s but the admin has no email on "
+            "file — the bot OAuth link was not sent (ADR-448 D4).",
+            caller.company_id,
+        )
+        return
+
+    try:
+        from app.services import discord_bot_invite
+        from app.services.email import send_bot_setup_email
+
+        status = discord_bot_invite.get_status(int(new_guild_id))
+        if status.in_guild:
+            return                      # already authorised; nothing to ask for
+        if not status.invite_url:
+            # The bot is unreachable, so we cannot build a URL from the running
+            # application id -- and guessing one risks sending prod admins to
+            # the staging bot. The settings page will show the state instead.
+            logger.warning(
+                "Could not build the bot OAuth URL for company %s (bot "
+                "unreachable) — no email sent.", caller.company_id,
+            )
+            return
+
+        company = db.query(Company).filter(Company.id == caller.company_id).first()
+        send_bot_setup_email(
+            to_email=caller.email,
+            admin_name=caller.name,
+            invite_url=status.invite_url,
+            company_name=company.name if company else "your company",
+        )
+        logger.info("Bot setup email sent for company %s.", caller.company_id)
+    except Exception as exc:
+        logger.error(
+            "Bot setup email failed for company %s: %s",
+            caller.company_id, type(exc).__name__,
+        )
 
 
 # ---------------------------------------------------------------------------
