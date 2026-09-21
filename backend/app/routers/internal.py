@@ -217,7 +217,11 @@ def get_guild_owner(
     condition -- the bot may sit in a guild we do not manage, and the caller
     logs it and moves on.
     """
-    from app.models.company import Company
+    # discord_guild_id lives on CompanyConfig, NOT Company -- the two classes sit
+    # in the same module, and reading a grep hit's line number without checking
+    # the enclosing class is how this shipped as an AttributeError (500) instead
+    # of the intended 404.
+    from app.models.company import CompanyConfig
 
     # DIMENSION 1 — deliberately unscoped, like ADR-445's bounce lookup. There
     # is no caller tenant to scope to: the whole question is "which tenant owns
@@ -228,8 +232,8 @@ def get_guild_owner(
     # `.first()` would silently resolve members of one tenant's guild to the
     # other tenant's company -- a cross-tenant mix-up that looks like working
     # software. Ambiguity is refused instead of guessed.
-    companies = db.query(Company).filter(
-        Company.discord_guild_id == guild_id,
+    companies = db.query(CompanyConfig).filter(
+        CompanyConfig.discord_guild_id == guild_id,
     ).all()
 
     if not companies:
@@ -243,11 +247,13 @@ def get_guild_owner(
         logger.error(
             "Guild %s is claimed by %d companies: %s. Discord routing for this "
             "guild is ambiguous until one of them is corrected.",
-            guild_id, len(companies), [str(c.id) for c in companies],
+            guild_id, len(companies), [str(c.company_id) for c in companies],
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This guild is claimed by more than one company.",
         )
 
-    return GuildOwnerResponse(company_id=str(companies[0].id))
+    # .company_id, never .id -- the row's own primary key is the CONFIG's id,
+    # and returning it would hand the bot an identifier that resolves to nothing.
+    return GuildOwnerResponse(company_id=str(companies[0].company_id))
