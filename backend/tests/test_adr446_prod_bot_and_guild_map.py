@@ -188,3 +188,146 @@ class TestTheLookupEndpoint:
         assert "name" not in detail_line.lower(), (
             "the 409 detail appears to expose company names (ADR-446 / Dim 7)"
         )
+
+
+class TestTheLookupActuallyRuns:
+    """The gap that let an AttributeError reach production.
+
+    Every other test in this file reads source with AST. That proved the
+    endpoint was gated, rate limited and used `.all()` — and said nothing about
+    whether the query could execute. `Company` and `CompanyConfig` live in the
+    same module, `discord_guild_id` is on the SECOND one, and the endpoint
+    referenced the first: a 500 on every call, with all 10 source tests green.
+
+    These execute the route.
+    """
+
+    def _client(self, monkeypatch, rows):
+        """A throwaway app whose session returns `rows` from the lookup query.
+
+        No real schema: this test exists to prove the ROUTE RUNS — that the
+        model attribute it references exists and the handler reaches its 404 or
+        409. A stub session proves exactly that and nothing about SQLite, which
+        is what turned the first three attempts at this fixture into a fight
+        with table creation rather than a test of the endpoint.
+
+        Not `app.main.app`: that object is shared process-wide, and a
+        dependency_overrides entry left by any of 4000 other tests wins over one
+        set here — which is why an earlier version passed alone and failed in a
+        full run.
+        """
+        from unittest.mock import MagicMock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from app.api.deps import get_db
+        from app.routers import internal as I
+        from slowapi import _rate_limit_exceeded_handler
+        from slowapi.errors import RateLimitExceeded
+        from app.api.ratelimit import limiter
+
+        monkeypatch.setenv("INTERNAL_SECRET", "test-secret-for-route")
+        # _INTERNAL_SECRET is bound at import time, so patch the value too.
+        monkeypatch.setattr(I, "_INTERNAL_SECRET", "test-secret-for-route")
+
+        session = MagicMock()
+        session.query.return_value.filter.return_value.all.return_value = rows
+
+        # THE LIMITER IS SWITCHED OFF for these tests, and it has to be done on
+        # the shared object: @limiter.limit captured it at import time, so
+        # pointing app.state at a different Limiter changes nothing.
+        #
+        # Its storage is Redis wherever Redis is reachable -- true in CI, and
+        # true here too -- so the 30/min counter is SHARED AND PERSISTENT across
+        # the whole suite. Once spent, these tests get 429 where they assert
+        # 200/404/409, and a bare app has no RateLimitExceeded handler so it
+        # surfaces as 500. That is exactly how this passed locally and failed in
+        # CI: the counter had been consumed there and not here.
+        #
+        # The limit itself is pinned by test_guild_owner_is_gated_and_rate_limited,
+        # which reads the decorator -- the right tool for "is it limited". These
+        # tests are for "does the route run".
+        monkeypatch.setattr(limiter, "enabled", False)
+
+        local = FastAPI()
+        local.state.limiter = limiter          # the @limiter.limit decorator needs this
+        # The real app registers this (main.py:53). Without it a tripped limit
+        # raises RateLimitExceeded uncaught and surfaces as a 500 -- which is
+        # what happened in CI, where Redis IS reachable so the limiter uses
+        # shared storage and the 30/min counter survives across the suite.
+        # Locally Redis is absent, the limiter falls back to in-memory, and the
+        # counter never trips: green locally, red in CI.
+        local.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        local.include_router(I.router, prefix="/api/v1")
+        local.dependency_overrides[get_db] = lambda: session
+        # raise_server_exceptions=True so a failure surfaces the ACTUAL
+        # exception. With it False the assertion only ever says "500", which is
+        # exactly as uninformative in CI as the bug this file exists to catch.
+        return TestClient(local, raise_server_exceptions=True)
+
+    def test_an_unknown_guild_returns_404_not_500(self, monkeypatch):
+        """The bug exactly: the query must be runnable, not merely well-shaped."""
+        c = self._client(monkeypatch, rows=[])
+        r = c.get("/api/v1/internal/guild-owner/1",
+                  headers={"X-Internal-Secret": "test-secret-for-route"})
+        assert r.status_code != 500, (
+            f"guild-owner raised a server error: {r.text[:200]}. The query does "
+            "not execute — check that discord_guild_id is read from "
+            "CompanyConfig, not Company (ADR-446)."
+        )
+        assert r.status_code == 404
+
+    def test_two_companies_on_one_guild_returns_409(self, monkeypatch):
+        """The D4 path, executed rather than read.
+
+        With no unique constraint this is reachable, and a 500 here would be
+        just as wrong as silently picking one.
+        """
+        from unittest.mock import MagicMock
+        a, b = MagicMock(), MagicMock()
+        a.company_id, b.company_id = "aaa", "bbb"
+        c = self._client(monkeypatch, rows=[a, b])
+        r = c.get("/api/v1/internal/guild-owner/1",
+                  headers={"X-Internal-Secret": "test-secret-for-route"})
+        assert r.status_code == 409, f"expected 409, got {r.status_code}: {r.text[:200]}"
+        assert "aaa" not in r.text and "bbb" not in r.text, \
+            "the 409 body leaks tenant identifiers (Dim 7)"
+
+    def test_one_company_resolves(self, monkeypatch):
+        """The happy path must return company_id, not the config row's own id."""
+        from unittest.mock import MagicMock
+        row = MagicMock()
+        row.company_id = "the-company"
+        c = self._client(monkeypatch, rows=[row])
+        r = c.get("/api/v1/internal/guild-owner/1",
+                  headers={"X-Internal-Secret": "test-secret-for-route"})
+        assert r.status_code == 200, r.text[:200]
+        assert r.json()["company_id"] == "the-company"
+
+    def test_a_bad_secret_is_still_refused(self, monkeypatch):
+        c = self._client(monkeypatch, rows=[])
+        r = c.get("/api/v1/internal/guild-owner/1",
+                  headers={"X-Internal-Secret": "wrong"})
+        assert r.status_code in (401, 403)
+
+    def test_the_response_carries_the_company_id_not_the_config_id(self):
+        """CompanyConfig has its own primary key.
+
+        Returning `.id` would hand the bot an identifier that resolves to
+        nothing — every subsequent guild-config fetch would 404, and the guild
+        would look unconfigured rather than broken.
+        """
+        # AST, not a character slice: a fixed-width window silently missed the
+        # return line as soon as a comment was added above it.
+        tree = ast.parse(INTERNAL.read_text())
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "get_guild_owner")
+        returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value]
+        # The ATTRIBUTE NAMES read inside the return, not a dump substring --
+        # ast.dump output is long enough that a naive `in` check reads whatever
+        # happened to fit.
+        attrs = {n.attr for r in returns for n in ast.walk(r)
+                 if isinstance(n, ast.Attribute)}
+        assert "company_id" in attrs and "id" not in (attrs - {"company_id"}), (
+            "guild-owner returns the CompanyConfig row's own id rather than "
+            "company_id (ADR-446)"
+        )
