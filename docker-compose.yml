@@ -105,7 +105,13 @@ services:
       - TZ=America/New_York
     depends_on:
       - backend
-    restart: unless-stopped
+    # ADR-447 D3. `unless-stopped` is unbounded (maxretry=0), which is how a bad
+    # token became 13,999 login attempts and a Discord-initiated token reset.
+    # The real fixes are in main.py -- exit 0 on a permanent failure, backoff on
+    # a retryable one -- and this is the backstop for a failure mode those did
+    # not anticipate. 5 is generous for a process that already retries 8 times
+    # internally before exiting.
+    restart: on-failure:5
 
 volumes:
   postgres_data:
