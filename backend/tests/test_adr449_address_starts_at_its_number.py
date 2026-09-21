@@ -133,3 +133,48 @@ class TestTheClientImplementsTheSameRule:
         src = self.TS.read_text()
         for word in ("one", "fifty", "ninety", "third"):
             assert f"'{word}'" in src, f"client NUMBER_WORDS is missing {word!r}"
+
+
+class TestTheRuleMatchesWhatGeoClientCanParse:
+    """The validator and the geocoder must agree on what an address is.
+
+    GeoClient takes SEPARATE houseNumber and street parameters, split by
+    `_parse_house_and_street`, which requires the first token to be digits. If
+    the validator accepted something that parser rejects, the profile would be
+    stored looking collected and could never be enriched — geometry silently
+    absent forever.
+    """
+
+    def _parses(self, address: str) -> bool:
+        from app.tasks.enrich_manifest import _parse_house_and_street, strip_address_noise
+        return _parse_house_and_street(strip_address_noise(address)) is not None
+
+    @pytest.mark.parametrize("address", [
+        "1 Penn Plaza",
+        "12 Fifth Ave",          # spelled-out STREET is fine
+        "411 W 36 St",
+        "47-10 Vernon Blvd",     # Queens hyphenated house number
+    ])
+    def test_what_we_accept_geoclient_can_parse(self, address):
+        assert normalise_submitted_address(address) == address
+        assert self._parses(address), \
+            f"{address!r} passes validation but cannot be geocoded"
+
+    @pytest.mark.parametrize("address", [
+        "One Penn Plaza",
+        "Fifty Fifth Ave",
+    ])
+    def test_what_we_reject_geoclient_could_not_parse_anyway(self, address):
+        """The rejection is not merely our preference — these are unusable."""
+        assert not self._parses(address), (
+            f"{address!r} IS parseable by GeoClient, so rejecting it may be "
+            "wrong — re-check ADR-449 D2"
+        )
+        with pytest.raises(AddressShapeError):
+            normalise_submitted_address(address)
+
+    def test_a_stripped_name_leaves_something_geocodable(self):
+        """The strip must not merely satisfy the validator — the result has to
+        survive the parser too."""
+        cleaned = normalise_submitted_address("John Smith 380 W 33rd St")
+        assert self._parses(cleaned)
