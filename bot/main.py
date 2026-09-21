@@ -13,6 +13,7 @@ with their own Discord server.
 import asyncio
 import logging
 import os
+import random
 import sys
 
 import discord
@@ -20,6 +21,11 @@ from discord.ext import commands
 
 from config import settings
 from services.api_client import api
+from services.login_retry import (
+    MAX_LOGIN_ATTEMPTS,
+    backoff_delay,
+    is_last_attempt,
+)
 from services.guild_config import (
     get_guild_config,
     get_company_id_for_guild,
@@ -812,10 +818,63 @@ async def start_webhook_server() -> None:
     logger.info("Internal webhook server listening on :8001")
 
 
+# ADR-447. The retry POLICY lives in services/login_retry.py so it can be
+# tested without importing discord.py — the backend test environment has no
+# such module, and logic that no test can execute is what looped 13,999 times.
+async def _run_bot() -> int:
+    """Start the bot, retrying only what retrying can fix. Returns an exit code.
+
+    Exit 0 on a permanent failure, so `restart: unless-stopped` does NOT restart
+    us (Docker restarts on non-zero). A clean exit is the honest description
+    anyway: the process decided to stop because a human must change something.
+    """
+    for attempt in range(MAX_LOGIN_ATTEMPTS):
+        try:
+            async with bot:
+                await start_webhook_server()
+                await bot.start(settings.discord_bot_token)
+            return 0                      # clean shutdown, nothing to retry
+
+        except (discord.LoginFailure, discord.PrivilegedIntentsRequired) as exc:
+            # PERMANENT. No amount of retrying fixes a bad token or a missing
+            # intent, and retrying is precisely what triggered the reset.
+            logger.error(
+                "Discord rejected the bot credentials (%s): %s. NOT retrying — "
+                "this needs a human. Check DISCORD_BOT_TOKEN in SSM "
+                "(/asheflow/<env>/DISCORD_BOT_TOKEN) and that the token matches "
+                "the application whose intents are enabled in the Developer "
+                "Portal. Exiting cleanly so the container does not loop.",
+                type(exc).__name__, exc,
+            )
+            return 0
+
+        except asyncio.CancelledError:
+            # SIGTERM during a deploy. Not a failure.
+            logger.info("Bot cancelled — shutting down.")
+            raise
+
+        except Exception as exc:
+            # RETRYABLE: network error, Discord 5xx, DNS blip.
+            if is_last_attempt(attempt):
+                logger.error(
+                    "Bot failed to start after %d attempts (%s: %s). Giving up; "
+                    "the integration_health probe will raise "
+                    "DISCORD_INTEGRATION_FAILED (ADR-336).",
+                    MAX_LOGIN_ATTEMPTS, type(exc).__name__, exc,
+                )
+                return 1
+            delay = backoff_delay(attempt)
+            logger.warning(
+                "Bot start failed (%s: %s) — attempt %d/%d, retrying in %.1fs.",
+                type(exc).__name__, exc, attempt + 1, MAX_LOGIN_ATTEMPTS, delay,
+            )
+            await asyncio.sleep(delay)
+
+    return 1
+
+
 async def main() -> None:
-    async with bot:
-        await start_webhook_server()
-        await bot.start(settings.discord_bot_token)
+    raise SystemExit(await _run_bot())
 
 
 if __name__ == "__main__":
