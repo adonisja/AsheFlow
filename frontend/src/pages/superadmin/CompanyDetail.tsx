@@ -6,7 +6,7 @@ import {
   ArrowLeft, Building2, Settings2, Save, RotateCcw,
   ShieldCheck, ShieldAlert, Pencil, X, Users, AlertTriangle,
   CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, PackageCheck, PackageX,
-  KeyRound,
+  KeyRound, Trash2,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -1358,7 +1358,158 @@ function DangerZoneCard({
           }
         </button>
       </div>
+
+      {/* ADR-450. Permanent deletion, deliberately BELOW deactivate: the
+          reversible action is the one a reader meets first. */}
+      <PurgePanel detail={detail} />
     </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Purge — ADR-450
+// ---------------------------------------------------------------------------
+
+interface PurgeResult {
+  company_name: string;
+  rows_by_table: Record<string, number>;
+  total_rows: number;
+  cognito_users_deleted: number;
+  cognito_client_deleted: boolean;
+  cognito_errors: string[];
+}
+
+function PurgePanel({ detail }: { detail: CompanyDetail }) {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<PurgeResult | null>(null);
+
+  // ADR-450 D4. The server enforces both; the UI mirrors them so the operator
+  // is not told "no" only after committing to the action.
+  const canPurge = !detail.is_active && typed.trim() === detail.name;
+
+  const handlePurge = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await axiosClient.delete<PurgeResult>(
+        `/admin/companies/${detail.id}/purge`,
+        { data: { confirm_name: typed.trim() } },
+      );
+      setResult(res.data);
+    } catch (err: unknown) {
+      setError(errorText(err, 'Purge failed.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The company is gone, so there is no detail page left to show. The counts
+  // are the only evidence the purge happened (ADR-450 D2) — shown BEFORE the
+  // operator navigates away, not buried in a toast.
+  if (result) {
+    const tables = Object.entries(result.rows_by_table).sort((a, b) => b[1] - a[1]);
+    return (
+      <div className="mt-3 p-3 rounded-xl border border-border bg-accent/40">
+        <p className="text-sm font-medium text-foreground">
+          Purged {result.company_name}: {result.total_rows} rows across {tables.length} tables.
+        </p>
+        <p className="text-xs text-muted-foreground mt-1">
+          {result.cognito_users_deleted} Cognito user(s) deleted
+          {result.cognito_client_deleted ? ', app client removed' : ''}.
+        </p>
+        {result.cognito_errors.length > 0 && (
+          <div className="mt-2 p-2 rounded-lg bg-warning/10 border border-warning/20">
+            <p className="text-xs text-warning">
+              Cognito did not fully clean up. These need manual removal:
+            </p>
+            <ul className="mt-1 text-xs text-muted-foreground font-mono">
+              {result.cognito_errors.map(e => <li key={e}>{e}</li>)}
+            </ul>
+          </div>
+        )}
+        <details className="mt-2">
+          <summary className="text-xs text-muted-foreground cursor-pointer">Rows by table</summary>
+          <ul className="mt-1 text-xs text-muted-foreground font-mono max-h-48 overflow-y-auto">
+            {tables.map(([tbl, n]) => <li key={tbl}>{tbl}: {n}</li>)}
+          </ul>
+        </details>
+        <button
+          onClick={() => navigate('/superadmin/companies')}
+          className="mt-3 text-sm font-medium px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/70"
+        >
+          Back to companies
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 p-3 rounded-xl border border-danger/30 bg-danger/5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-sm font-medium text-foreground">Purge company</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Permanently deletes this company and every row belonging to it, plus its
+            Cognito users and app client. There is no undo and no archive. Export
+            anything you need first.
+          </p>
+        </div>
+        {!open && (
+          <button
+            onClick={() => setOpen(true)}
+            className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-danger/10 text-danger hover:bg-danger/20"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Purge
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-2">
+          {error && <ErrorBanner message={error} />}
+
+          {/* ADR-450 D4 — deactivate first. Stated as the REASON the action is
+              unavailable, rather than letting the server refuse it later. */}
+          {detail.is_active && (
+            <p className="text-xs text-warning">
+              Deactivate the company before purging it.
+            </p>
+          )}
+
+          <label className="block text-xs text-muted-foreground">
+            Type <span className="font-mono text-foreground">{detail.name}</span> to confirm
+          </label>
+          <input
+            value={typed}
+            onChange={e => setTyped(e.target.value)}
+            disabled={detail.is_active || busy}
+            placeholder={detail.name}
+            autoComplete="off"
+            className="input-field w-full"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePurge}
+              disabled={!canPurge || busy}
+              className="text-sm font-medium px-3 py-1.5 rounded-lg bg-danger text-white hover:bg-danger/90 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {busy ? 'Purging…' : 'Permanently delete'}
+            </button>
+            <button
+              onClick={() => { setOpen(false); setTyped(''); setError(null); }}
+              disabled={busy}
+              className="text-sm px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/70"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
