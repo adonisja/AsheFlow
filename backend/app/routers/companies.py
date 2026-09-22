@@ -24,7 +24,7 @@ from app.services.tenant_machine_client import (
 )
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
-from app.services.email import send_invite_email
+from app.services.email import send_invite_email, send_owner_email_change_email
 from datetime import time as dt_time
 
 logger = logging.getLogger(__name__)
@@ -1317,6 +1317,12 @@ def _notify_mode_change(
 
 company_admin_router = APIRouter(prefix="/companies", tags=["company-config"])
 
+# ADR-451 D4. UNAUTHENTICATED by necessity: the person confirming an Owner email
+# change may be unable to sign in -- that is the whole reason a super admin
+# started it. The single-use token is the authentication, and it only ever went
+# to the address being proven.
+public_router = APIRouter(prefix="/companies", tags=["company-public"])
+
 allow_admin = RoleChecker(["admin"])
 allow_management = RoleChecker(["management", "admin"])
 # /my-info returns only the caller's own company name and timezone — not
@@ -2120,3 +2126,226 @@ def delete_owner(
     db.commit()
 
     return {"removed": True}
+
+
+# ---------------------------------------------------------------------------
+# Owner email change — verified before it lands (ADR-451 D4/D4a/D5)
+# ---------------------------------------------------------------------------
+
+class OwnerEmailChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    new_email: EmailStr
+
+
+# 3 days. Deliberately not `invite_expiry_days`: that is per-tenant and is about
+# onboarding a NEW person, while this is a correction to a LIVE account and must
+# not sit open at a tenant's discretion (ADR-451 D5).
+OWNER_EMAIL_CHANGE_DAYS = 3
+
+
+@router.post("/{company_id}/owner/email-change", status_code=status.HTTP_200_OK)
+def request_owner_email_change(
+    company_id: UUID,
+    payload: OwnerEmailChangeRequest,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Start a verified change of the Owner's email (ADR-451 D4).
+
+    FOR THE CASE COGNITO CANNOT COVER. An Owner who can sign in changes their
+    own address through /employees/me/email/request-change, which already
+    verifies before writing. This exists for the Owner who CANNOT sign in --
+    which is the only reason a super admin would be doing it.
+
+    The new address goes to `pending_email`. `email` is untouched, so it remains
+    the sign-in identity and the old address keeps working: a typo here costs
+    nothing, where writing directly would lock the Owner out of a live tenant
+    with only the person who is locked out able to notice.
+    """
+    owner = _owner_or_404(db, company_id)
+    new_email = payload.new_email.strip().lower()
+
+    if new_email == (owner.email or "").lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That is already the Owner's email address.",
+        )
+
+    taken = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.email == new_email,
+        Employee.id != owner.id,
+    ).first()
+    if taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That email is already in use by another employee.",
+        )
+
+    # The token is the proof of control over the NEW address, so it is sent
+    # there and nowhere else. Reusing InviteToken would conflate "you may
+    # register" with "you may take over this address".
+    token_str = secrets.token_urlsafe(48)
+    owner.pending_email = new_email
+    owner.pending_email_expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=OWNER_EMAIL_CHANGE_DAYS)
+    )
+    db.query(InviteToken).filter(
+        InviteToken.employee_id == owner.id,
+    ).delete()
+    db.add(InviteToken(
+        token=token_str,
+        company_id=company_id,
+        employee_id=owner.id,
+        expires_at=owner.pending_email_expires_at,
+    ))
+    db.flush()
+
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.owner_email_change_requested",
+        target_table="employees",
+        target_id=str(owner.id),
+        before={"email": owner.email},
+        after={**super_admin_identity(_), "pending_email": new_email},
+    )
+    db.commit()
+
+    sent = False
+    try:
+        send_owner_email_change_email(
+            to_email=new_email,
+            owner_name=owner.name,
+            token=token_str,
+            days=OWNER_EMAIL_CHANGE_DAYS,
+        )
+        sent = True
+    except ClientError as e:
+        logger.error(
+            "Owner email-change verification failed to send for company %s: %s",
+            company_id, e.response.get("Error", {}).get("Code", "Unknown"),
+        )
+
+    return {
+        "pending_email": new_email,
+        "expires_at": owner.pending_email_expires_at.isoformat(),
+        "verification_sent": sent,
+    }
+
+
+@router.delete("/{company_id}/owner/email-change", status_code=status.HTTP_200_OK)
+def cancel_owner_email_change(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Abandon a pending change. `email` was never written, so this is the revert."""
+    owner = _owner_or_404(db, company_id)
+    if not owner.pending_email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="There is no pending email change for this Owner.",
+        )
+
+    dropped = owner.pending_email
+    owner.pending_email = None
+    owner.pending_email_expires_at = None
+    db.query(InviteToken).filter(InviteToken.employee_id == owner.id).delete()
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.owner_email_change_cancelled",
+        target_table="employees",
+        target_id=str(owner.id),
+        before={"pending_email": dropped},
+        after=super_admin_identity(_),
+    )
+    db.commit()
+    return {"cancelled": True}
+
+
+class OwnerEmailConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(..., min_length=16, max_length=64)
+
+
+@public_router.post("/owner/email-change/confirm", status_code=status.HTTP_200_OK)
+def confirm_owner_email_change(payload: OwnerEmailConfirm, db: Session = Depends(get_db)):
+    """Prove control of the new address, and only then write it (ADR-451 D4).
+
+    UNAUTHENTICATED BY NECESSITY: the person confirming may be unable to sign in
+    -- that is the whole reason a super admin started this. The token IS the
+    authentication, and it only ever went to the new address.
+
+    Nothing here reveals whether a token merely expired or never existed: both
+    answer the same way, so the endpoint cannot be used to probe for live
+    tokens.
+    """
+    now = datetime.now(timezone.utc)
+    record = db.query(InviteToken).filter(InviteToken.token == payload.token).first()
+    owner = None
+    if record:
+        owner = db.query(Employee).filter(Employee.id == record.employee_id).first()
+
+    if (
+        not record
+        or record.used
+        or not owner
+        or not owner.pending_email
+        or owner.pending_email_expires_at is None
+        or owner.pending_email_expires_at.replace(tzinfo=timezone.utc) < now
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This link is no longer valid. Ask for a new one.",
+        )
+
+    previous = owner.email
+    owner.email = owner.pending_email
+    owner.pending_email = None
+    owner.pending_email_expires_at = None
+    record.used = True
+
+    # Cognito's Username is the sign-in identity and is NOT the email once the
+    # employee has registered (ADR-380 F7), so the account attribute is updated
+    # rather than the account being recreated.
+    try:
+        boto3.client("cognito-idp", region_name=settings.aws_region).admin_update_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=owner.username or previous,
+            UserAttributes=[
+                {"Name": "email", "Value": owner.email},
+                # Re-verified: this address was just proven, and leaving it
+                # unverified breaks forgot-password, which recovers on
+                # verified_email only.
+                {"Name": "email_verified", "Value": "true"},
+            ],
+        )
+    except ClientError as e:
+        # The address is proven and the row is written; a Cognito failure must
+        # not discard that. Logged loudly because sign-in recovery now points
+        # at the old address until someone fixes it.
+        logger.error(
+            "Owner email confirmed for employee %s but Cognito was not updated: %s",
+            owner.id, e.response.get("Error", {}).get("Code", "Unknown"),
+        )
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(owner.company_id),
+        actor_id=owner.id,
+        action_type="company.owner_email_changed",
+        target_table="employees",
+        target_id=str(owner.id),
+        before={"email": previous},
+        after={"email": owner.email},
+    )
+    db.commit()
+    return {"email": owner.email}
