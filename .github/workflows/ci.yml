@@ -894,14 +894,34 @@ jobs:
             ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 10
-          STATUS=$(aws ssm get-command-invocation \
-            --region us-east-2 \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
-            --query "Status" --output text)
-          echo "Write .env status: $STATUS"
-          [ "$STATUS" = "Success" ] || exit 1
+          # A single `sleep 10` then one status check used to gate this step,
+          # so ANY SSM command slower than ten seconds failed the whole deploy.
+          # On 2026-09-22 the prod agent was briefly slow and the deploy died
+          # with "Write .env status: Pending" -- nothing was wrong with the
+          # release. Poll for up to 3 minutes, and only treat a TERMINAL
+          # non-Success as a failure.
+          STATUS=Pending
+          for i in $(seq 1 18); do
+            sleep 10
+            STATUS=$(aws ssm get-command-invocation \
+              --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+              --query "Status" --output text 2>/dev/null || echo Pending)
+            echo "[$i/18] Write .env status: $STATUS"
+            case "$STATUS" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut) break ;;
+            esac
+          done
+          if [ "$STATUS" != "Success" ]; then
+            echo "::error::Writing the prod .env did not succeed (last status: $STATUS)."
+            aws ssm get-command-invocation --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+              --query "StandardErrorContent" --output text 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Write prod bot .env via SSM Parameter Store
         run: |
