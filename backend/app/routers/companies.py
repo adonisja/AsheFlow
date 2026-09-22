@@ -1820,3 +1820,105 @@ def update_company_discord_config(
     db.commit()
     db.refresh(config)
     return DiscordConfigResponse.from_config(config)
+
+
+# ---------------------------------------------------------------------------
+# Tenant purge — super admin only, irreversible (ADR-450)
+# ---------------------------------------------------------------------------
+
+class PurgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # ADR-450 D4. The company's exact name, typed. Clicking a button next to a
+    # row is not a deliberate act; typing "DSP Test Company" is. There is no
+    # undo, so this is the only guard against acting on the wrong row.
+    confirm_name: str = Field(..., min_length=1, max_length=255)
+
+
+class PurgeResponse(BaseModel):
+    company_id: str
+    company_name: str
+    rows_by_table: dict[str, int]
+    total_rows: int
+    cognito_users_deleted: int
+    cognito_client_deleted: bool
+    cognito_errors: list[str]
+
+
+@router.delete("/{company_id}/purge", response_model=PurgeResponse)
+def purge_company_endpoint(
+    company_id: UUID,
+    payload: PurgeRequest,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Permanently remove a tenant and everything belonging to it (ADR-450).
+
+    IRREVERSIBLE. No soft delete and no archive (ADR-431): where the intent is
+    "this should not exist", a tombstone is a second thing to explain and a
+    second thing to leak. Export before calling.
+
+    Deletes from every table carrying a company_id -- read from the database at
+    run time, because 59 of the 94 such tables have no foreign key to
+    `companies` and a cascade would never reach them.
+    """
+    from app.services.purge_company import purge_cognito, purge_company
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    # ADR-450 D4 — deactivate first. The destructive action must not be
+    # reachable from the state an operating tenant is in.
+    if company.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail="Deactivate the company before purging it.",
+        )
+    if payload.confirm_name.strip() != company.name:
+        raise HTTPException(
+            status_code=400,
+            detail="The confirmation name does not match this company's name.",
+        )
+
+    name = company.name
+
+    # ADR-450 D5 — audited BEFORE the delete and with company_id=None. An audit
+    # row scoped to this company would be deleted by its own purge, leaving no
+    # record that the purge happened.
+    write_audit(
+        db=db,
+        company_id=None,
+        actor_id=None,          # a super admin has no Employee row
+        action_type="company.purged",
+        target_table="companies",
+        target_id=str(company_id),
+        after={**super_admin_identity(_), "company_name": name},
+    )
+    db.flush()
+
+    # Cognito BEFORE the rows: it reads employees to learn which usernames
+    # exist, and after the purge those rows are gone.
+    from app.services.purge_company import PurgeReport
+    report = PurgeReport(company_id=str(company_id), company_name=name)
+    purge_cognito(db, company_id, report)
+
+    db_report = purge_company(db, company_id, name)
+    report.rows_by_table = db_report.rows_by_table
+    db.commit()
+
+    logger.warning(
+        "Company %s (%s) PURGED: %d rows across %d tables, %d Cognito users.",
+        name, company_id, report.total_rows, len(report.rows_by_table),
+        report.cognito_users_deleted,
+    )
+
+    return PurgeResponse(
+        company_id=str(company_id),
+        company_name=name,
+        rows_by_table=report.rows_by_table,
+        total_rows=report.total_rows,
+        cognito_users_deleted=report.cognito_users_deleted,
+        cognito_client_deleted=report.cognito_client_deleted,
+        cognito_errors=report.cognito_errors,
+    )
