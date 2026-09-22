@@ -78,9 +78,9 @@ class Employee(Base):
     email_bounce_type    = Column(String(20),          nullable=True)
     # ADR-451 — the provisioning row that opens a tenant, not an ordinary admin.
     # The bootstrap endpoint matches on THIS, never on email: "does this company
-    # already have a bootstrap admin?" must not depend on what the caller typed.
+    # already have a Owner?" must not depend on what the caller typed.
     # A unique partial index enforces one per company in the database.
-    is_bootstrap_admin   = Column(Boolean,            nullable=False, default=False)
+    is_owner   = Column(Boolean,            nullable=False, default=False)
     # A requested address, NOT yet in effect (ADR-451 D4). `email` stays the
     # sign-in identity until the new one is proven, so a typo cannot lock an
     # admin out of a live tenant.

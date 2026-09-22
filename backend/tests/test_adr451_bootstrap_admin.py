@@ -1,4 +1,4 @@
-"""ADR-451 D1: exactly one bootstrap admin per company.
+"""ADR-451 D1: exactly one Owner per company.
 
 THE BUG: `bootstrap_company_admin` matched an existing row BY EMAIL, so the
 same address was idempotent and a DIFFERENT address silently created a second
@@ -15,8 +15,14 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ROUTER = ROOT / "backend" / "app" / "routers" / "companies.py"
+# The ADR-451 migration keeps its ORIGINAL filename: a migration file is
+# history, and renaming it would break every database already stamped with it.
 MIGRATION = (ROOT / "backend" / "alembic" / "versions"
              / "f501ec69b808_adr451_bootstrap_admin.py")
+# ADR-452 renamed the column and REBUILT the index (its WHERE clause named the
+# old column), so the live constraint now lives here.
+RENAME_MIGRATION = (ROOT / "backend" / "alembic" / "versions"
+                    / "db8751d428ad_adr452_owner_rename.py")
 
 
 def _bootstrap_fn():
@@ -26,9 +32,9 @@ def _bootstrap_fn():
 
 
 class TestTheMatchIsOnTheFlagNotTheEmail:
-    def test_it_queries_is_bootstrap_admin(self):
+    def test_it_queries_is_owner(self):
         body = ast.dump(_bootstrap_fn())
-        assert "is_bootstrap_admin" in body, (
+        assert "is_owner" in body, (
             "bootstrap still matches on something other than the flag — a "
             "different email will create a second admin (ADR-451 D1)"
         )
@@ -59,8 +65,8 @@ class TestTheMatchIsOnTheFlagNotTheEmail:
         ]
         assert creates, "bootstrap no longer constructs an Employee"
         kwargs = {k.arg for c in creates for k in c.keywords}
-        assert "is_bootstrap_admin" in kwargs, \
-            "the created row does not set is_bootstrap_admin (ADR-451 D1)"
+        assert "is_owner" in kwargs, \
+            "the created row does not set is_owner (ADR-451 D1)"
 
 
 class TestASecondBootstrapAdminIsRefused:
@@ -94,16 +100,24 @@ class TestTheDatabaseEnforcesItToo:
     """Code can be bypassed by the next code path; a constraint cannot."""
 
     def test_the_migration_creates_a_unique_partial_index(self):
-        src = MIGRATION.read_text()
-        assert "ix_employees_bootstrap_admin" in src
-        assert "unique=True" in src, (
-            "the bootstrap index is not unique — two rows could still be "
-            "flagged for one company"
+        """Checked on the CURRENT migration: ADR-452 rebuilt the index because
+        its WHERE clause named the old column, and a renamed index would still
+        reference `is_bootstrap_admin` and fail on the next write."""
+        src = RENAME_MIGRATION.read_text()
+        assert "ix_employees_owner" in src
+        assert "UNIQUE INDEX" in src, (
+            "the Owner index is not unique — two rows could be flagged for "
+            "one company"
         )
-        assert "postgresql_where" in src, (
+        assert "WHERE is_owner" in src, (
             "a non-partial unique index on company_id would forbid a second "
-            "EMPLOYEE, not a second bootstrap admin"
+            "EMPLOYEE, not a second Owner"
         )
+
+    def test_the_original_migration_created_it_too(self):
+        """A database stamped at ADR-451 and never upgraded still needs it."""
+        src = MIGRATION.read_text()
+        assert "unique=True" in src and "postgresql_where" in src
 
     def test_nothing_is_backfilled(self):
         """Inferring "the oldest admin" is wrong exactly when the original was
@@ -122,7 +136,7 @@ class TestTheSummaryExposesIt:
         src = ROUTER.read_text()
         start = src.index("class AdminSummary")
         body = src[start:start + 900]
-        assert "is_bootstrap_admin" in body
+        assert "is_owner" in body
         assert "pending_email" in body
 
 
@@ -143,24 +157,24 @@ class TestAPendingAdminIsEditable:
     history. The row is an unclaimed placeholder."""
 
     def test_both_name_and_email_can_change(self):
-        body = _src("edit_bootstrap_admin")
+        body = _src("edit_owner")
         assert "admin.name = payload.name" in body
         assert "admin.email = payload.email" in body
 
     def test_the_outstanding_invite_is_reissued(self):
         """The old link points at an address that is no longer the admin."""
-        body = _src("edit_bootstrap_admin")
+        body = _src("edit_owner")
         assert "InviteToken.employee_id == admin.id).delete()" in body, \
             "editing leaves the previous invite live (ADR-451 D2)"
         assert "send_invite_email" in body
 
     def test_a_pending_admin_can_be_removed(self):
-        body = _src("delete_bootstrap_admin")
+        body = _src("delete_owner")
         assert "db.delete(admin)" in body
 
     def test_removing_also_clears_the_invite(self):
         """An orphaned token points at an employee row that no longer exists."""
-        body = _src("delete_bootstrap_admin")
+        body = _src("delete_owner")
         assert "InviteToken.employee_id == admin.id).delete()" in body
 
 
@@ -170,23 +184,23 @@ class TestAConfirmedAdminIsProtected:
 
     def test_the_name_is_locked(self):
         """Same lesson: assert the guard runs, not that the message exists."""
-        fn = _fn("edit_bootstrap_admin")
+        fn = _fn("edit_owner")
         guards = [
             n for n in ast.walk(fn)
             if isinstance(n, ast.If) and "confirmed" in ast.dump(n.test)
             and "name" in ast.dump(n.test)
         ]
         assert guards, (
-            "edit_bootstrap_admin does not gate the name on confirmation — a "
+            "edit_owner does not gate the name on confirmation — a "
             "confirmed admin can be renamed (ADR-451 D3)"
         )
         assert any(isinstance(n, ast.Raise) for g in guards for n in ast.walk(g))
-        assert "name is fixed" in _src("edit_bootstrap_admin")
+        assert "name is fixed" in _src("edit_owner")
 
     def test_a_direct_email_write_is_refused(self):
         """Writing the address directly would lock a live tenant's admin out on
         a typo, and the only person who could fix it is the one locked out."""
-        body = _src("edit_bootstrap_admin")
+        body = _src("edit_owner")
         assert "needs verification" in body, \
             "a confirmed admin's email can be written without proof (D4)"
 
@@ -198,7 +212,7 @@ class TestAConfirmedAdminIsProtected:
         test only looked for the wording, so stubbing the condition to `if
         False:` left a confirmed admin deletable with every test green.
         """
-        fn = _fn("delete_bootstrap_admin")
+        fn = _fn("delete_owner")
         # The refusal must be reached by comparing account_status, and the
         # delete must not be reachable without passing that comparison.
         guards = [
@@ -208,35 +222,35 @@ class TestAConfirmedAdminIsProtected:
             and "pending_verification" in ast.dump(n.test)
         ]
         assert guards, (
-            "delete_bootstrap_admin does not branch on account_status — a "
+            "delete_owner does not branch on account_status — a "
             "confirmed admin can be deleted (ADR-451 D3)"
         )
         assert any(
             isinstance(n, ast.Raise) for g in guards for n in ast.walk(g)
         ), "the account_status branch does not raise"
-        assert "cannot be removed" in _src("delete_bootstrap_admin")
+        assert "cannot be removed" in _src("delete_owner")
 
     def test_the_refusals_say_what_to_do_instead(self):
         """A 409 that only refuses sends an operator back to the same action."""
-        assert "offboard" in _src("delete_bootstrap_admin").lower()
-        assert "email change flow" in _src("edit_bootstrap_admin")
+        assert "offboard" in _src("delete_owner").lower()
+        assert "email change flow" in _src("edit_owner")
 
 
 class TestBothEndpointsAreGuarded:
     def test_they_are_super_admin_only(self):
-        for name in ("edit_bootstrap_admin", "delete_bootstrap_admin"):
+        for name in ("edit_owner", "delete_owner"):
             args = ast.dump(_fn(name).args)
             assert "get_super_admin" in args, f"{name} is not super-admin gated"
 
     def test_they_are_scoped_to_the_company(self):
         """Dimension 1: the lookup must not find another tenant's admin."""
-        body = _src("_bootstrap_admin_or_404")
+        body = _src("_owner_or_404")
         assert "Employee.company_id == company_id" in body
 
     def test_the_delete_is_audited_before_the_row_goes(self):
         """An audit row naming a row about to vanish is the only record it
         existed (cf. ADR-450 D5)."""
-        body = _src("delete_bootstrap_admin")
+        body = _src("delete_owner")
         assert body.index("write_audit(") < body.index("db.delete(admin)")
 
     def test_the_patch_body_forbids_unknown_keys(self):

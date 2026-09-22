@@ -132,7 +132,7 @@ class AdminSummary(BaseModel):
     # ADR-451. The provisioning row that opened this tenant, distinct from
     # admins added later through the ordinary employee flow. The UI needs it to
     # know whether to offer "create" or "edit" (D6), and which rules apply.
-    is_bootstrap_admin: bool = False
+    is_owner: bool = False
     # A requested address awaiting confirmation (D4). Shown so an operator can
     # see a change is in flight rather than wondering why the email looks stale.
     pending_email: Optional[str] = None
@@ -619,7 +619,7 @@ def get_employee_summary(
             name=emp.name,
             email=emp.email,
             account_status=emp.account_status,
-            is_bootstrap_admin=bool(emp.is_bootstrap_admin),
+            is_owner=bool(emp.is_owner),
             pending_email=emp.pending_email,
         )
         for emp in employees
@@ -746,12 +746,12 @@ def bootstrap_company_admin(
 
     # ADR-451 D1 — matched on THE FLAG, never on email. Matching by email meant
     # a different address silently created a SECOND admin row: the question
-    # "does this company already have a bootstrap admin?" must not depend on
+    # "does this company already have a Owner?" must not depend on
     # what the caller typed. A unique partial index enforces this in the
     # database too, so a future code path cannot reintroduce the duplicate.
     employee = db.query(Employee).filter(
         Employee.company_id == company_id,
-        Employee.is_bootstrap_admin.is_(True),
+        Employee.is_owner.is_(True),
     ).first()
 
     if employee:
@@ -762,7 +762,7 @@ def bootstrap_company_admin(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This company already has a bootstrap admin. Edit their "
+                    "This company already has a Owner. Edit their "
                     "details instead of creating another."
                 ),
             )
@@ -779,7 +779,7 @@ def bootstrap_company_admin(
             role="admin",
             is_active=False,
             account_status="pending_verification",
-            is_bootstrap_admin=True,
+            is_owner=True,
         )
         db.add(employee)
         db.flush()  # populate employee.id
@@ -803,7 +803,7 @@ def bootstrap_company_admin(
     write_audit(
         db=db,
         company_id=str(company_id),
-        action_type="company.bootstrap_admin",
+        action_type="company.owner_created",
         target_table="employees",
         target_id=str(employee.id),
         after={**super_admin_identity(_), "employee_id": str(employee.id), "role": employee.role,
@@ -1949,7 +1949,7 @@ def purge_company_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap admin — edit and remove (ADR-451 D2/D3)
+# Owner — edit and remove (ADR-451 D2/D3)
 # ---------------------------------------------------------------------------
 
 class BootstrapAdminPatch(BaseModel):
@@ -1959,30 +1959,30 @@ class BootstrapAdminPatch(BaseModel):
     email: Optional[EmailStr] = None
 
 
-def _bootstrap_admin_or_404(db: Session, company_id: UUID) -> Employee:
+def _owner_or_404(db: Session, company_id: UUID) -> Employee:
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found.")
     admin = db.query(Employee).filter(
         Employee.company_id == company_id,
-        Employee.is_bootstrap_admin.is_(True),
+        Employee.is_owner.is_(True),
     ).first()
     if not admin:
         raise HTTPException(
             status_code=404,
-            detail="This company has no bootstrap admin.",
+            detail="This company has no Owner.",
         )
     return admin
 
 
 @router.patch("/{company_id}/bootstrap", response_model=BootstrapResponse)
-def edit_bootstrap_admin(
+def edit_owner(
     company_id: UUID,
     payload: BootstrapAdminPatch,
     _: dict = Depends(get_super_admin),
     db: Session = Depends(get_db),
 ):
-    """Correct the bootstrap admin's details (ADR-451 D2/D3).
+    """Correct the Owner's details (ADR-451 D2/D3).
 
     WHILE PENDING both name and email may change, and the outstanding invite is
     reissued -- nobody has accepted anything, so nothing is at stake and the old
@@ -1994,7 +1994,7 @@ def edit_bootstrap_admin(
     verified flow (D4) -- this endpoint refuses it, because writing the address
     directly would lock a live tenant's admin out on a typo.
     """
-    admin = _bootstrap_admin_or_404(db, company_id)
+    admin = _owner_or_404(db, company_id)
     confirmed = admin.account_status != "pending_verification"
 
     if confirmed and payload.name is not None and payload.name.strip() != admin.name:
@@ -2040,7 +2040,7 @@ def edit_bootstrap_admin(
         db=db,
         company_id=str(company_id),
         actor_id=None,
-        action_type="company.bootstrap_admin_edited",
+        action_type="company.owner_edited",
         target_table="employees",
         target_id=str(admin.id),
         before=before,
@@ -2075,12 +2075,12 @@ def edit_bootstrap_admin(
 
 
 @router.delete("/{company_id}/bootstrap", status_code=status.HTTP_200_OK)
-def delete_bootstrap_admin(
+def delete_owner(
     company_id: UUID,
     _: dict = Depends(get_super_admin),
     db: Session = Depends(get_db),
 ):
-    """Remove an UNCONFIRMED bootstrap admin, returning the company to no admin.
+    """Remove an UNCONFIRMED Owner, returning the company to no admin.
 
     ADR-451 D2/D3. Allowed only while pending: no account exists, no session, no
     history, so the row is an unclaimed placeholder and removing it is a
@@ -2090,7 +2090,7 @@ def delete_bootstrap_admin(
     concern -- it would orphan their audit history and leave the tenant with no
     admin at all. If they have left, that is offboarding, which has its own path.
     """
-    admin = _bootstrap_admin_or_404(db, company_id)
+    admin = _owner_or_404(db, company_id)
 
     if admin.account_status != "pending_verification":
         raise HTTPException(
@@ -2107,7 +2107,7 @@ def delete_bootstrap_admin(
         db=db,
         company_id=str(company_id),
         actor_id=None,
-        action_type="company.bootstrap_admin_removed",
+        action_type="company.owner_removed",
         target_table="employees",
         target_id=str(admin.id),
         before={"name": admin.name, "email": admin.email},

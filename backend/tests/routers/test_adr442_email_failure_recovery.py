@@ -100,7 +100,7 @@ class TestTheBootstrapResendNeedsNoNewEndpoint:
 
         # Asserted as BEHAVIOUR, not as the presence of the word "idempotent" in
         # a comment. ADR-451 rewrote that comment (the match moved from email to
-        # is_bootstrap_admin) and this test failed while the property it cares
+        # is_owner) and this test failed while the property it cares
         # about was untouched -- a comment is not the contract.
         assert "InviteToken.employee_id == employee.id).delete()" in src, (
             "a resend must invalidate the prior token"
@@ -112,6 +112,6 @@ class TestTheBootstrapResendNeedsNoNewEndpoint:
         assert "employee.email = payload.email" in src, (
             "a re-run no longer updates the pending admin in place"
         )
-        assert "is_bootstrap_admin" in src, (
+        assert "is_owner" in src, (
             "the existing-admin lookup is not on the bootstrap flag (ADR-451 D1)"
         )
