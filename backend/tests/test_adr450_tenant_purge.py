@@ -164,3 +164,47 @@ class TestTheEndpointGuards:
         audit = body[body.index("write_audit("):body.index("write_audit(") + 400]
         assert "company_id=None" in audit, \
             "the audit is scoped to the company being purged (ADR-450 D5)"
+
+
+class TestTheSuperAdminUI:
+    """The purge must be reachable without curl, and must not be easy to
+    trigger by accident. Read from source: this repo has no JS test runner,
+    and these are structural guarantees rather than rendering behaviour.
+    """
+
+    TSX = (ROOT / "frontend" / "src" / "pages" / "superadmin" / "CompanyDetail.tsx")
+
+    def test_the_panel_exists_and_is_rendered(self):
+        src = self.TSX.read_text()
+        assert "function PurgePanel" in src, "no purge UI — the endpoint needs curl"
+        assert "<PurgePanel detail={detail} />" in src, "PurgePanel is defined but never rendered"
+
+    def test_it_sits_below_deactivate_in_the_danger_zone(self):
+        """The REVERSIBLE action is the one a reader meets first."""
+        src = self.TSX.read_text()
+        assert src.index("Deactivate company") < src.index("<PurgePanel"), \
+            "purge renders above deactivate — the destructive action comes first"
+
+    def test_the_button_is_disabled_until_the_name_matches(self):
+        """ADR-450 D4 mirrored client-side, so the operator is not told 'no'
+        only after committing to the action."""
+        src = self.TSX.read_text()
+        assert "typed.trim() === detail.name" in src, \
+            "the confirm field does not compare against the company name"
+        assert "!detail.is_active &&" in src, \
+            "the UI does not require deactivation first"
+        assert "disabled={!canPurge || busy}" in src
+
+    def test_the_result_shows_counts_before_navigating_away(self):
+        """The counts are the only evidence the purge happened (D2), and the
+        page they were triggered from no longer exists."""
+        src = self.TSX.read_text()
+        assert "total_rows" in src and "rows_by_table" in src
+        assert "Back to companies" in src, \
+            "no way out of the result view — the company detail page is gone"
+
+    def test_cognito_failures_are_surfaced_not_swallowed(self):
+        """A half-purged tenant must be visible; the remedy is manual."""
+        src = self.TSX.read_text()
+        assert "cognito_errors" in src
+        assert "need manual removal" in src
