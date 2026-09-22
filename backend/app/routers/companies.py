@@ -129,6 +129,13 @@ class AdminSummary(BaseModel):
     name: str
     email: Optional[str]
     account_status: str
+    # ADR-451. The provisioning row that opened this tenant, distinct from
+    # admins added later through the ordinary employee flow. The UI needs it to
+    # know whether to offer "create" or "edit" (D6), and which rules apply.
+    is_bootstrap_admin: bool = False
+    # A requested address awaiting confirmation (D4). Shown so an operator can
+    # see a change is in flight rather than wondering why the email looks stale.
+    pending_email: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -612,6 +619,8 @@ def get_employee_summary(
             name=emp.name,
             email=emp.email,
             account_status=emp.account_status,
+            is_bootstrap_admin=bool(emp.is_bootstrap_admin),
+            pending_email=emp.pending_email,
         )
         for emp in employees
         if emp.role == "admin"
@@ -735,19 +744,33 @@ def bootstrap_company_admin(
     if not company.is_active:
         raise HTTPException(status_code=400, detail="Cannot bootstrap an inactive company.")
 
-    # Idempotent — re-use existing admin row if email already registered
+    # ADR-451 D1 — matched on THE FLAG, never on email. Matching by email meant
+    # a different address silently created a SECOND admin row: the question
+    # "does this company already have a bootstrap admin?" must not depend on
+    # what the caller typed. A unique partial index enforces this in the
+    # database too, so a future code path cannot reintroduce the duplicate.
     employee = db.query(Employee).filter(
         Employee.company_id == company_id,
-        Employee.email == payload.email,
+        Employee.is_bootstrap_admin.is_(True),
     ).first()
 
     if employee:
         if employee.account_status == "active":
+            # Confirmed: a real person with a Cognito account, sessions and
+            # audit history. Correcting their address is an EDIT with its own
+            # verified flow (D4), not a re-bootstrap.
             raise HTTPException(
                 status_code=409,
-                detail="An active admin with that email already exists for this company.",
+                detail=(
+                    "This company already has a bootstrap admin. Edit their "
+                    "details instead of creating another."
+                ),
             )
-        # Existing but not yet active — fall through and re-issue their invite
+        # Pending — nobody has accepted anything yet, so re-issuing the invite
+        # is safe and is what an operator re-running this expects (D2). Apply
+        # any corrected name or address while we are here.
+        employee.name = payload.name
+        employee.email = payload.email
     else:
         employee = Employee(
             company_id=company_id,
@@ -756,6 +779,7 @@ def bootstrap_company_admin(
             role="admin",
             is_active=False,
             account_status="pending_verification",
+            is_bootstrap_admin=True,
         )
         db.add(employee)
         db.flush()  # populate employee.id
@@ -1922,3 +1946,177 @@ def purge_company_endpoint(
         cognito_client_deleted=report.cognito_client_deleted,
         cognito_errors=report.cognito_errors,
     )
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap admin — edit and remove (ADR-451 D2/D3)
+# ---------------------------------------------------------------------------
+
+class BootstrapAdminPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(None, min_length=2, max_length=255)
+    email: Optional[EmailStr] = None
+
+
+def _bootstrap_admin_or_404(db: Session, company_id: UUID) -> Employee:
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    admin = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.is_bootstrap_admin.is_(True),
+    ).first()
+    if not admin:
+        raise HTTPException(
+            status_code=404,
+            detail="This company has no bootstrap admin.",
+        )
+    return admin
+
+
+@router.patch("/{company_id}/bootstrap", response_model=BootstrapResponse)
+def edit_bootstrap_admin(
+    company_id: UUID,
+    payload: BootstrapAdminPatch,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Correct the bootstrap admin's details (ADR-451 D2/D3).
+
+    WHILE PENDING both name and email may change, and the outstanding invite is
+    reissued -- nobody has accepted anything, so nothing is at stake and the old
+    link points at an address that is no longer the admin.
+
+    ONCE CONFIRMED the name is LOCKED: the row is a real person with a Cognito
+    account, sessions and audit history under that name, and renaming them would
+    rewrite that history. The email may still be corrected, but only through the
+    verified flow (D4) -- this endpoint refuses it, because writing the address
+    directly would lock a live tenant's admin out on a typo.
+    """
+    admin = _bootstrap_admin_or_404(db, company_id)
+    confirmed = admin.account_status != "pending_verification"
+
+    if confirmed and payload.name is not None and payload.name.strip() != admin.name:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This admin has completed registration, so their name is fixed. "
+                "It appears in their sign-in account and audit history."
+            ),
+        )
+    if confirmed and payload.email is not None and payload.email != admin.email:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Changing a confirmed admin's email needs verification. Use the "
+                "email change flow so the new address is proven before it takes "
+                "effect."
+            ),
+        )
+
+    before = {"name": admin.name, "email": admin.email}
+    if payload.name is not None:
+        admin.name = payload.name.strip()
+    if payload.email is not None:
+        admin.email = payload.email
+
+    invite_sent = admin.account_status != "pending_verification"
+    token_str = None
+    if not confirmed:
+        # The old link points at an address that is no longer the admin.
+        db.query(InviteToken).filter(InviteToken.employee_id == admin.id).delete()
+        token_str = secrets.token_urlsafe(48)
+        db.add(InviteToken(
+            token=token_str,
+            company_id=company_id,
+            employee_id=admin.id,
+            expires_at=datetime.now(timezone.utc)
+                       + timedelta(days=settings.invite_expiry_days),
+        ))
+        admin.invited_at = datetime.now(timezone.utc)
+
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.bootstrap_admin_edited",
+        target_table="employees",
+        target_id=str(admin.id),
+        before=before,
+        after={**super_admin_identity(_), "name": admin.name, "email": admin.email},
+    )
+    db.commit()
+    db.refresh(admin)
+
+    if token_str:
+        invite_sent = False
+        try:
+            send_invite_email(
+                to_email=admin.email,
+                employee_name=admin.name,
+                token=token_str,
+            )
+            invite_sent = True
+        except ClientError as e:
+            logger.error(
+                "Bootstrap invite email failed after edit for company %s: %s",
+                company_id, e.response.get("Error", {}).get("Code", "Unknown"),
+            )
+
+    return BootstrapResponse(
+        employee_id=admin.id,
+        name=admin.name,
+        email=admin.email,
+        role=admin.role,
+        account_status=admin.account_status,
+        invite_sent=invite_sent,
+    )
+
+
+@router.delete("/{company_id}/bootstrap", status_code=status.HTTP_200_OK)
+def delete_bootstrap_admin(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove an UNCONFIRMED bootstrap admin, returning the company to no admin.
+
+    ADR-451 D2/D3. Allowed only while pending: no account exists, no session, no
+    history, so the row is an unclaimed placeholder and removing it is a
+    correction rather than a deletion.
+
+    Once confirmed this refuses. Deleting a real admin is not a bootstrap
+    concern -- it would orphan their audit history and leave the tenant with no
+    admin at all. If they have left, that is offboarding, which has its own path.
+    """
+    admin = _bootstrap_admin_or_404(db, company_id)
+
+    if admin.account_status != "pending_verification":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This admin has completed registration and cannot be removed "
+                "here. Deactivate or offboard them instead."
+            ),
+        )
+
+    # Audited BEFORE the delete: an audit row naming a row that is about to
+    # vanish is still the only record that it existed (cf. ADR-450 D5).
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.bootstrap_admin_removed",
+        target_table="employees",
+        target_id=str(admin.id),
+        before={"name": admin.name, "email": admin.email},
+        after=super_admin_identity(_),
+    )
+    db.flush()
+
+    db.query(InviteToken).filter(InviteToken.employee_id == admin.id).delete()
+    db.delete(admin)
+    db.commit()
+
+    return {"removed": True}

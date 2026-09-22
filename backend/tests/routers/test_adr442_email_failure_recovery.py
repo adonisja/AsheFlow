@@ -97,7 +97,21 @@ class TestTheBootstrapResendNeedsNoNewEndpoint:
         from app.routers.companies import bootstrap_company_admin
 
         src = inspect.getsource(bootstrap_company_admin)
-        assert "Idempotent" in src or "idempotent" in src
+
+        # Asserted as BEHAVIOUR, not as the presence of the word "idempotent" in
+        # a comment. ADR-451 rewrote that comment (the match moved from email to
+        # is_bootstrap_admin) and this test failed while the property it cares
+        # about was untouched -- a comment is not the contract.
         assert "InviteToken.employee_id == employee.id).delete()" in src, (
             "a resend must invalidate the prior token"
+        )
+        # Re-running for a PENDING admin must reuse the row rather than insert a
+        # second one. ADR-451 D1 strengthened this: the lookup is now on the
+        # bootstrap flag, so even a CHANGED email reuses the row instead of
+        # silently creating a duplicate admin.
+        assert "employee.email = payload.email" in src, (
+            "a re-run no longer updates the pending admin in place"
+        )
+        assert "is_bootstrap_admin" in src, (
+            "the existing-admin lookup is not on the bootstrap flag (ADR-451 D1)"
         )

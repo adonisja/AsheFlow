@@ -76,6 +76,18 @@ class Employee(Base):
     # a full mailbox is not a bad address. The pair is kept because the
     # remedies differ -- a typo gets corrected, a complaint gets a conversation.
     email_bounce_type    = Column(String(20),          nullable=True)
+    # ADR-451 — the provisioning row that opens a tenant, not an ordinary admin.
+    # The bootstrap endpoint matches on THIS, never on email: "does this company
+    # already have a bootstrap admin?" must not depend on what the caller typed.
+    # A unique partial index enforces one per company in the database.
+    is_bootstrap_admin   = Column(Boolean,            nullable=False, default=False)
+    # A requested address, NOT yet in effect (ADR-451 D4). `email` stays the
+    # sign-in identity until the new one is proven, so a typo cannot lock an
+    # admin out of a live tenant.
+    pending_email        = Column(String(255),        nullable=True)
+    # 3 days. On expiry `pending_email` is cleared and `email` was never
+    # written -- that IS the revert (D5).
+    pending_email_expires_at = Column(DateTime(timezone=True), nullable=True)
     # ADR-377 D2 — the row's own birthday, for anything that needs to measure
     # age. A DIFFERENT FACT from `invited_at`, not a rename of it: an invite is
     # an event that may never happen and is reissued on re-invite
