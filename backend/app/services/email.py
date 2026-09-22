@@ -454,3 +454,101 @@ def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
     except ClientError as exc:
         _log_ses_failure(to_email, exc)
         raise
+
+
+def send_owner_email_change_email(*, to_email: str, owner_name: str, token: str,
+                                  days: int) -> None:
+    """Prove control of a new Owner address (ADR-451 D4).
+
+    Sent ONLY to the new address. That is the proof: the person who can read it
+    is the person who controls the mailbox, which is the whole verification.
+
+    Nothing about the account changes until the link is used, so an unexpected
+    arrival is safe to ignore -- and the message says so, because a mail about
+    an account you did not ask to change is otherwise alarming.
+    """
+    confirm_url = f"{settings.app_base_url}/owner-email-change?token={token}"
+    first_name, first_name_html = _greeting_name(owner_name)
+
+    subject = "Confirm your new AsheFlow email address"
+    body_text = (
+        f"Hi {first_name},\n\n"
+        f"Someone at AsheFlow support started a change of your account email to "
+        f"this address. Confirm it with the link below and it becomes your "
+        f"sign-in address.\n\n"
+        f"{confirm_url}\n\n"
+        f"The link works once and expires in {days} days. Until you use it, "
+        f"nothing changes and your current address keeps working.\n\n"
+        f"If you were not expecting this, ignore this email. No change happens "
+        f"without the link.\n\n"
+        f"— AsheFlow"
+    )
+
+    body_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f8;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f8;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+        <tr><td style="background:linear-gradient(135deg,#4F35D2 0%,#7C3AED 100%);border-radius:16px 16px 0 0;padding:32px 40px;">
+          <div style="display:inline-block;background:rgba(255,255,255,0.15);border-radius:12px;padding:8px 14px;margin-bottom:16px;">
+            <span style="color:#fff;font-size:18px;font-weight:800;">AF</span>
+          </div>
+          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">AsheFlow</h1>
+          <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px;">Field operations, simplified</p>
+        </td></tr>
+        <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">Confirm this address, {first_name_html}</p>
+          <p style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.6;">
+            A change of your AsheFlow sign-in email to this address was started by
+            support. Confirm it below and it takes effect.
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding-bottom:24px;">
+              <a href="{confirm_url}"
+                 style="display:inline-block;background:#4F35D2;color:#ffffff;
+                        text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;
+                        border-radius:10px;">
+                Confirm this email address
+              </a>
+            </td></tr>
+          </table>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f7ff;border:1px solid #e8e8f0;border-radius:10px;">
+            <tr><td style="padding:14px 18px;">
+              <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.6;">
+                The link works once and expires in {days} days. Until you use it,
+                nothing changes and your current address keeps working.
+              </p>
+            </td></tr>
+          </table>
+          <p style="margin:20px 0 0;font-size:13px;color:#9ca3af;text-align:center;">
+            Not expecting this? Ignore this email. No change happens without the link.
+          </p>
+        </td></tr>
+        <tr><td style="background:#f8f7ff;border:1px solid #e8e8f0;border-top:none;border-radius:0 0 16px 16px;padding:20px 40px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#9ca3af;">© AsheFlow · Field operations, simplified</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+    client = boto3.client("ses", region_name=settings.aws_region)
+    try:
+        client.send_email(
+            **_configuration_set_kwargs(),
+            Source=settings.ses_from_email,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": body_text, "Charset": "UTF-8"},
+                    "Html": {"Data": body_html, "Charset": "UTF-8"},
+                },
+            },
+        )
+    except ClientError as exc:
+        _log_ses_failure(to_email, exc)
+        raise
