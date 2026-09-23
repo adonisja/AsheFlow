@@ -191,6 +191,9 @@ api_v1_router.include_router(collection.router)
 # cryptographically instead (app/services/sns_verify.py).
 api_v1_router.include_router(sns_events.router)
 api_v1_router.include_router(companies.company_admin_router)
+# ADR-451 D4 — no auth dependency: the Owner confirming a new address may be
+# unable to sign in. The single-use token is the credential.
+api_v1_router.include_router(companies.public_router)
 # ADR-335 — platform alerts are NOT mode- or setup-gated: an alert may have
 # no owning tenant, and a super admin must be able to read them precisely
 # when a company's configuration is broken.

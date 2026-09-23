@@ -24,7 +24,7 @@ from app.services.tenant_machine_client import (
 )
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
-from app.services.email import send_invite_email
+from app.services.email import send_invite_email, send_owner_email_change_email
 from datetime import time as dt_time
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,22 @@ class CompanyCreate(BaseModel):
         return v.strip()
 
 
+class AdminSummary(BaseModel):
+    employee_id: UUID
+    name: str
+    email: Optional[str]
+    account_status: str
+    # ADR-451. The provisioning row that opened this tenant, distinct from
+    # admins added later through the ordinary employee flow. The UI needs it to
+    # know whether to offer "create" or "edit" (D6), and which rules apply.
+    is_owner: bool = False
+    # A requested address awaiting confirmation (D4). Shown so an operator can
+    # see a change is in flight rather than wondering why the email looks stale.
+    pending_email: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class CompanyResponse(BaseModel):
     id: UUID
     name: str
@@ -67,6 +83,11 @@ class CompanyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     has_admin: bool = False
+    # ADR-451 D6. The list page is where the Owner is created, so it is where
+    # the existing one must be VISIBLE. Before this it held the result of its
+    # own last bootstrap call in React state -- gone on reload -- so an operator
+    # could not see what they were about to duplicate.
+    owner: Optional[AdminSummary] = None
     # ADR-280 D5: super admin is the ONE surface that spans tenants, so it is
     # the one place this has to be visible. Every other analytics endpoint is
     # already scoped to caller.company_id — a user inside a seed tenant seeing
@@ -122,15 +143,6 @@ class CompanyUpdate(BaseModel):
     @classmethod
     def name_strip(cls, v: str) -> str:
         return v.strip()
-
-
-class AdminSummary(BaseModel):
-    employee_id: UUID
-    name: str
-    email: Optional[str]
-    account_status: str
-
-    model_config = {"from_attributes": True}
 
 
 class EmployeeSummaryResponse(BaseModel):
@@ -516,10 +528,28 @@ def list_companies(
         .distinct()
         .all()
     }
+    # ONE query for every Owner, not one per company: this list grows with the
+    # tenant count and an N+1 here is a page that gets slower as the business
+    # succeeds.
+    owners = {
+        e.company_id: e
+        for e in db.query(Employee).filter(Employee.is_owner.is_(True)).all()
+    }
+
     result = []
     for c in companies:
         resp = CompanyResponse.model_validate(c)
         resp.has_admin = c.id in admin_company_ids
+        owner = owners.get(c.id)
+        if owner:
+            resp.owner = AdminSummary(
+                employee_id=owner.id,
+                name=owner.name,
+                email=owner.email,
+                account_status=owner.account_status,
+                is_owner=True,
+                pending_email=owner.pending_email,
+            )
         result.append(resp)
     return result
 
@@ -612,6 +642,8 @@ def get_employee_summary(
             name=emp.name,
             email=emp.email,
             account_status=emp.account_status,
+            is_owner=bool(emp.is_owner),
+            pending_email=emp.pending_email,
         )
         for emp in employees
         if emp.role == "admin"
@@ -735,19 +767,33 @@ def bootstrap_company_admin(
     if not company.is_active:
         raise HTTPException(status_code=400, detail="Cannot bootstrap an inactive company.")
 
-    # Idempotent — re-use existing admin row if email already registered
+    # ADR-451 D1 — matched on THE FLAG, never on email. Matching by email meant
+    # a different address silently created a SECOND admin row: the question
+    # "does this company already have a Owner?" must not depend on
+    # what the caller typed. A unique partial index enforces this in the
+    # database too, so a future code path cannot reintroduce the duplicate.
     employee = db.query(Employee).filter(
         Employee.company_id == company_id,
-        Employee.email == payload.email,
+        Employee.is_owner.is_(True),
     ).first()
 
     if employee:
         if employee.account_status == "active":
+            # Confirmed: a real person with a Cognito account, sessions and
+            # audit history. Correcting their address is an EDIT with its own
+            # verified flow (D4), not a re-bootstrap.
             raise HTTPException(
                 status_code=409,
-                detail="An active admin with that email already exists for this company.",
+                detail=(
+                    "This company already has a Owner. Edit their "
+                    "details instead of creating another."
+                ),
             )
-        # Existing but not yet active — fall through and re-issue their invite
+        # Pending — nobody has accepted anything yet, so re-issuing the invite
+        # is safe and is what an operator re-running this expects (D2). Apply
+        # any corrected name or address while we are here.
+        employee.name = payload.name
+        employee.email = payload.email
     else:
         employee = Employee(
             company_id=company_id,
@@ -756,6 +802,7 @@ def bootstrap_company_admin(
             role="admin",
             is_active=False,
             account_status="pending_verification",
+            is_owner=True,
         )
         db.add(employee)
         db.flush()  # populate employee.id
@@ -779,7 +826,7 @@ def bootstrap_company_admin(
     write_audit(
         db=db,
         company_id=str(company_id),
-        action_type="company.bootstrap_admin",
+        action_type="company.owner_created",
         target_table="employees",
         target_id=str(employee.id),
         after={**super_admin_identity(_), "employee_id": str(employee.id), "role": employee.role,
@@ -1292,6 +1339,12 @@ def _notify_mode_change(
 # ---------------------------------------------------------------------------
 
 company_admin_router = APIRouter(prefix="/companies", tags=["company-config"])
+
+# ADR-451 D4. UNAUTHENTICATED by necessity: the person confirming an Owner email
+# change may be unable to sign in -- that is the whole reason a super admin
+# started it. The single-use token is the authentication, and it only ever went
+# to the address being proven.
+public_router = APIRouter(prefix="/companies", tags=["company-public"])
 
 allow_admin = RoleChecker(["admin"])
 allow_management = RoleChecker(["management", "admin"])
@@ -1922,3 +1975,400 @@ def purge_company_endpoint(
         cognito_client_deleted=report.cognito_client_deleted,
         cognito_errors=report.cognito_errors,
     )
+
+
+# ---------------------------------------------------------------------------
+# Owner — edit and remove (ADR-451 D2/D3)
+# ---------------------------------------------------------------------------
+
+class BootstrapAdminPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(None, min_length=2, max_length=255)
+    email: Optional[EmailStr] = None
+
+
+def _owner_or_404(db: Session, company_id: UUID) -> Employee:
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    admin = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.is_owner.is_(True),
+    ).first()
+    if not admin:
+        raise HTTPException(
+            status_code=404,
+            detail="This company has no Owner.",
+        )
+    return admin
+
+
+@router.patch("/{company_id}/bootstrap", response_model=BootstrapResponse)
+def edit_owner(
+    company_id: UUID,
+    payload: BootstrapAdminPatch,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Correct the Owner's details (ADR-451 D2/D3).
+
+    WHILE PENDING both name and email may change, and the outstanding invite is
+    reissued -- nobody has accepted anything, so nothing is at stake and the old
+    link points at an address that is no longer the admin.
+
+    ONCE CONFIRMED the name is LOCKED: the row is a real person with a Cognito
+    account, sessions and audit history under that name, and renaming them would
+    rewrite that history. The email may still be corrected, but only through the
+    verified flow (D4) -- this endpoint refuses it, because writing the address
+    directly would lock a live tenant's admin out on a typo.
+    """
+    admin = _owner_or_404(db, company_id)
+    confirmed = admin.account_status != "pending_verification"
+
+    if confirmed and payload.name is not None and payload.name.strip() != admin.name:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This admin has completed registration, so their name is fixed. "
+                "It appears in their sign-in account and audit history."
+            ),
+        )
+    if confirmed and payload.email is not None and payload.email != admin.email:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Changing a confirmed admin's email needs verification. Use the "
+                "email change flow so the new address is proven before it takes "
+                "effect."
+            ),
+        )
+
+    before = {"name": admin.name, "email": admin.email}
+    if payload.name is not None:
+        admin.name = payload.name.strip()
+    if payload.email is not None:
+        admin.email = payload.email
+
+    invite_sent = admin.account_status != "pending_verification"
+    token_str = None
+    if not confirmed:
+        # The old link points at an address that is no longer the admin.
+        db.query(InviteToken).filter(InviteToken.employee_id == admin.id).delete()
+        token_str = secrets.token_urlsafe(48)
+        db.add(InviteToken(
+            token=token_str,
+            company_id=company_id,
+            employee_id=admin.id,
+            expires_at=datetime.now(timezone.utc)
+                       + timedelta(days=settings.invite_expiry_days),
+        ))
+        admin.invited_at = datetime.now(timezone.utc)
+
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.owner_edited",
+        target_table="employees",
+        target_id=str(admin.id),
+        before=before,
+        after={**super_admin_identity(_), "name": admin.name, "email": admin.email},
+    )
+    db.commit()
+    db.refresh(admin)
+
+    if token_str:
+        invite_sent = False
+        try:
+            send_invite_email(
+                to_email=admin.email,
+                employee_name=admin.name,
+                token=token_str,
+            )
+            invite_sent = True
+        except ClientError as e:
+            logger.error(
+                "Bootstrap invite email failed after edit for company %s: %s",
+                company_id, e.response.get("Error", {}).get("Code", "Unknown"),
+            )
+
+    return BootstrapResponse(
+        employee_id=admin.id,
+        name=admin.name,
+        email=admin.email,
+        role=admin.role,
+        account_status=admin.account_status,
+        invite_sent=invite_sent,
+    )
+
+
+@router.delete("/{company_id}/bootstrap", status_code=status.HTTP_200_OK)
+def delete_owner(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove an UNCONFIRMED Owner, returning the company to no admin.
+
+    ADR-451 D2/D3. Allowed only while pending: no account exists, no session, no
+    history, so the row is an unclaimed placeholder and removing it is a
+    correction rather than a deletion.
+
+    Once confirmed this refuses. Deleting a real admin is not a bootstrap
+    concern -- it would orphan their audit history and leave the tenant with no
+    admin at all. If they have left, that is offboarding, which has its own path.
+    """
+    admin = _owner_or_404(db, company_id)
+
+    if admin.account_status != "pending_verification":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This admin has completed registration and cannot be removed "
+                "here. Deactivate or offboard them instead."
+            ),
+        )
+
+    # Audited BEFORE the delete: an audit row naming a row that is about to
+    # vanish is still the only record that it existed (cf. ADR-450 D5).
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.owner_removed",
+        target_table="employees",
+        target_id=str(admin.id),
+        before={"name": admin.name, "email": admin.email},
+        after=super_admin_identity(_),
+    )
+    db.flush()
+
+    db.query(InviteToken).filter(InviteToken.employee_id == admin.id).delete()
+    db.delete(admin)
+    db.commit()
+
+    return {"removed": True}
+
+
+# ---------------------------------------------------------------------------
+# Owner email change — verified before it lands (ADR-451 D4/D4a/D5)
+# ---------------------------------------------------------------------------
+
+class OwnerEmailChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    new_email: EmailStr
+
+
+# 3 days. Deliberately not `invite_expiry_days`: that is per-tenant and is about
+# onboarding a NEW person, while this is a correction to a LIVE account and must
+# not sit open at a tenant's discretion (ADR-451 D5).
+OWNER_EMAIL_CHANGE_DAYS = 3
+
+
+@router.post("/{company_id}/owner/email-change", status_code=status.HTTP_200_OK)
+def request_owner_email_change(
+    company_id: UUID,
+    payload: OwnerEmailChangeRequest,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Start a verified change of the Owner's email (ADR-451 D4).
+
+    FOR THE CASE COGNITO CANNOT COVER. An Owner who can sign in changes their
+    own address through /employees/me/email/request-change, which already
+    verifies before writing. This exists for the Owner who CANNOT sign in --
+    which is the only reason a super admin would be doing it.
+
+    The new address goes to `pending_email`. `email` is untouched, so it remains
+    the sign-in identity and the old address keeps working: a typo here costs
+    nothing, where writing directly would lock the Owner out of a live tenant
+    with only the person who is locked out able to notice.
+    """
+    owner = _owner_or_404(db, company_id)
+    new_email = payload.new_email.strip().lower()
+
+    if new_email == (owner.email or "").lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That is already the Owner's email address.",
+        )
+
+    taken = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.email == new_email,
+        Employee.id != owner.id,
+    ).first()
+    if taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That email is already in use by another employee.",
+        )
+
+    # The token is the proof of control over the NEW address, so it is sent
+    # there and nowhere else. Reusing InviteToken would conflate "you may
+    # register" with "you may take over this address".
+    token_str = secrets.token_urlsafe(48)
+    owner.pending_email = new_email
+    owner.pending_email_expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=OWNER_EMAIL_CHANGE_DAYS)
+    )
+    db.query(InviteToken).filter(
+        InviteToken.employee_id == owner.id,
+    ).delete()
+    db.add(InviteToken(
+        token=token_str,
+        company_id=company_id,
+        employee_id=owner.id,
+        expires_at=owner.pending_email_expires_at,
+    ))
+    db.flush()
+
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.owner_email_change_requested",
+        target_table="employees",
+        target_id=str(owner.id),
+        before={"email": owner.email},
+        after={**super_admin_identity(_), "pending_email": new_email},
+    )
+    db.commit()
+
+    sent = False
+    try:
+        send_owner_email_change_email(
+            to_email=new_email,
+            owner_name=owner.name,
+            token=token_str,
+            days=OWNER_EMAIL_CHANGE_DAYS,
+        )
+        sent = True
+    except ClientError as e:
+        logger.error(
+            "Owner email-change verification failed to send for company %s: %s",
+            company_id, e.response.get("Error", {}).get("Code", "Unknown"),
+        )
+
+    return {
+        "pending_email": new_email,
+        "expires_at": owner.pending_email_expires_at.isoformat(),
+        "verification_sent": sent,
+    }
+
+
+@router.delete("/{company_id}/owner/email-change", status_code=status.HTTP_200_OK)
+def cancel_owner_email_change(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Abandon a pending change. `email` was never written, so this is the revert."""
+    owner = _owner_or_404(db, company_id)
+    if not owner.pending_email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="There is no pending email change for this Owner.",
+        )
+
+    dropped = owner.pending_email
+    owner.pending_email = None
+    owner.pending_email_expires_at = None
+    db.query(InviteToken).filter(InviteToken.employee_id == owner.id).delete()
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        actor_id=None,
+        action_type="company.owner_email_change_cancelled",
+        target_table="employees",
+        target_id=str(owner.id),
+        before={"pending_email": dropped},
+        after=super_admin_identity(_),
+    )
+    db.commit()
+    return {"cancelled": True}
+
+
+class OwnerEmailConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(..., min_length=16, max_length=64)
+
+
+@public_router.post("/owner/email-change/confirm", status_code=status.HTTP_200_OK)
+def confirm_owner_email_change(payload: OwnerEmailConfirm, db: Session = Depends(get_db)):
+    """Prove control of the new address, and only then write it (ADR-451 D4).
+
+    UNAUTHENTICATED BY NECESSITY: the person confirming may be unable to sign in
+    -- that is the whole reason a super admin started this. The token IS the
+    authentication, and it only ever went to the new address.
+
+    Nothing here reveals whether a token merely expired or never existed: both
+    answer the same way, so the endpoint cannot be used to probe for live
+    tokens.
+    """
+    now = datetime.now(timezone.utc)
+    record = db.query(InviteToken).filter(InviteToken.token == payload.token).first()
+    owner = None
+    if record:
+        owner = db.query(Employee).filter(Employee.id == record.employee_id).first()
+
+    if (
+        not record
+        or record.used
+        or not owner
+        or not owner.pending_email
+        or owner.pending_email_expires_at is None
+        or owner.pending_email_expires_at.replace(tzinfo=timezone.utc) < now
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This link is no longer valid. Ask for a new one.",
+        )
+
+    previous = owner.email
+    owner.email = owner.pending_email
+    owner.pending_email = None
+    owner.pending_email_expires_at = None
+    record.used = True
+
+    # Cognito's Username is the sign-in identity and is NOT the email once the
+    # employee has registered (ADR-380 F7), so the account attribute is updated
+    # rather than the account being recreated.
+    try:
+        boto3.client("cognito-idp", region_name=settings.aws_region).admin_update_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=owner.username or previous,
+            UserAttributes=[
+                {"Name": "email", "Value": owner.email},
+                # Re-verified: this address was just proven, and leaving it
+                # unverified breaks forgot-password, which recovers on
+                # verified_email only.
+                {"Name": "email_verified", "Value": "true"},
+            ],
+        )
+    except ClientError as e:
+        # The address is proven and the row is written; a Cognito failure must
+        # not discard that. Logged loudly because sign-in recovery now points
+        # at the old address until someone fixes it.
+        logger.error(
+            "Owner email confirmed for employee %s but Cognito was not updated: %s",
+            owner.id, e.response.get("Error", {}).get("Code", "Unknown"),
+        )
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(owner.company_id),
+        actor_id=owner.id,
+        action_type="company.owner_email_changed",
+        target_table="employees",
+        target_id=str(owner.id),
+        before={"email": previous},
+        after={"email": owner.email},
+    )
+    db.commit()
+    return {"email": owner.email}

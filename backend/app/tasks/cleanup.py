@@ -539,3 +539,49 @@ def purge_expired_ore_certificates() -> dict:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.cleanup.expire_owner_email_changes")
+def expire_owner_email_changes() -> dict:
+    """Drop Owner email changes nobody confirmed (ADR-451 D5).
+
+    THE REVERT IS THAT NOTHING WAS EVER WRITTEN. `email` was never touched, so
+    clearing `pending_email` returns the record to exactly its prior state --
+    there is no old value to restore and no window where the Owner's sign-in
+    address was wrong.
+
+    Why this sweep exists at all, given the token also expires: a stale
+    `pending_email` is still DISPLAYED. Someone reading the record months later
+    would see an address the Owner does not use and cannot sign in with, beside
+    one they do -- and have no way to tell which is real.
+
+    Idempotent: a row with no pending change does not match.
+    """
+    now = datetime.now(timezone.utc)
+    db = SessionLocal()
+    cleared = 0
+    try:
+        stale = (
+            db.query(Employee)
+            .filter(
+                Employee.pending_email.isnot(None),
+                Employee.pending_email_expires_at < now,
+            )
+            .all()
+        )
+        for emp in stale:
+            # The employee id, never the address (Dimension 7): a log is a
+            # wider audience than the record it describes.
+            logger.info(
+                "Expiring unconfirmed Owner email change for employee %s (company %s).",
+                emp.id, emp.company_id,
+            )
+            emp.pending_email = None
+            emp.pending_email_expires_at = None
+            cleared += 1
+
+        if cleared:
+            db.commit()
+        return {"cleared": cleared}
+    finally:
+        db.close()
