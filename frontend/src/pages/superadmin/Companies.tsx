@@ -26,9 +26,26 @@ interface Company {
   is_active: boolean;
   created_at: string;
   has_admin: boolean;
+  /** ADR-451 D6. The Owner, read from the SERVER. This page is where the Owner
+   *  is created, so it is where the existing one has to be visible: it used to
+   *  hold the result of its own last bootstrap call in React state, which is
+   *  gone on reload, so an operator could not see what they were about to
+   *  duplicate. */
+  owner: OwnerSummary | null;
   /** ADR-280 — is this tenant's data real? Super admin is the one
    *  cross-tenant surface, so it is the one place this has to show. */
   data_class: 'live' | 'seed' | 'demo';
+}
+
+interface OwnerSummary {
+  employee_id: string;
+  name: string;
+  email: string | null;
+  account_status: string;
+  /** A requested address awaiting confirmation (ADR-451 D4). Shown so the
+   *  operator sees a change is in flight rather than wondering why the address
+   *  looks stale. */
+  pending_email: string | null;
 }
 
 /** Company creation, plus the machine client credentials (ADR-364).
@@ -500,6 +517,39 @@ function CompanyRow({
                   </button>
                 </>
               )}
+            </div>
+          ) : company.owner ? (
+            /* ADR-451 D6. The Owner as the SERVER knows them. This is the whole
+               fix: the form used to render unconditionally, so an operator
+               re-running bootstrap with a corrected address could not see that
+               an Owner already existed. */
+            <div
+              className="flex items-center justify-between gap-3 flex-wrap text-xs"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="min-w-0">
+                <span className="text-muted-foreground">Owner </span>
+                <span className="text-foreground font-medium">{company.owner.name}</span>
+                {company.owner.email && (
+                  <span className="text-muted-foreground font-mono"> · {company.owner.email}</span>
+                )}
+                {company.owner.pending_email && (
+                  <span className="text-warning">
+                    {' '}· changing to {company.owner.pending_email}, awaiting confirmation
+                  </span>
+                )}
+              </div>
+              <span
+                className={
+                  company.owner.account_status === 'pending_verification'
+                    ? 'text-warning shrink-0'
+                    : 'text-success shrink-0'
+                }
+              >
+                {company.owner.account_status === 'pending_verification'
+                  ? 'Invite pending'
+                  : 'Registered'}
+              </span>
             </div>
           ) : (
             <BootstrapForm companyId={company.id} onDone={setBootstrapResult} />
