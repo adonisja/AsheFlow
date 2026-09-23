@@ -140,6 +140,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.expire_registered_unused",
         "schedule": crontab(hour=3, minute=15),
     },
+    # 03:30 AM Eastern — ADR-451 D5. After the two invite sweeps, for the same
+    # reason they are staggered: three jobs touching `employees` at once make a
+    # log read like one of them did all the work.
+    "expire-owner-email-changes-daily": {
+        "task": "app.tasks.cleanup.expire_owner_email_changes",
+        "schedule": crontab(hour=3, minute=30),
+    },
     # 00:01 AM Eastern — flag training records not submitted before midnight
     "check-training-submissions-nightly": {
         "task": "app.tasks.training_deadlines.check_training_submissions",

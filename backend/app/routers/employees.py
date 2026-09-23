@@ -100,6 +100,27 @@ def _cognito_client():
     return boto3.client("cognito-idp", region_name=settings.aws_region)
 
 
+def _refuse_if_owner(employee, action: str) -> None:
+    """The Owner cannot be removed or demoted by anyone (ADR-452 D2).
+
+    INCLUDING THEMSELVES. A company with no Owner has nobody who can appoint
+    one, so the mistake is unrecoverable from inside the tenant -- refusing
+    costs a support conversation, allowing it costs the tenant.
+
+    Before this, every one of these endpoints scoped by company_id and stopped,
+    so any admin could delete the founder. ADR-451 D3 protected that row from
+    the BOOTSTRAP endpoint while the ordinary employee endpoints stayed open.
+    """
+    if getattr(employee, "is_owner", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This is the company Owner and cannot be {action}. "
+                "Transfer ownership to another admin first."
+            ),
+        )
+
+
 def cognito_username_for(employee) -> str | None:
     """The Username this employee's Cognito account actually has (ADR-380 F7).
 
@@ -1010,6 +1031,7 @@ def deactivate_employee(
     ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _refuse_if_owner(db_employee, "deactivated")
 
     caller_groups = set(current_user.get("cognito_groups", []))
     _assert_not_protected(caller_groups, db_employee.role)
@@ -1136,6 +1158,7 @@ def delete_employee(
     ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _refuse_if_owner(db_employee, "deleted")
 
     # Prefer username — Cognito accounts are created under the derived username.
     # Fall back to email only for legacy accounts predating the username column.
@@ -1481,6 +1504,7 @@ def demote_employee(
     ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _refuse_if_owner(db_employee, "demoted")
     if db_employee.role != "trainer":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1786,3 +1810,83 @@ def confirm_discord_link(
 
     r.delete(_discord_code_key(caller.id))
     return {"detail": "Discord account linked.", "discord_id": payload.discord_id}
+
+
+@router.post("/{employee_id}/transfer-ownership", response_model=EmployeeResponse)
+def transfer_ownership(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["admin"])),
+    db: Session = Depends(get_db),
+):
+    """Move Ownership of this company to another admin (ADR-452 D3).
+
+    TRANSFER, not "set owner". The flag moves in ONE transaction, so there is
+    never a moment with two Owners or none -- and the unique partial index would
+    refuse the intermediate state anyway.
+
+    Only the current Owner may call this. An ordinary admin handing ownership to
+    themselves is a privilege escalation with extra steps; a super admin can do
+    it through the company endpoints when an Owner has left and cannot hand over.
+
+    The target must already be an ACTIVE ADMIN. Promoting and transferring in one
+    call would hide which of the two actually happened, and the audit row would
+    not say.
+    """
+    if not caller.is_owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the current Owner can transfer ownership.",
+        )
+
+    target = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    if target.id == caller.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You are already the Owner.",
+        )
+    if target.role != "admin" or not target.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ownership can only be transferred to an active admin. "
+                "Promote them first."
+            ),
+        )
+
+    # ORDER MATTERS, and the database enforces it. `ix_employees_owner` is a
+    # UNIQUE PARTIAL INDEX, and a unique index cannot be DEFERRABLE in Postgres
+    # -- it is checked per statement, not at commit. Setting the new Owner first
+    # (which is what SQLAlchemy's flush ordering does if both are dirty at once)
+    # raises UniqueViolation on the momentary two-Owner state.
+    #
+    # So: clear the old Owner, FLUSH that statement, then set the new one. The
+    # whole thing is still one transaction, so there is no window where the
+    # company has no Owner from any other session's point of view.
+    caller.is_owner = False
+    db.flush()
+    target.is_owner = True
+    db.flush()
+
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="company.ownership_transferred",
+        target_table="employees",
+        target_id=str(target.id),
+        before={"owner_employee_id": str(caller.id)},
+        after={"owner_employee_id": str(target.id)},
+    )
+    db.commit()
+    db.refresh(target)
+    logger.info(
+        "Ownership of company %s transferred from %s to %s",
+        caller.company_id, caller.id, target.id,
+    )
+    return target
