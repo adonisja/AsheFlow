@@ -58,6 +58,22 @@ class CompanyCreate(BaseModel):
         return v.strip()
 
 
+class AdminSummary(BaseModel):
+    employee_id: UUID
+    name: str
+    email: Optional[str]
+    account_status: str
+    # ADR-451. The provisioning row that opened this tenant, distinct from
+    # admins added later through the ordinary employee flow. The UI needs it to
+    # know whether to offer "create" or "edit" (D6), and which rules apply.
+    is_owner: bool = False
+    # A requested address awaiting confirmation (D4). Shown so an operator can
+    # see a change is in flight rather than wondering why the email looks stale.
+    pending_email: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class CompanyResponse(BaseModel):
     id: UUID
     name: str
@@ -67,6 +83,11 @@ class CompanyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     has_admin: bool = False
+    # ADR-451 D6. The list page is where the Owner is created, so it is where
+    # the existing one must be VISIBLE. Before this it held the result of its
+    # own last bootstrap call in React state -- gone on reload -- so an operator
+    # could not see what they were about to duplicate.
+    owner: Optional[AdminSummary] = None
     # ADR-280 D5: super admin is the ONE surface that spans tenants, so it is
     # the one place this has to be visible. Every other analytics endpoint is
     # already scoped to caller.company_id — a user inside a seed tenant seeing
@@ -122,22 +143,6 @@ class CompanyUpdate(BaseModel):
     @classmethod
     def name_strip(cls, v: str) -> str:
         return v.strip()
-
-
-class AdminSummary(BaseModel):
-    employee_id: UUID
-    name: str
-    email: Optional[str]
-    account_status: str
-    # ADR-451. The provisioning row that opened this tenant, distinct from
-    # admins added later through the ordinary employee flow. The UI needs it to
-    # know whether to offer "create" or "edit" (D6), and which rules apply.
-    is_owner: bool = False
-    # A requested address awaiting confirmation (D4). Shown so an operator can
-    # see a change is in flight rather than wondering why the email looks stale.
-    pending_email: Optional[str] = None
-
-    model_config = {"from_attributes": True}
 
 
 class EmployeeSummaryResponse(BaseModel):
@@ -523,10 +528,28 @@ def list_companies(
         .distinct()
         .all()
     }
+    # ONE query for every Owner, not one per company: this list grows with the
+    # tenant count and an N+1 here is a page that gets slower as the business
+    # succeeds.
+    owners = {
+        e.company_id: e
+        for e in db.query(Employee).filter(Employee.is_owner.is_(True)).all()
+    }
+
     result = []
     for c in companies:
         resp = CompanyResponse.model_validate(c)
         resp.has_admin = c.id in admin_company_ids
+        owner = owners.get(c.id)
+        if owner:
+            resp.owner = AdminSummary(
+                employee_id=owner.id,
+                name=owner.name,
+                email=owner.email,
+                account_status=owner.account_status,
+                is_owner=True,
+                pending_email=owner.pending_email,
+            )
         result.append(resp)
     return result
 

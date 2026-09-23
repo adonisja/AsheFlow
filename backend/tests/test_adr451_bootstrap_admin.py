@@ -258,3 +258,74 @@ class TestBothEndpointsAreGuarded:
         src = ROUTER.read_text()
         start = src.index("class BootstrapAdminPatch")
         assert 'extra="forbid"' in src[start:start + 400]
+
+
+class TestTheListPageSeesTheOwner:
+    """ADR-451 D6. The bug was not the missing constraint -- it was that the
+    operator could not SEE what they were about to duplicate.
+
+    `Companies.tsx` held the result of its own last bootstrap call in React
+    state, which its own comment admits is "gone on reload".
+    """
+
+    TSX = ROOT / "frontend" / "src" / "pages" / "superadmin" / "Companies.tsx"
+
+    def test_the_list_response_carries_the_owner(self):
+        src = ROUTER.read_text()
+        i = src.index("class CompanyResponse")
+        assert "owner: Optional[AdminSummary]" in src[i:i + 900], (
+            "the companies list returns only has_admin, which says WHETHER an "
+            "admin exists and not WHO (ADR-451 D6)"
+        )
+
+    def test_owners_are_fetched_in_one_query(self):
+        """This list grows with the tenant count; an N+1 here is a page that
+        gets slower as the business succeeds.
+
+        Counts queries INSIDE THE LOOP, not in the function. An earlier version
+        counted `.query(` calls anywhere in the body, so moving the lookup into
+        the `for` changed nothing and the test passed on a genuine N+1.
+        """
+        fn = _fn("list_companies")
+        loops = [n for n in ast.walk(fn) if isinstance(n, ast.For)]
+        assert loops, "list_companies no longer iterates companies"
+
+        in_loop = [
+            n for loop in loops for n in ast.walk(loop)
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "query"
+        ]
+        assert not in_loop, (
+            f"{len(in_loop)} database query/queries inside the companies loop "
+            "— the Owner lookup must be batched before it (ADR-451 D6)"
+        )
+        assert "is_owner" in ast.dump(fn)
+
+    def test_the_page_renders_the_owner_from_the_server(self):
+        src = self.TSX.read_text()
+        assert "company.owner" in src, \
+            "the list page still has no server-side Owner (ADR-451 D6)"
+        assert "company.owner.name" in src and "company.owner.email" in src
+
+    def test_the_create_form_only_shows_when_there_is_no_owner(self):
+        """THE ORIGINAL DEFECT. The form rendered unconditionally, so
+        re-running bootstrap with a corrected address silently created a
+        second admin."""
+        src = self.TSX.read_text()
+        owner_branch = src.index("company.owner ? (")
+        form = src.index("<BootstrapForm companyId=")
+        assert owner_branch < form, (
+            "the create form renders before the Owner check — an operator "
+            "cannot see the Owner they are about to duplicate"
+        )
+
+    def test_a_pending_email_change_is_visible(self):
+        """Otherwise a reader wonders why the address looks stale."""
+        src = self.TSX.read_text()
+        assert "company.owner.pending_email" in src
+        assert "awaiting confirmation" in src
+
+    def test_the_invite_state_is_distinguished(self):
+        """"Invite pending" and "Registered" are different situations with
+        different remedies (D2 vs D3)."""
+        src = self.TSX.read_text()
+        assert "Invite pending" in src and "Registered" in src
