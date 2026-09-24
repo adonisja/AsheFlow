@@ -34,6 +34,22 @@
 
 AsheFlow replaces manual scheduling spreadsheets and verbal coordination for Amazon DSP delivery crews with a structured, role-aware platform that covers the full shift lifecycle — from dispatch planning in the morning to driver surveys and route sorting at end of day. A React web app handles management and dispatch; a React Native mobile app serves the field.
 
+### Two operating modes
+
+Every tenant runs in one of two modes, set per company (`operating_mode`, default
+`workforce`):
+
+| Mode | What the DSP does itself | What AsheFlow covers |
+|---|---|---|
+| **`workforce`** | Amazon assigns routes; the DSP staffs and runs them | crews, dispatch, attendance, training, the driver day, scorecards, payroll reconciliation |
+| **`full`** | the DSP also sorts and builds its own routes | all of the above, plus two-tier package routing and per-walker sub-routes |
+
+`workforce` is the default and the common case. Features that only make sense in
+`full` mode are gated on it, so a workforce tenant never sees a page it cannot
+use — and the difference is real rather than cosmetic: in `workforce` mode
+delivered counts come from Amazon's scorecard rather than from routes AsheFlow
+built, so some metrics are genuinely unavailable rather than merely empty.
+
 **Core capabilities:**
 
 - **Intelligent Dispatch** — weighted algorithm resolving driver preferences (favorites/bans), recurring off-days, PTO, trainer-trainee pairing, consecutive-assignment penalties, and crew balance to generate daily truck assignments; per-truck selection and re-run
@@ -87,7 +103,7 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination for Ama
 | Bot | discord.py · Cognito service account · per-guild routing |
 | Integrations | NYC GeoClient (geocoding) · AWS Textract (scorecard OCR) · ADP RUN (payroll) |
 | Infrastructure | Docker Compose · AWS EC2 · AWS SSM deploy · GitHub Actions CI/CD |
-| Tests | pytest · 582 tests · SQLite in-memory + mock-DB fixtures |
+| Tests | pytest · 4,158 tests · SQLite in-memory + mock-DB fixtures, real-Postgres checks for migrations |
 
 ---
 
@@ -136,6 +152,16 @@ All endpoints scoped to caller.company_id — zero cross-tenant data access.
 | `management` | Operations supervisor | Management Dashboard | Schedule Changes |
 | `admin` | Tech lead / company administrator | Admin Dashboard | Full access — all field and management tabs |
 | `super_admin` | Platform operator | Super Admin Panel | N/A — web only |
+
+**Owner** is a flag on an `admin`, not a ninth role (ADR-452). Exactly one per
+company, enforced by a unique partial index. It grants no extra reach — an
+`admin` already has full access — but the Owner cannot be deleted, deactivated
+or demoted by anyone, including themselves: a company with no Owner has nobody
+who can appoint one. Ownership transfers atomically to another active admin.
+
+Deliberately a flag rather than a role string: a ninth role would mean auditing
+every role list in the codebase, and missing one would silently remove access
+from the most privileged user in the tenant.
 
 ---
 
@@ -222,17 +248,35 @@ See `.env.example` at the project root for a complete template.
 
 New companies are onboarded through the super admin panel (`/superadmin/companies`):
 
-1. **Create company** — name, slug, Amazon DSP code, timezone
-2. **Bootstrap admin** — creates an `admin`-role employee and sends a Cognito invite email
-3. **Admin registers** — follows the invite link, sets password + Discord snowflake ID
-4. **Complete setup** — admin fills in operational config at `/settings`; `is_configured` flips `true` automatically once all required fields are set
-5. **Discord integration** — super admin pastes guild/channel/role snowflake IDs into the Discord Integration card; bot serves the guild from that point forward
+1. **Create company** — name, slug, Amazon DSP code, timezone, operating mode
+2. **Create the Owner** — one per company, and the list page shows the existing
+   one rather than letting you create a second by accident. While the invite is
+   pending, name and email are both editable and the row can be removed; once
+   the Owner registers, the name is fixed (it is in their Cognito account and
+   audit history) and the email changes only through a verified flow
+3. **Owner registers** — follows the invite link, sets password + Discord
+   snowflake ID (required at registration)
+4. **Complete setup** — Owner fills in operational config at `/settings`;
+   `is_configured` flips `true` automatically once all required fields are set
+5. **Connect Discord** — Company Settings leads with **Connect the AsheFlow
+   bot**, because the guild and channel IDs below it do nothing until a Discord
+   server admin authorises the bot through OAuth. The page reports whether the
+   bot is actually in the server, and the OAuth link is emailed to the Owner the
+   first time a guild ID is saved (ADR-448)
+
+A tenant can be removed entirely from the super admin panel. The purge walks
+every table carrying a `company_id` — read from the live schema, because 59 of
+the 94 such tables have no foreign key to `companies` and a cascade would leave
+them orphaned — and tears down the tenant's Cognito users and app client with
+it (ADR-450).
 
 ---
 
 ## API Surface
 
-All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cognito JWT Bearer token. Every list and write endpoint is scoped to `caller.company_id`.
+All endpoints live under `/api/v1/`. Auth via AWS Cognito JWT Bearer token, and every list and write endpoint is scoped to `caller.company_id`.
+
+Three routes are deliberately public, each with its own credential in place of a session: public address collection (per-study token, rate-limited), the SES bounce webhook (RSA signature verified against AWS's signing certificate), and Owner email-change confirmation (single-use token — the person confirming may be locked out, which is the reason the path exists).
 
 <details>
 <summary><strong>View all 41 routers</strong></summary>
@@ -278,7 +322,11 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 | `/feedback` | Submit, list, update status | authenticated (submit); admin (list, update) |
 | `/audit` | System action log | management, admin |
 | `/companies` | My config read/write | admin (own company) |
-| `/admin/companies` | Full tenant CRUD, bootstrap, config, Discord config | super_admin only |
+| `/admin/companies` | Full tenant CRUD, Owner create/edit/remove, config, Discord config, purge | super_admin only |
+| `/admin/companies/{id}/owner/email-change` | Start or cancel a verified Owner email change | super_admin only |
+| `/companies/owner/email-change/confirm` | Confirm a new Owner address | **public** — single-use token |
+| `/employees/{id}/transfer-ownership` | Move Ownership to another active admin | current Owner only |
+| `/sns/ses-events` | SES bounce and complaint webhook | **public** — RSA signature verified |
 | `/registration` | Token validation, account creation | unauthenticated (invite token required) |
 | `/internal` | Guild config fetch, Discord role sync | bot only (X-Internal-Secret header) |
 
@@ -329,8 +377,8 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 | `/settings` | admin | Company operational config (shift times, dispatch weights, training rules) |
 | `/admin` | admin | System overview, workforce breakdown, feedback inbox, roster, fleet grid |
 | `/feedback` | admin | Feedback inbox and resolution queue |
-| `/superadmin/companies` | super_admin | All tenants list with bootstrap actions |
-| `/superadmin/companies/:id` | super_admin | Company detail: identity, setup status, employees, config, Discord integration |
+| `/superadmin/companies` | super_admin | All tenants list, showing each company's Owner and invite state |
+| `/superadmin/companies/:id` | super_admin | Company detail: identity, setup status, employees, config, Discord integration, purge |
 
 </details>
 
@@ -447,13 +495,14 @@ AsheFlow/
 - [x] **Phase 13** — Full driver day: mid-shift check-ins, RTS/return-to-station report, station handoff, dock/gate assignment + tote check-off + load confirmation, end-of-day flow; staging environment on EC2 + SSM/CI deploy
 - [x] **Phase 14** — Anchor-point rework (geocoded ETA, relocation, running-late), shared bidirectional roll-call + crew status, timing/wave-distribution rebalance, arrival-model consolidation
 - [x] **Phase 15** — Integrations + polish: ADP payroll import & timecard reconciliation, Amazon scorecard OCR + cross-check, SSE real-time, and a full web+mobile design-system re-adoption (theming, accessibility, header/UX unification)
-- [ ] **Phase 16** — Demo tenant + recorded walkthrough, E2E tests (browser + mobile), push notifications, avatar upload (S3), offline-first optimistic updates
+- [x] **Phase 16** — Public address collection (per-study tokens, spreadsheet-injection escaping at export, abuse cleanup), account-email hardening (every account email branded and sent by us, failed sends recoverable, SES bounce handling), per-tenant bot credentials, Discord onboarding made visible in-product, and the Owner model (one per company, protected, transferable) + tenant purge
+- [ ] **Phase 17** — Launch: SES production access, the first two live tenants, demo tenant + recorded walkthrough, E2E tests (browser + mobile), push notifications, avatar upload (S3), offline-first optimistic updates
 
 ---
 
 ## Key Design Decisions
 
-Architectural decisions are documented internally (210 ADRs). Key areas covered:
+Architectural decisions are documented internally (453 ADRs, 485 journals, 440 lessons). Key areas covered:
 
 - Weighted dispatch algorithm design and fill-order logic
 - Discord bot architecture and two-phase dispatch flow
@@ -469,15 +518,39 @@ Architectural decisions are documented internally (210 ADRs). Key areas covered:
 - Anchor-point geocoding — cross-street/address → GeoClient point; mandatory, timezone-correct ETA + late detection
 - Real-time without polling storms — SSE for terminal dispatch state, stop-conditioned/visibility-gated polls elsewhere
 - Design-system re-adoption — shared token/primitive layer, light/dark restored across web + mobile, no hardcoded colors
+- Public data collection — per-study tokens, spreadsheet-formula escaping at
+  export rather than at submit, and a cleanup path for an abused link
+- Account email — every account email branded and sent by us rather than by the
+  identity provider, with a failed send recoverable instead of stranding an
+  account, and bounces recorded against the employee
+- Owner model — one per company enforced by a unique partial index, protected
+  from removal by anyone including themselves, transferable atomically
+- Tenant purge — driven by the live schema rather than a maintained list,
+  because most tables carrying a `company_id` have no foreign key to enforce it
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system architecture.
+The decision record itself (ADRs, journals, the learning guide) is kept in a
+private repository: it names customers, describes proprietary routing logic, and
+documents live infrastructure.
 
 ---
 
 ## What's Left
 
+**Before launch**
+
+- **SES production access** — the account is still in the sandbox, which caps
+  sending at 200/day and requires every recipient address to be verified
+  individually. That is unworkable when the recipients are a customer's own
+  employees, so it gates real onboarding. Every path degrades gracefully while
+  it is pending (a failed send returns the credential rather than stranding the
+  account), but it is the one blocker that stops invitations reaching anyone
+- **The first two tenants** — each self-provisions its own Cognito app client
+  on creation
+
+**After**
+
 - **Demo access** — demo tenant with seeded data and a recorded walkthrough for client presentations
-- **E2E tests** — pytest covers backend routers/services (582 tests); no browser-level tests for the React frontend or mobile yet
+- **E2E tests** — pytest covers backend routers/services (4,158 tests); no browser-level tests for the React frontend or mobile yet
 - **Push notifications** — the mobile notification inbox is in-app; native push token registration and background delivery are not yet wired
 - **Avatar upload** — S3 bucket for profile images is planned but not implemented
 - **Offline-first** — optimistic updates / offline queueing for the mobile field flow
@@ -487,7 +560,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system architect
 ## Security
 
 - **Auth:** AWS Cognito JWTs with JWKS key-rotation retry; short TTL + server-side revocation
-- **Multi-tenancy:** every endpoint scoped to `caller.company_id` — no cross-tenant data access possible
+- **Multi-tenancy:** every authenticated endpoint scoped to `caller.company_id`. Three endpoints are deliberately unauthenticated and documented as such — public address collection (rate-limited, per-study token), the SES bounce webhook (RSA signature verified against AWS), and Owner email-change confirmation (single-use token, because the person confirming may be unable to sign in)
 - **Secrets:** zero hardcoded credentials in committed code; all secrets via environment variables and GitHub Actions secrets
 - **Proprietary logic:** core algorithm files excluded from the public repository via `.gitignore`
 - **Dependencies:** automated CVE audit on every push via `pip-audit` in CI
