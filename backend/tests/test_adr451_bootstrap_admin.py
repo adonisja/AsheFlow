@@ -329,3 +329,40 @@ class TestTheListPageSeesTheOwner:
         different remedies (D2 vs D3)."""
         src = self.TSX.read_text()
         assert "Invite pending" in src and "Registered" in src
+
+
+class TestTheSuperAdminUsesTheHouseDropdown:
+    """A native <select> renders with the OS palette, so on a dark theme it
+    opens as a white panel with a system-blue highlight. SelectMenu.tsx exists
+    for exactly this and says so in its own docstring; CollectionData.tsx
+    records the same failure being fixed once already.
+    """
+
+    PAGES = [
+        ROOT / "frontend" / "src" / "pages" / "superadmin" / "Companies.tsx",
+        ROOT / "frontend" / "src" / "pages" / "superadmin" / "CompanyDetail.tsx",
+    ]
+
+    def test_no_native_select_survives(self):
+        import re
+        for page in self.PAGES:
+            # `<select` in a comment is fine — it is how the decision is
+            # explained. Only a real JSX element counts.
+            code = re.sub(r"\{/\*.*?\*/\}", "", page.read_text(), flags=re.S)
+            assert "<select" not in code, (
+                f"{page.name} still renders a native <select>, which opens "
+                "with the OS palette on a dark theme"
+            )
+
+    def test_they_use_the_shared_component(self):
+        for page in self.PAGES:
+            assert "SelectMenu" in page.read_text(), f"{page.name} has no SelectMenu"
+
+    def test_the_timezone_list_is_defined_once(self):
+        """Two copies drift: one page gains a zone and the other does not."""
+        companies, detail = self.PAGES
+        assert "export const TIMEZONES" in companies.read_text()
+        assert "import { TIMEZONES }" in detail.read_text(), (
+            "CompanyDetail keeps its own timezone list — it will drift from "
+            "the create form"
+        )
