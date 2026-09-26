@@ -149,6 +149,26 @@ jobs:
       - name: Dates go through the shared formatter
         run: python scripts/check_date_formatting.py
 
+      # A fieldKey with no HELP_CONTENT entry renders NOTHING, so the "?" opens
+      # an empty panel and reads as broken. TypeScript cannot see it: fieldKey
+      # is `string | null`, so any string type-checks (ADR-456).
+      - name: Help drawer keys have content
+        run: python scripts/check_help_drawer_keys.py
+
+      # A Python-style "\u2019" written into a TSX string is six characters,
+      # not an apostrophe, and the UI renders "account\u2019s" to the user. It
+      # type-checks and it builds; only a human reading the screen catches it.
+      # Three instances had already shipped to walkers (ADR-456).
+      - name: No literal unicode escapes in copy
+        run: python scripts/check_literal_unicode_escapes.py
+
+      # Cognito's stock invite ("Your username is X and temporary password is
+      # Y") ships through our own SES identity, so it arrives from
+      # no-reply@asheflow.com looking like ours. Every admin_create_user must
+      # suppress it (ADR-444).
+      - name: Cognito sends no email of its own
+        run: python scripts/check_cognito_suppressed.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit

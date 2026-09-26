@@ -1,5 +1,5 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { X, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // ---------------------------------------------------------------------------
@@ -351,6 +351,67 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
       '"file" mode means dispatch uploads a manifest file (CSV/Excel) each morning. "api" mode means AsheFlow fetches the manifest automatically via an external API integration. The "api" mode requires additional configuration of your logistics provider\'s API credentials.',
     example: '"file" — dispatch manually uploads the day\'s manifest each morning.',
     note: '"api" mode is only available if an API integration has been provisioned for your account.',
+  },
+  /* The only entry here that is about the PERSON rather than the company's
+     server. "Discord ID" alone is ambiguous between the two, and the account
+     setup screen asks for this one, so the title and the first line of the
+     detail both say whose. */
+  discord_user_id: {
+    title: 'Your Discord User ID',
+    summary: 'Your personal Discord account ID.',
+    /* The "how to find it" half was buried at the end of the same paragraph as
+       the "what it is" half, which is the part the reader is here for. Split:
+       prose explains, a numbered list instructs. Desktop and mobile are
+       separate routes to the same value, so they are separate lists rather
+       than a parenthetical. */
+    detail: (
+      <>
+        <p>
+          This identifies YOU in Discord, so AsheFlow can @mention you directly
+          when a route, a truck change or a callout concerns you. It is not your
+          username.
+        </p>
+        <div className="pt-1">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+            On desktop
+          </p>
+          <ol className="space-y-1 text-sm text-foreground list-decimal list-outside pl-4 marker:text-muted-foreground">
+            <li>
+              Open <span className="font-medium">User Settings &rarr; Advanced</span>{' '}
+              and turn on <span className="font-medium">Developer Mode</span>.
+            </li>
+            <li>
+              Right-click your own name or avatar and choose{' '}
+              <span className="font-medium">Copy User ID</span>.
+            </li>
+          </ol>
+        </div>
+        <div className="pt-1">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+            On mobile
+          </p>
+          <ol className="space-y-1 text-sm text-foreground list-decimal list-outside pl-4 marker:text-muted-foreground">
+            <li>Tap your avatar, then the three dots.</li>
+            <li>
+              Choose <span className="font-medium">Copy User ID</span>.
+            </li>
+          </ol>
+        </div>
+        <p className="pt-1">
+          <a
+            href="https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+          >
+            Discord&rsquo;s own guide
+            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="sr-only">(opens in a new tab)</span>
+          </a>
+        </p>
+      </>
+    ),
+    example: '"123456789012345678" (17 to 20 digits, numbers only)',
   },
   discord_guild_id: {
     title: 'Discord Server ID (Guild ID)',
