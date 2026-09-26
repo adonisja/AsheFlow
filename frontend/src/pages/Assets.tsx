@@ -273,7 +273,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                   required
                   value={form.name}
                   onChange={e => set('name', e.target.value)}
-                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground focus:outline-none"
                   placeholder="Jane Smith"
                 />
               </div>
@@ -290,7 +290,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                   type="email"
                   value={form.email}
                   onChange={e => set('email', e.target.value)}
-                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground focus:outline-none"
                   placeholder="jane@example.com"
                 />
               </div>
@@ -307,7 +307,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                   <input
                     value={form.discord_id}
                     onChange={e => handleDiscordChange(e.target.value)}
-                    className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground focus:outline-none"
                     placeholder="Numeric snowflake (e.g. 123456789012345678)"
                   />
                 </div>
@@ -356,7 +356,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                   type="tel"
                   value={form.phone_number}
                   onChange={e => handlePhoneChange(e.target.value)}
-                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground focus:outline-none"
                   placeholder="(555) 000-0000"
                 />
               </div>

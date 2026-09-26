@@ -317,7 +317,7 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                   value={filter}
                   onChangeText={setFilter}
                   placeholder="Filter by number or colour"
-                  placeholderTextColor={c.mutedForeground}
+                  placeholderTextColor={c.placeholder}
                   // NOT number-pad. The placeholder invites a colour, and a
                   // numeric keyboard makes "orange" literally untypable — the
                   // control contradicted its own label.
@@ -417,7 +417,7 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                       value={manualBag}
                       onChangeText={setManualBag}
                       placeholder="5270"
-                      placeholderTextColor={c.mutedForeground}
+                      placeholderTextColor={c.placeholder}
                       keyboardType="number-pad"
                       returnKeyType="done"
                       onSubmitEditing={useManualBag}
@@ -465,7 +465,7 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                 value={address}
                 onChangeText={setAddress}
                 placeholder="411 W 36 St"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 autoCapitalize="words"
                 autoCorrect={false}          // street names are not dictionary words
                 autoFocus                    // the bag is chosen; the address is all that is left

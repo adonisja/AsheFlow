@@ -311,7 +311,7 @@ function FieldInput({ label, c, style, ...props }: {
           textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>{label}</Text>
       ) : null}
       <TextInput
-        placeholderTextColor={c.mutedForeground}
+        placeholderTextColor={c.placeholder}
         style={[{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm + 2,
           fontSize: fontSize.base, color: c.foreground, backgroundColor: c.background }, style]}
         {...props}
@@ -1637,7 +1637,7 @@ function StepLoadTruck({ roster, onDone, c, stationSort, taId }: {
           value={filter}
           onChangeText={setFilter}
           placeholder="Filter bag or dock…"
-          placeholderTextColor={c.mutedForeground}
+          placeholderTextColor={c.placeholder}
           autoCapitalize="characters"
           style={{ flex: 1, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
             borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs + 2 }}
@@ -1814,7 +1814,7 @@ function StepWalkerHandoffs({ summary, onDone, c }: { summary: RTSSummary; onDon
                   fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background }}
                 value={flagNotes} onChangeText={setFlagNotes}
                 placeholder="What doesn't match? (e.g. declared 4, received 3)"
-                placeholderTextColor={c.mutedForeground} multiline />
+                placeholderTextColor={c.placeholder} multiline />
               <View style={{ marginTop: spacing.xs }}>
                 <Btn label="Confirm with Discrepancy" variant="ghost"
                   onPress={() => flagNotes.trim() ? confirm(r, flagNotes.trim()) : Alert.alert('Required', 'Describe the discrepancy first.')}
@@ -2465,7 +2465,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
         fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.md }}
         value={crewCount} onChangeText={setCrewCount}
         placeholder="Crew members confirmed on truck" keyboardType="numeric"
-        placeholderTextColor={c.mutedForeground} />
+        placeholderTextColor={c.placeholder} />
       <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground,
         textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: spacing.sm }}>
         RTS Packages by Reason
@@ -2488,7 +2488,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
             padding: spacing.sm, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
             textAlign: 'center' }}
             value={e.count} onChangeText={v => setCount(i, v)} placeholder="0" keyboardType="numeric"
-            placeholderTextColor={c.mutedForeground} />
+            placeholderTextColor={c.placeholder} />
           {entries.length > 1 && (
             <TouchableOpacity onPress={() => removeEntry(i)}>
               <Text style={{ fontSize: 18, color: c.danger, paddingHorizontal: 4 }}>×</Text>
@@ -2565,21 +2565,21 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
           <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
             fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background }}
             value={totes} onChangeText={setTotes} placeholder="0" keyboardType="numeric"
-            placeholderTextColor={c.mutedForeground} />
+            placeholderTextColor={c.placeholder} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: 4 }}>RTS packages</Text>
           <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
             fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background }}
             value={rtsN} onChangeText={setRtsN} placeholder="0" keyboardType="numeric"
-            placeholderTextColor={c.mutedForeground} />
+            placeholderTextColor={c.placeholder} />
         </View>
       </View>
       <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
         fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
         minHeight: 52, textAlignVertical: 'top', marginBottom: spacing.sm }}
         value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
-        placeholderTextColor={c.mutedForeground} multiline />
+        placeholderTextColor={c.placeholder} multiline />
       <Btn label="Submit Handoff" onPress={submit} disabled={!totes || !rtsN} loading={saving} c={c} />
     </Card>
   );

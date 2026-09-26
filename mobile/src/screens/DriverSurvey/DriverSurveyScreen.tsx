@@ -367,7 +367,7 @@ export default function DriverSurveyScreen() {
             <TextInput
               style={s.notesInput}
               placeholder="Any additional concerns or observations…"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
               value={notes}
               onChangeText={setNotes}
               multiline

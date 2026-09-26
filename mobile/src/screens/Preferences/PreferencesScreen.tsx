@@ -591,7 +591,7 @@ export default function PreferencesScreen() {
               value={searchQuery}
               onChangeText={setSearchQuery}
               placeholder="Search by name…"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
             />
 
             <ScrollView style={{ maxHeight: 260 }}>
@@ -636,7 +636,7 @@ export default function PreferencesScreen() {
               value={reassignReason}
               onChangeText={setReassignReason}
               placeholder="Briefly explain why you need to move…"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
               multiline
               numberOfLines={3}
               textAlignVertical="top"

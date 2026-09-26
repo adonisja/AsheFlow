@@ -240,7 +240,7 @@ function QuestionBlock({
           multiline
           numberOfLines={3}
           placeholder="Your answer..."
-          placeholderTextColor={c.mutedForeground}
+          placeholderTextColor={c.placeholder}
           value={answer}
           onChangeText={onSingleChange}
         />

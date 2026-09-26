@@ -146,7 +146,7 @@ export default function Phase4Screen() {
         value={notes}
         onChangeText={setNotes}
         placeholder="Describe what you observed…"
-        placeholderTextColor={c.mutedForeground}
+        placeholderTextColor={c.placeholder}
         multiline
         numberOfLines={4}
         textAlignVertical="top"

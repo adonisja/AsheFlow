@@ -296,7 +296,7 @@ export default function FoundPackageScreen() {
                 value={tba}
                 onChangeText={(t) => { setTba(t); setPreview(null); }}
                 placeholder="TBA303912345447"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 autoCapitalize="characters"
                 autoCorrect={false}
                 editable={!busy}
@@ -308,7 +308,7 @@ export default function FoundPackageScreen() {
                 value={address}
                 onChangeText={(t) => { setAddress(t); setPreview(null); }}
                 placeholder="1 Main St"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 autoCorrect={false}
                 editable={!busy}
               />

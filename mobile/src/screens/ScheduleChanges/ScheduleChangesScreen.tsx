@@ -216,7 +216,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
           value={reason}
           onChangeText={setReason}
           placeholder="Briefly explain your request…"
-          placeholderTextColor={c.mutedForeground}
+          placeholderTextColor={c.placeholder}
           multiline
           numberOfLines={3}
         />
