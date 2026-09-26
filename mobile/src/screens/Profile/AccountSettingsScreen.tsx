@@ -280,7 +280,7 @@ export default function AccountSettingsScreen() {
                 value={newEmail}
                 onChangeText={setNewEmail}
                 placeholder="new@email.com"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -317,7 +317,7 @@ export default function AccountSettingsScreen() {
                 value={code}
                 onChangeText={setCode}
                 placeholder="000000"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 keyboardType="number-pad"
                 maxLength={6}
                 autoFocus
@@ -373,7 +373,7 @@ export default function AccountSettingsScreen() {
                 value={dId}
                 onChangeText={setDId}
                 placeholder="219476523456789012"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 keyboardType="number-pad"
                 autoCorrect={false}
                 autoFocus
@@ -435,7 +435,7 @@ export default function AccountSettingsScreen() {
                 value={dCode}
                 onChangeText={setDCode}
                 placeholder="000000"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 keyboardType="number-pad"
                 maxLength={6}
                 autoFocus
@@ -480,7 +480,7 @@ export default function AccountSettingsScreen() {
                     style={[s.pwInput, { color: c.foreground }]}
                     secureTextEntry={!showCurrent}
                     placeholder="Enter current password"
-                    placeholderTextColor={c.mutedForeground}
+                    placeholderTextColor={c.placeholder}
                     value={currentPw}
                     onChangeText={setCurrentPw}
                     autoCapitalize="none"
@@ -500,7 +500,7 @@ export default function AccountSettingsScreen() {
                     style={[s.pwInput, { color: c.foreground }]}
                     secureTextEntry={!showNew}
                     placeholder="At least 8 characters"
-                    placeholderTextColor={c.mutedForeground}
+                    placeholderTextColor={c.placeholder}
                     value={newPw}
                     onChangeText={setNewPw}
                     autoCapitalize="none"
@@ -522,7 +522,7 @@ export default function AccountSettingsScreen() {
                     style={[s.pwInput, { color: c.foreground }]}
                     secureTextEntry
                     placeholder="Re-enter new password"
-                    placeholderTextColor={c.mutedForeground}
+                    placeholderTextColor={c.placeholder}
                     value={confirmPw}
                     onChangeText={setConfirmPw}
                     autoCapitalize="none"

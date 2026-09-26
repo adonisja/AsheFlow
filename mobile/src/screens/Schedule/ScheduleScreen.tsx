@@ -427,7 +427,7 @@ export default function ScheduleScreen() {
               <TextInput
                 style={[s.textArea, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
                 value={scrReason} onChangeText={setScrReason}
-                placeholder="Explain your request…" placeholderTextColor={c.mutedForeground}
+                placeholder="Explain your request…" placeholderTextColor={c.placeholder}
                 multiline numberOfLines={3} textAlignVertical="top" maxLength={500}
               />
               <View style={s.modalBtns}>

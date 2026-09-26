@@ -309,7 +309,7 @@ export default function Register() {
                       autoCapitalize="none"
                       autoCorrect="off"
                       required
-                      className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                      className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground focus:outline-none"
                     />
                   </div>
                   {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
@@ -333,7 +333,7 @@ export default function Register() {
                       onChange={e => handlePhoneChange(e.target.value)}
                       placeholder="(555) 000-0000"
                       required
-                      className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                      className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground focus:outline-none"
                     />
                   </div>
                   {tokenInfo!.phone_last4 ? (

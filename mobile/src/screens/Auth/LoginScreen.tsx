@@ -179,7 +179,7 @@ export default function LoginScreen() {
                 ) : (
                   <TextInput
                     style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
-                    placeholderTextColor={c.mutedForeground}
+                    placeholderTextColor={c.placeholder}
                     // A 6-digit code on a numeric pad, not a full keyboard: this
                     // is typed in a van, one-handed.
                     keyboardType={challenge.name === 'NEW_PASSWORD_REQUIRED' ? 'default' : 'number-pad'}
@@ -225,7 +225,7 @@ export default function LoginScreen() {
             <TextInput
               style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
               placeholder="username"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
               autoCapitalize="none"
               autoCorrect={false}
               value={username}
@@ -250,7 +250,7 @@ export default function LoginScreen() {
               // No bullet placeholder: `secureTextEntry` already renders bullets,
               // so a bullet placeholder looks like an already-filled field and the
               // user cannot tell whether they have typed anything (worse in dark).
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
               secureTextEntry={!showPw}
               value={password}
               onChangeText={t => { setPassword(t); setError(null); }}

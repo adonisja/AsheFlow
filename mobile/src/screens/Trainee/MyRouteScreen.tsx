@@ -507,7 +507,7 @@ function BuildingProfileModal({ stop, c, onClose }: {
             value={note}
             onChangeText={setNote}
             placeholder="Anything the next walker should know? (optional)"
-            placeholderTextColor={c.mutedForeground}
+            placeholderTextColor={c.placeholder}
             multiline
           />
           <View style={ms.btnRow}>
@@ -719,7 +719,7 @@ function FlagModal({ target, c, onClose, onSubmitRts, onSubmitMissing }: {
                 value={explanation}
                 onChangeText={setExpl}
                 placeholder="What happened? (required)"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 multiline
               />
             </>

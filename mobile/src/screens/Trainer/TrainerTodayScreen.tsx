@@ -399,7 +399,7 @@ export default function TrainerTodayScreen() {
             value={handoff}
             onChangeText={setHandoff}
             placeholder={session.handoff_notes ? 'Append additional notes…' : `How did ${session.trainee_name.split(' ')[0]} do today?`}
-            placeholderTextColor={c.mutedForeground}
+            placeholderTextColor={c.placeholder}
             multiline
             numberOfLines={4}
             textAlignVertical="top"
@@ -469,7 +469,7 @@ export default function TrainerTodayScreen() {
                 value={handoff}
                 onChangeText={setHandoff}
                 placeholder="Forgot something? Append a note (until midnight)…"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 multiline
               />
               {handoff.trim() !== '' && (

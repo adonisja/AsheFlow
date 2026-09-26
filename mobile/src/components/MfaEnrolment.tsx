@@ -105,7 +105,7 @@ export default function MfaEnrolment({ onEnrolled }: Props) {
           value={code}
           onChangeText={setCode}
           placeholder="000000"
-          placeholderTextColor={c.mutedForeground}
+          placeholderTextColor={c.placeholder}
           keyboardType="number-pad"
           maxLength={6}
           autoFocus

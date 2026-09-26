@@ -2255,7 +2255,7 @@ function CurrentAssignments() {
                              }}
                              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                              className={`w-full h-8 pl-2.5 pr-7 text-xs font-mono rounded-lg border bg-background
-                               transition-colors placeholder:text-muted-foreground
+                               transition-colors
                                focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring
                                disabled:opacity-60
                                ${d.suggested && d.value
