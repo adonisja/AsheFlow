@@ -385,14 +385,42 @@ def send_owner_invite_email(
         f"Hi {first_name},\n\n"
         f"Welcome to AsheFlow. {company_name} has an account now, and it is "
         f"yours to run.\n\n"
-        f"Your next step is to set the company up. Choose a password, then "
-        f"bring in your dispatchers, drivers and walkers, set what each of "
-        f"them can see, and tell AsheFlow how your day runs.\n\n"
+        f"Setting up takes four steps:\n\n"
+        f"  1. Choose a password, so the account is yours alone.\n"
+        f"  2. Bring in your people: dispatchers, drivers and walkers.\n"
+        f"  3. Set what each of them sees. A walker's view is not a "
+        f"dispatcher's.\n"
+        f"  4. Tell AsheFlow how your day runs: shift times, stations, "
+        f"routes.\n\n"
         f"Get started here:\n"
         f"{register_url}\n\n"
         f"The link works for {settings.invite_expiry_days} days.\n\n"
         f"The AsheFlow Team"
     )
+    # Rendered as table rows rather than <ol>: Outlook drops list markers and
+    # ignores flex, so the number lives in its own cell.
+    steps = [
+        ("Choose a password", "So the account is yours alone."),
+        ("Bring in your people", "Dispatchers, drivers and walkers."),
+        ("Set what each of them sees", "A walker's view is not a dispatcher's."),
+        ("Tell AsheFlow how your day runs", "Shift times, stations, routes."),
+    ]
+    steps_html = "".join(
+        f"""<tr>
+              <td width="30" valign="top" style="padding:0 0 14px;">
+                <div style="width:22px;height:22px;background:#F1E8FB;border-radius:11px;
+                            text-align:center;line-height:22px;">
+                  <span style="font-size:12px;font-weight:700;color:#8517D3;">{i}</span>
+                </div>
+              </td>
+              <td valign="top" style="padding:0 0 14px;">
+                <div style="font-size:15px;font-weight:600;color:#111522;line-height:1.35;">{html.escape(title)}</div>
+                <div style="font-size:13px;color:#6B7280;line-height:1.45;padding-top:2px;">{html.escape(sub)}</div>
+              </td>
+            </tr>"""
+        for i, (title, sub) in enumerate(steps, start=1)
+    )
+
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -419,14 +447,18 @@ def send_owner_invite_email(
           <h1 style="margin:0 0 14px;font-size:23px;line-height:1.25;font-weight:700;color:#111522;">
             Welcome, {first_name_html}.
           </h1>
-          <p style="margin:0 0 20px;font-size:15px;color:#4B5563;line-height:1.6;">
+          <p style="margin:0 0 26px;font-size:17px;color:#374151;line-height:1.55;">
             {company_html} has an account on AsheFlow now, and it is yours to run.
           </p>
-          <p style="margin:0 0 24px;font-size:15px;color:#4B5563;line-height:1.6;">
-            Your next step is to set the company up. Choose a password, then bring in
-            your dispatchers, drivers and walkers, set what each of them can see, and
-            tell AsheFlow how your day runs.
+
+          <p style="margin:0 0 14px;font-size:13px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#6B7280;">
+            Setting up takes four steps
           </p>
+
+          <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
+                 style="margin:0 0 28px;border-collapse:collapse;">
+            {steps_html}
+          </table>
 
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr><td align="center" style="padding:4px 0 22px;">
