@@ -1213,10 +1213,10 @@ function TruckSortPanel({
                     {!isHub
                       ? 'Run Zone Assignment on Station Sort first to assign packages to this truck.'
                       : hubState === 'failed'
-                        ? 'This hub\u2019s manifest could not be processed. Upload it again on Station Sort \u2014 waiting will not clear this.'
+                        ? 'This hub’s manifest could not be processed. Upload it again on Station Sort. Waiting will not clear this.'
                         : hubState === 'enriching'
-                          ? 'Looking up addresses for this hub\u2019s manifest. The commit opens on its own when it finishes.'
-                          : 'Upload this hub\u2019s manifest on Station Sort first \u2014 a hub carries its own packages and is never fed by the truck sort.'}
+                          ? 'Looking up addresses for this hub’s manifest. The commit opens on its own when it finishes.'
+                          : 'Upload this hub’s manifest on Station Sort first. A hub carries its own packages and is never fed by the truck sort.'}
                   </div>
                 )
               ) : (

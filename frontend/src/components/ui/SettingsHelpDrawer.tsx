@@ -358,10 +358,10 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
      detail both say whose. */
   discord_user_id: {
     title: 'Your Discord User ID',
-    summary: 'Your personal Discord account ID. Not your server\u2019s ID.',
+    summary: 'Your personal Discord account ID. Not your server’s ID.',
     detail:
-      'This identifies YOU in Discord, so dispatch can @mention you directly when a route, a truck change or a callout concerns you. It is not your username, and it is not the server (guild) ID your company set up. To find it: in Discord, open User Settings \u2192 Advanced and turn on Developer Mode, then right-click your own name or avatar and choose \u201cCopy User ID.\u201d',
-    example: '"123456789012345678" \u2014 17 to 20 digits, numbers only',
+      'This identifies YOU in Discord, so dispatch can @mention you directly when a route, a truck change or a callout concerns you. It is not your username, and it is not the server (guild) ID your company set up. To find it: in Discord, open User Settings → Advanced and turn on Developer Mode, then right-click your own name or avatar and choose “Copy User ID.”',
+    example: '"123456789012345678" (17 to 20 digits, numbers only)',
     note: 'On mobile, tap your avatar, then the three dots, then Copy User ID.',
   },
   discord_guild_id: {

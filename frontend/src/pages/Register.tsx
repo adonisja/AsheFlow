@@ -221,18 +221,43 @@ export default function Register() {
         {/* Card */}
         <div className="card p-0 overflow-hidden">
           {/* Card header stripe */}
-          <div className="bg-primary/5 border-b border-border px-6 py-4">
-            <h2 className="text-base font-semibold text-foreground">
-              Welcome, {tokenInfo!.name}.
-            </h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {step === 'form' ? 'Confirm your details below to complete setup.' : 'Review your information before submitting.'}
+          <div className="bg-accent/50 border-b border-border px-6 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-bold text-foreground tracking-tight truncate">
+                  Welcome, {tokenInfo!.name}.
+                </h2>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  {step === 'form'
+                    ? 'Two details to add, then you are in.'
+                    : 'Check these, then submit.'}
+                </p>
+              </div>
+              {/* A two-step flow said so nowhere, so "Review & Confirm" arrived
+                  as a surprise second page. Dots rather than a bar: there are
+                  two steps and a bar for two steps is a decoration. */}
+              <div className="flex items-center gap-1.5 shrink-0 pt-1.5" aria-hidden>
+                <span className={`w-6 h-1.5 rounded-full transition-colors ${
+                  step === 'form' ? 'bg-primary' : 'bg-success'}`} />
+                <span className={`w-6 h-1.5 rounded-full transition-colors ${
+                  step === 'review' ? 'bg-primary' : 'bg-border'}`} />
+              </div>
+            </div>
+            <p className="sr-only">
+              {step === 'form' ? 'Step 1 of 2: your details' : 'Step 2 of 2: review'}
             </p>
           </div>
 
           <div className="px-6 py-5 space-y-5">
             {/* Locked info (always visible) */}
-            <div className="rounded-xl border border-border bg-accent/30 divide-y divide-border overflow-hidden">
+            <div className="rounded-xl border border-border bg-accent/30 overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <Lock className="w-3 h-3 text-muted-foreground shrink-0" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  From your invite
+                </span>
+              </div>
+              <div className="divide-y divide-border">
               {[
                 { label: 'Name',  value: tokenInfo!.name },
                 { label: 'Email', value: tokenInfo!.email },
@@ -245,13 +270,12 @@ export default function Register() {
                   </span>
                 )},
               ].map(({ label, value }) => (
-                <div key={label} className="flex items-center justify-between px-4 py-2.5">
-                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Lock className="w-3 h-3" /> {label}
-                  </span>
-                  <span className="text-sm font-medium text-foreground">{value}</span>
+                <div key={label} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="text-xs text-muted-foreground shrink-0">{label}</span>
+                  <span className="text-sm font-medium text-foreground truncate">{value}</span>
                 </div>
               ))}
+              </div>
             </div>
 
             {/* ── STEP 1: Form ── */}
@@ -270,10 +294,14 @@ export default function Register() {
                     <button
                       type="button"
                       onClick={() => setHelpKey('discord_user_id')}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      className="inline-flex items-center gap-1 -my-1 px-1.5 py-1 rounded-md
+                                 text-[11px] font-medium text-primary hover:bg-primary/10
+                                 focus-visible:outline-none focus-visible:ring-2
+                                 focus-visible:ring-primary/40 transition-colors"
                       aria-label="How to find your Discord user ID"
                     >
                       <HelpCircle className="w-3.5 h-3.5" />
+                      Where do I find this?
                     </button>
                   </div>
                   <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
@@ -294,7 +322,7 @@ export default function Register() {
                   {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
                     <p className="text-xs text-danger">Must be a numeric snowflake ID (17-20 digits only).</p>
                   )}
-                  <p className="text-xs text-subtle">Your own account\u2019s numeric ID, so dispatch can @mention you. Not the server ID.</p>
+                  <p className="text-xs text-subtle">Your own account’s numeric ID, so dispatch can @mention you. Not the server ID.</p>
                 </div>
 
                 {/* Phone */}
@@ -352,7 +380,7 @@ export default function Register() {
                   <div className="divide-y divide-border">
                     <div className="flex items-center justify-between px-4 py-3">
                       <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Hash className="w-3.5 h-3.5" /> Discord ID
+                        <Hash className="w-3.5 h-3.5" /> Discord user ID
                       </span>
                       <span className="font-mono text-sm font-semibold text-foreground">{discordId.trim()}</span>
                     </div>

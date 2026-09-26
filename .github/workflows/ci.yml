@@ -155,6 +155,13 @@ jobs:
       - name: Help drawer keys have content
         run: python scripts/check_help_drawer_keys.py
 
+      # A Python-style "\u2019" written into a TSX string is six characters,
+      # not an apostrophe, and the UI renders "account\u2019s" to the user. It
+      # type-checks and it builds; only a human reading the screen catches it.
+      # Three instances had already shipped to walkers (ADR-456).
+      - name: No literal unicode escapes in copy
+        run: python scripts/check_literal_unicode_escapes.py
+
       # Cognito's stock invite ("Your username is X and temporary password is
       # Y") ships through our own SES identity, so it arrives from
       # no-reply@asheflow.com looking like ours. Every admin_create_user must
