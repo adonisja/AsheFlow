@@ -8,6 +8,8 @@ import {
   CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, PackageCheck, PackageX,
   KeyRound, Trash2,
 } from 'lucide-react';
+import SelectMenu from '../../components/ui/SelectMenu';
+import { TIMEZONES } from './Companies';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 
@@ -544,15 +546,15 @@ function IdentityCard({
           </div>
           <div>
             <label className="block text-xs text-muted-foreground mb-1">Timezone</label>
-            <select className="input-field" value={timezone} onChange={e => setTimezone(e.target.value)}>
-              <option value="America/New_York">America/New_York (ET)</option>
-              <option value="America/Chicago">America/Chicago (CT)</option>
-              <option value="America/Denver">America/Denver (MT)</option>
-              <option value="America/Los_Angeles">America/Los_Angeles (PT)</option>
-              <option value="America/Phoenix">America/Phoenix (AZ)</option>
-              <option value="America/Anchorage">America/Anchorage (AKT)</option>
-              <option value="Pacific/Honolulu">Pacific/Honolulu (HT)</option>
-            </select>
+            {/* House dropdown — a native <select> opens with the OS palette,
+                which is a white panel on our dark theme. */}
+            <SelectMenu
+              value={timezone}
+              options={TIMEZONES}
+              placeholder="Select a timezone"
+              ariaLabel="Timezone"
+              onChange={setTimezone}
+            />
           </div>
         </div>
         <div className="flex justify-end gap-2 pt-1">
@@ -918,16 +920,18 @@ function ConfigEditorCard({
                   </p>
                   {editing ? (
                     f.type === 'select' ? (
-                      <select
-                        className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand"
+                      <SelectMenu
                         value={draft[String(f.key)] ?? ''}
-                        onChange={e => setDraft(prev => ({ ...prev, [String(f.key)]: e.target.value }))}
-                      >
-                        <option value="">Default{f.placeholder ? ` (${f.placeholder})` : ''}</option>
-                        {(f.options ?? []).map(o => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
+                        options={[
+                          // An explicit "Default" entry rather than an empty
+                          // trigger: a blank dropdown reads as "not loaded".
+                          { value: '', label: `Default${f.placeholder ? ` (${f.placeholder})` : ''}` },
+                          ...(f.options ?? []),
+                        ]}
+                        placeholder="Default"
+                        ariaLabel={String(f.key)}
+                        onChange={v => setDraft(prev => ({ ...prev, [String(f.key)]: v }))}
+                      />
                     ) : (
                       <input
                         type={f.type === 'time' ? 'time' : 'number'}
