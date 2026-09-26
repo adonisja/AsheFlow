@@ -12,7 +12,7 @@ import MotionCard from '../components/ui/MotionCard';
 import PackageExceptionsCard from '../components/PackageExceptionsCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { CrewMember, UnavailableStaff, Incident } from '../api/types';
-import { getLocalYMD } from '../utils/date';
+import { formatDayHeader, getLocalYMD } from '../utils/date';
 import DispatchProcessHealth from '../components/dispatch/DispatchProcessHealth';
 import CompanyStandingCard from '../components/CompanyStandingCard';
 
@@ -126,7 +126,7 @@ export default function DispatchHome() {
       <SectionHeader
         eyebrow="Dispatch"
         title={`Good ${greeting}, ${user?.firstName || user?.displayName || user?.username}`}
-        description={`Operations overview for ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        description={`Operations overview for ${formatDayHeader(new Date())}`}
         actions={
           <button onClick={fetchAll} className="btn-ghost flex items-center gap-2 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh

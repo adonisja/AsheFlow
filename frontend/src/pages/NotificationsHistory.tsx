@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { formatDate } from '../utils/date';
 import {
   Bell, CheckCircle2, XCircle, AlertTriangle, Info, MapPin,
   RefreshCw, Trash2, Check, ShieldAlert,
@@ -60,7 +61,7 @@ function fmtTime(iso: string): string {
   if (diffMins < 60) return `${diffMins}m ago`;
   const diffHours = Math.floor(diffMins / 60);
   if (diffHours < 24) return `${diffHours}h ago`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatDate(d);
 }
 
 type Filter = 'all' | 'unread' | 'read';

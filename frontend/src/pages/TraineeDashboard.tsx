@@ -3,7 +3,7 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { ClipboardCheck, Loader2 } from 'lucide-react';
 import TaskChecklist from '../components/TrainerDashboard/TaskChecklist';
-import { getLocalYMD } from '../utils/date';
+import { formatDate, getLocalYMD } from '../utils/date';
 
 export default function TraineeDashboard() {
   const { user } = useAuth();
@@ -117,7 +117,7 @@ export default function TraineeDashboard() {
                     return (
                     <div key={record.id} className="border border-border rounded-xl p-4 flex flex-col gap-4">
                       <div className="flex justify-between items-center bg-accent/40 rounded-lg p-2.5">
-                         <span className="font-semibold text-foreground text-sm">Day {record.current_day_number} &middot; {new Date(record.record_date).toLocaleDateString()}</span>
+                         <span className="font-semibold text-foreground text-sm">Day {record.current_day_number} &middot; {formatDate(record.record_date)}</span>
                          <span className="text-xs px-2 py-0.5 rounded-md bg-foreground/10 text-muted-foreground font-medium">Archived</span>
                       </div>
                       <div className="text-sm px-1 grid grid-cols-1 md:grid-cols-2 gap-4">
