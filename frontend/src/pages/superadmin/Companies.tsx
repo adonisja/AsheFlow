@@ -8,6 +8,7 @@ import {
   ShieldCheck, ShieldAlert, X, UserX,
 } from 'lucide-react';
 import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
+import { formatZone, zoneOffset } from '../../utils/date';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import StatCard from '../../components/ui/StatCard';
@@ -18,24 +19,6 @@ import { SkeletonCard } from '../../components/ui/Skeleton';
 // Types
 // ---------------------------------------------------------------------------
 
-/** Current abbreviation and UTC offset for an IANA zone, e.g. "EDT · UTC-4".
- *
- *  COMPUTED, never hardcoded. Half these zones shift twice a year and they do
- *  not shift together: today Denver is MDT (UTC-7) while Phoenix, which does
- *  not observe DST at all, is MST (UTC-7) — and in January they diverge again.
- *  A written-down table is wrong for roughly half the year, silently, in a
- *  field whose whole job is to be unambiguous about time.
- */
-function zoneHint(tz: string): string {
-  const now = new Date();
-  const abbr = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
-    .formatToParts(now).find(p => p.type === 'timeZoneName')?.value ?? '';
-  const gmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' })
-    .formatToParts(now).find(p => p.type === 'timeZoneName')?.value ?? '';
-  // "GMT-4" reads as UTC to anyone scheduling across zones; "GMT" invites the
-  // question of whether it means London, which in summer it does not.
-  return `${abbr} · ${gmt.replace('GMT', 'UTC')}`;
-}
 
 /** The timezones a DSP can operate in, grouped by region.
  *
@@ -45,14 +28,14 @@ function zoneHint(tz: string): string {
  */
 export const TIMEZONES: SelectOption[] = [
   { value: '_us', label: 'United States', header: true },
-  { value: 'America/New_York',    label: 'New York',    hint: zoneHint('America/New_York') },
-  { value: 'America/Chicago',     label: 'Chicago',     hint: zoneHint('America/Chicago') },
-  { value: 'America/Denver',      label: 'Denver',      hint: zoneHint('America/Denver') },
-  { value: 'America/Phoenix',     label: 'Phoenix',     hint: zoneHint('America/Phoenix') },
-  { value: 'America/Los_Angeles', label: 'Los Angeles', hint: zoneHint('America/Los_Angeles') },
+  { value: 'America/New_York',    label: 'New York',    hint: zoneOffset('America/New_York') },
+  { value: 'America/Chicago',     label: 'Chicago',     hint: zoneOffset('America/Chicago') },
+  { value: 'America/Denver',      label: 'Denver',      hint: zoneOffset('America/Denver') },
+  { value: 'America/Phoenix',     label: 'Phoenix',     hint: zoneOffset('America/Phoenix') },
+  { value: 'America/Los_Angeles', label: 'Los Angeles', hint: zoneOffset('America/Los_Angeles') },
   { value: '_nc', label: 'Non-contiguous', header: true },
-  { value: 'America/Anchorage',   label: 'Anchorage',   hint: zoneHint('America/Anchorage') },
-  { value: 'Pacific/Honolulu',    label: 'Honolulu',    hint: zoneHint('Pacific/Honolulu') },
+  { value: 'America/Anchorage',   label: 'Anchorage',   hint: zoneOffset('America/Anchorage') },
+  { value: 'Pacific/Honolulu',    label: 'Honolulu',    hint: zoneOffset('Pacific/Honolulu') },
 ];
 
 interface Company {
@@ -501,7 +484,7 @@ function CompanyRow({
               {company.amazon_dsp_code && (
                 <span className="text-xs text-muted-foreground">{company.amazon_dsp_code}</span>
               )}
-              <span className="text-xs text-muted-foreground">{company.timezone}</span>
+              <span className="text-xs text-muted-foreground">{formatZone(company.timezone)}</span>
               <span className="text-xs text-muted-foreground">
                 Created {new Date(company.created_at).toLocaleDateString()}
               </span>
