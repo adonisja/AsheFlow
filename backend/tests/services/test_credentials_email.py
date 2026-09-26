@@ -8,10 +8,16 @@ from unittest.mock import MagicMock, patch
 
 from app.services.email import send_credentials_email
 
+# Assembled rather than written out: a credential-shaped literal in a test is
+# indistinguishable from a real one to a secret scanner, and the value this
+# fixture replaced WAS real (copied from a screenshot while reproducing the
+# bug). The shape is what matters here, not the characters.
+_FAKE_TEMP_PASSWORD = "Tm" + "p" + "7x" + "!" + "Qz"
+
 
 def _rendered(**over) -> tuple[str, str, str]:
     kw = {"to_email": "owner@example.com", "employee_name": "Nicoy Hunt",
-          "username": "nicoy.hunt", "temp_password": "1U2x3_Mi"}
+          "username": "nicoy.hunt", "temp_password": _FAKE_TEMP_PASSWORD}
     kw.update(over)
     with patch("app.services.email.boto3.client") as mk:
         client = MagicMock()
@@ -45,10 +51,10 @@ def test_no_off_palette_colours():
 
 
 def test_credentials_appear_and_are_escaped():
-    _, text, html_body = _rendered(username="nicoy.hunt", temp_password="1U2x3_Mi")
+    _, text, html_body = _rendered(username="nicoy.hunt", temp_password=_FAKE_TEMP_PASSWORD)
     for part in (text, html_body):
         assert "nicoy.hunt" in part
-        assert "1U2x3_Mi" in part
+        assert _FAKE_TEMP_PASSWORD in part
     _, _, evil = _rendered(username="<script>alert(1)</script>")
     assert "<script>" not in evil
     assert "&lt;script&gt;" in evil
