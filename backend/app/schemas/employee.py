@@ -137,6 +137,44 @@ class BulkImportResult(BaseModel):
     reason: Optional[str] = None
 
 
+class EmployeeOfficeResponse(BaseModel):
+    """An office row (admin/management) as the ROSTER shows it (ADR-458 D1).
+
+    Same shape as EmployeeResponse minus the contact details. The roster is an
+    everyday directory: it answers "who works here and are they active", which
+    needs no phone number. Reaching an owner or a manager is a different job
+    with its own audited surface (GET /employees/escalation).
+
+    Redacted on the RESPONSE, not in the client. A client-side filter leaves the
+    number in a payload that DevTools shows to anyone with a login, which is not
+    a redaction at all.
+    """
+    id: UUID
+    name: str
+    role: str
+    is_active: bool
+    account_status: str = "active"
+    invited_at: Optional[datetime] = None
+    injury_status: Optional[str] = None
+    injury_status_since: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EmployeeEscalationResponse(BaseModel):
+    """One entry on the escalation list (ADR-458 D2).
+
+    Deliberately narrow: enough to call someone and know who they are. No
+    email, no discord_id, no account state -- this is not a second roster.
+    """
+    id: UUID
+    name: str
+    role: str
+    phone_number: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class EmployeePublicResponse(BaseModel):
     """Redacted response — returned to field staff (driver/walker/trainer/trainee).
 

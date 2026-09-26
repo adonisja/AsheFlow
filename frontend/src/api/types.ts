@@ -17,6 +17,20 @@ export interface Employee {
   phone_number?: string | null;
 }
 
+/** One entry on the escalation list — GET /employees/escalation (ADR-458 D2).
+ *
+ *  Deliberately narrower than Employee: enough to call someone and know who
+ *  they are. Office contact details are NOT on the roster, so this is the only
+ *  shape that carries an owner's or a manager's number, and opening the list
+ *  is audited server-side.
+ */
+export interface EscalationContact {
+  id: string;
+  name: string;
+  role: string;
+  phone_number: string | null;
+}
+
 export interface Truck {
   id: string;
   name: string;

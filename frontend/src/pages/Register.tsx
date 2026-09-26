@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Lock, Phone, Hash, AlertCircle, HelpCircle, Pencil } from 'lucide-react';
+import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1';
 
@@ -68,24 +69,15 @@ export default function Register() {
   // 'form' | 'review'
   const [step, setStep] = useState<'form' | 'review'>('form');
 
-  const [showDiscordTip, setShowDiscordTip] = useState(false);
-  const tipRef = useRef<HTMLDivElement>(null);
+  // The shared help drawer, as on Company Settings, Preferences and Crew Pins.
+  // This page had its own popover, which was the only hand-rolled help
+  // affordance left in the app.
+  const [helpKey, setHelpKey] = useState<string | null>(null);
 
   const handlePhoneChange = (v: string) => {
     setPhone(formatUSPhone(v));
     setFieldError('');
   };
-
-  useEffect(() => {
-    if (!showDiscordTip) return;
-    const handler = (e: MouseEvent) => {
-      if (tipRef.current && !tipRef.current.contains(e.target as Node)) {
-        setShowDiscordTip(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showDiscordTip]);
 
   useEffect(() => {
     if (!token) {
@@ -229,18 +221,43 @@ export default function Register() {
         {/* Card */}
         <div className="card p-0 overflow-hidden">
           {/* Card header stripe */}
-          <div className="bg-primary/5 border-b border-border px-6 py-4">
-            <h2 className="text-base font-semibold text-foreground">
-              Welcome, {tokenInfo!.name}.
-            </h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {step === 'form' ? 'Confirm your details below to complete setup.' : 'Review your information before submitting.'}
+          <div className="bg-accent/50 border-b border-border px-6 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-bold text-foreground tracking-tight truncate">
+                  Welcome, {tokenInfo!.name}.
+                </h2>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  {step === 'form'
+                    ? 'Two details to add, then you are in.'
+                    : 'Check these, then submit.'}
+                </p>
+              </div>
+              {/* A two-step flow said so nowhere, so "Review & Confirm" arrived
+                  as a surprise second page. Dots rather than a bar: there are
+                  two steps and a bar for two steps is a decoration. */}
+              <div className="flex items-center gap-1.5 shrink-0 pt-1.5" aria-hidden>
+                <span className={`w-6 h-1.5 rounded-full transition-colors ${
+                  step === 'form' ? 'bg-primary' : 'bg-success'}`} />
+                <span className={`w-6 h-1.5 rounded-full transition-colors ${
+                  step === 'review' ? 'bg-primary' : 'bg-border'}`} />
+              </div>
+            </div>
+            <p className="sr-only">
+              {step === 'form' ? 'Step 1 of 2: your details' : 'Step 2 of 2: review'}
             </p>
           </div>
 
           <div className="px-6 py-5 space-y-5">
             {/* Locked info (always visible) */}
-            <div className="rounded-xl border border-border bg-accent/30 divide-y divide-border overflow-hidden">
+            <div className="rounded-xl border border-border bg-accent/30 overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <Lock className="w-3 h-3 text-muted-foreground shrink-0" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  From your invite
+                </span>
+              </div>
+              <div className="divide-y divide-border">
               {[
                 { label: 'Name',  value: tokenInfo!.name },
                 { label: 'Email', value: tokenInfo!.email },
@@ -253,13 +270,12 @@ export default function Register() {
                   </span>
                 )},
               ].map(({ label, value }) => (
-                <div key={label} className="flex items-center justify-between px-4 py-2.5">
-                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Lock className="w-3 h-3" /> {label}
-                  </span>
-                  <span className="text-sm font-medium text-foreground">{value}</span>
+                <div key={label} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="text-xs text-muted-foreground shrink-0">{label}</span>
+                  <span className="text-sm font-medium text-foreground truncate">{value}</span>
                 </div>
               ))}
+              </div>
             </div>
 
             {/* ── STEP 1: Form ── */}
@@ -269,33 +285,24 @@ export default function Register() {
                 {/* Discord ID */}
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-1.5">
+                    {/* "Discord ID" alone is ambiguous: the company also has a
+                        server (guild) ID, and a new Owner has just been told to
+                        set one up. Say whose. */}
                     <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                      Discord ID <span className="text-danger">*</span>
+                      Your Discord User ID <span className="text-danger">*</span>
                     </label>
-                    <div className="relative" ref={tipRef}>
-                      <button
-                        type="button"
-                        onClick={() => setShowDiscordTip(v => !v)}
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                        aria-label="How to find your Discord ID"
-                      >
-                        <HelpCircle className="w-3.5 h-3.5" />
-                      </button>
-                      {showDiscordTip && (
-                        <div className="absolute left-0 top-6 z-20 w-64 rounded-xl border border-border bg-card shadow-lg p-3 text-xs text-foreground leading-relaxed">
-                          <p className="font-semibold mb-1">How to find your Discord ID</p>
-                          <p className="text-subtle mb-2">Enable Developer Mode in Discord settings, then right-click your profile and select <span className="font-medium text-foreground">Copy User ID</span>.</p>
-                          <a
-                            href="https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary font-medium hover:underline"
-                          >
-                            Step-by-step guide →
-                          </a>
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setHelpKey('discord_user_id')}
+                      className="inline-flex items-center gap-1 -my-1 px-1.5 py-1 rounded-md
+                                 text-[11px] font-medium text-primary hover:bg-primary/10
+                                 focus-visible:outline-none focus-visible:ring-2
+                                 focus-visible:ring-primary/40 transition-colors"
+                      aria-label="How to find your Discord user ID"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                      Where do I find this?
+                    </button>
                   </div>
                   <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
                     <span className="flex items-center px-3 text-muted-foreground bg-accent/60 border-r border-border shrink-0">
@@ -315,7 +322,6 @@ export default function Register() {
                   {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
                     <p className="text-xs text-danger">Must be a numeric snowflake ID (17-20 digits only).</p>
                   )}
-                  <p className="text-xs text-subtle">Your numeric Discord user ID, used for dispatch notifications.</p>
                 </div>
 
                 {/* Phone */}
@@ -342,7 +348,10 @@ export default function Register() {
                       <span className="font-mono font-semibold text-foreground">···{tokenInfo!.phone_last4}</span>.
                     </p>
                   ) : (
-                    <p className="text-xs text-subtle">Your mobile number for account verification.</p>
+                    /* No number was on file, so nothing is being matched.
+                       The old copy promised "account verification", which is
+                       not what this branch does (ADR-457 D3). */
+                    <p className="text-xs text-subtle">How your company reaches you.</p>
                   )}
                 </div>
 
@@ -373,7 +382,7 @@ export default function Register() {
                   <div className="divide-y divide-border">
                     <div className="flex items-center justify-between px-4 py-3">
                       <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Hash className="w-3.5 h-3.5" /> Discord ID
+                        <Hash className="w-3.5 h-3.5" /> Discord user ID
                       </span>
                       <span className="font-mono text-sm font-semibold text-foreground">{discordId.trim()}</span>
                     </div>
@@ -428,6 +437,8 @@ export default function Register() {
           <span className="font-semibold text-muted-foreground">No self-signup.</span>
         </p>
       </div>
+
+      <SettingsHelpDrawer fieldKey={helpKey} onClose={() => setHelpKey(null)} />
     </div>
   );
 }

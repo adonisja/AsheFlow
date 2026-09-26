@@ -162,55 +162,54 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f8;font-family:'Helvetica Neue',Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f8;padding:40px 16px;">
+<body style="margin:0;padding:0;background:#F9F9FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F9F9FB;padding:40px 16px;">
     <tr><td align="center">
       <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
 
         <!-- Header -->
-        <tr><td style="background:linear-gradient(135deg,#4F35D2 0%,#7C3AED 100%);border-radius:16px 16px 0 0;padding:32px 40px;">
-          <table width="100%" cellpadding="0" cellspacing="0">
-            <tr>
-              <td>
-                <div style="display:inline-block;background:rgba(255,255,255,0.15);border-radius:12px;padding:8px 14px;margin-bottom:16px;">
-                  <span style="color:#fff;font-size:18px;font-weight:800;letter-spacing:-0.5px;">AF</span>
-                </div>
-                <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;letter-spacing:-0.5px;">AsheFlow</h1>
-                <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px;">Field operations, simplified</p>
-              </td>
-            </tr>
-          </table>
+        <tr><td style="background:#1B2A6B;border-radius:14px 14px 0 0;padding:28px 40px;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="padding-right:10px;">
+              <div style="width:30px;height:30px;background:#8517D3;border-radius:8px;text-align:center;line-height:30px;">
+                <span style="color:#fff;font-size:13px;font-weight:700;">AF</span>
+              </div>
+            </td>
+            <td><span style="color:#fff;font-size:17px;font-weight:600;letter-spacing:-0.2px;">AsheFlow</span></td>
+          </tr></table>
         </td></tr>
 
         <!-- Body -->
-        <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
-          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">Welcome aboard, {first_name_html}!</p>
-          <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
-            Your account has been created. Use the credentials below to sign in for the first time.
+        <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #DCDFE5;border-right:1px solid #DCDFE5;">
+          <h1 style="margin:0 0 14px;font-size:23px;line-height:1.25;font-weight:700;color:#111522;">
+            Your sign-in details, {first_name_html}.
+          </h1>
+          <p style="margin:0 0 26px;font-size:17px;color:#374151;line-height:1.55;">
+            Use these once to get in. AsheFlow asks you to pick your own password straight after.
           </p>
 
           <!-- Credentials card -->
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f7ff;border:1px solid #e0daf7;border-radius:12px;margin-bottom:28px;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#FBFAFD;border:1px solid #E6E2F0;border-radius:12px;margin-bottom:24px;">
             <tr>
               <td style="padding:20px 24px;">
-                <p style="margin:0 0 16px;font-size:11px;font-weight:700;color:#7C3AED;text-transform:uppercase;letter-spacing:0.08em;">Sign-in credentials</p>
+                <p style="margin:0 0 16px;font-size:11px;font-weight:700;color:#8517D3;text-transform:uppercase;letter-spacing:0.08em;">Sign-in credentials</p>
                 <table width="100%" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">
-                      <span style="font-size:12px;color:#9ca3af;font-weight:500;">USERNAME</span>
-                      <div style="background:#ffffff;border:1px solid #e0daf7;border-radius:8px;padding:10px 14px;margin-top:6px;">
-                        <span style="font-size:16px;font-weight:700;color:#111827;font-family:'Courier New',monospace;letter-spacing:0.02em;">{html.escape(username)}</span>
+                    <td style="padding:10px 0;border-bottom:1px solid #EDEAF5;">
+                      <span style="font-size:12px;color:#6B7280;font-weight:600;letter-spacing:0.04em;">USERNAME</span>
+                      <div style="background:#ffffff;border:1px solid #E6E2F0;border-radius:8px;padding:10px 14px;margin-top:6px;">
+                        <span style="font-size:16px;font-weight:700;color:#111522;font-family:'Courier New',monospace;letter-spacing:0.02em;">{html.escape(username)}</span>
                       </div>
-                      <p style="margin:4px 0 0;font-size:11px;color:#a78bfa;">Triple-click to select &amp; copy</p>
+                      <p style="margin:5px 0 0;font-size:11px;color:#6B7280;">Triple-click to select and copy.</p>
                     </td>
                   </tr>
                   <tr>
                     <td style="padding:10px 0 0;">
-                      <span style="font-size:12px;color:#9ca3af;font-weight:500;">TEMPORARY PASSWORD</span>
-                      <div style="background:#ffffff;border:1px solid #e0daf7;border-radius:8px;padding:10px 14px;margin-top:6px;">
-                        <span style="font-size:16px;font-weight:700;color:#111827;font-family:'Courier New',monospace;letter-spacing:0.05em;">{html.escape(temp_password)}</span>
+                      <span style="font-size:12px;color:#6B7280;font-weight:600;letter-spacing:0.04em;">TEMPORARY PASSWORD</span>
+                      <div style="background:#ffffff;border:1px solid #E6E2F0;border-radius:8px;padding:10px 14px;margin-top:6px;">
+                        <span style="font-size:16px;font-weight:700;color:#111522;font-family:'Courier New',monospace;letter-spacing:0.05em;">{html.escape(temp_password)}</span>
                       </div>
-                      <p style="margin:4px 0 0;font-size:11px;color:#a78bfa;">Triple-click to select &amp; copy</p>
+                      <p style="margin:5px 0 0;font-size:11px;color:#6B7280;">Triple-click to select and copy.</p>
                     </td>
                   </tr>
                 </table>
@@ -219,10 +218,10 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
           </table>
 
           <!-- Notice -->
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;margin-bottom:28px;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#FFF8ED;border:1px solid #F5D9A8;border-radius:10px;margin-bottom:26px;">
             <tr><td style="padding:14px 18px;">
-              <p style="margin:0;font-size:13px;color:#92400e;line-height:1.5;">
-                <strong>You will be asked to set a new password</strong> on your first sign-in. Keep these credentials private.
+              <p style="margin:0;font-size:13px;color:#8A4B04;line-height:1.5;">
+                <strong>You will pick a new password</strong> on your first sign-in. Keep these details private until then.
               </p>
             </td></tr>
           </table>
@@ -231,10 +230,10 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr><td align="center">
               <a href="{login_url}"
-                 style="display:inline-block;background:linear-gradient(135deg,#4F35D2 0%,#7C3AED 100%);color:#ffffff;
-                        text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;
-                        border-radius:10px;letter-spacing:0.01em;">
-                Sign In to AsheFlow →
+                 style="display:inline-block;background:#8517D3;color:#ffffff;
+                        text-decoration:none;font-size:15px;font-weight:600;padding:13px 34px;
+                        border-radius:9px;">
+                Sign in
               </a>
             </td></tr>
           </table>
@@ -291,8 +290,8 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f8;font-family:'Helvetica Neue',Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f8;padding:40px 16px;">
+<body style="margin:0;padding:0;background:#F9F9FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F9F9FB;padding:40px 16px;">
     <tr><td align="center">
       <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
         <tr><td style="background:linear-gradient(135deg,#4F35D2 0%,#7C3AED 100%);border-radius:16px 16px 0 0;padding:32px 40px;">
@@ -302,7 +301,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
           <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">AsheFlow</h1>
           <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:13px;">Field operations, simplified</p>
         </td></tr>
-        <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #e8e8f0;border-right:1px solid #e8e8f0;">
+        <tr><td style="background:#ffffff;padding:36px 40px;border-left:1px solid #DCDFE5;border-right:1px solid #DCDFE5;">
           <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">You've been invited, {first_name_html}!</p>
           <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
             Your manager has created an AsheFlow account for you. Click the button below to complete your setup.
