@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Building2, Plus, RefreshCw, CheckCircle2, XCircle,
   ChevronDown, ChevronUp, Send, AlertTriangle, ChevronRight,
-  ShieldCheck, ShieldAlert, X, UserX,
+  ShieldCheck, ShieldAlert, X, UserX, Clock,
 } from 'lucide-react';
 import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
 import { formatDate, formatZone, zoneOffset } from '../../utils/date';
@@ -479,15 +479,22 @@ function CompanyRow({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-              <span className="text-xs text-muted-foreground font-mono">{company.slug}</span>
+            {/* Dot separators, not bare gaps. Four same-coloured fragments in a
+                row read as one run-on string -- none is a sentence, so the eye
+                has no stop. The slug and DSP code stay mono: they are
+                identifiers an operator may need to read back or type. */}
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap text-xs text-muted-foreground">
+              <span className="font-mono text-foreground/70">{company.slug}</span>
               {company.amazon_dsp_code && (
-                <span className="text-xs text-muted-foreground">{company.amazon_dsp_code}</span>
+                <>
+                  <span aria-hidden className="opacity-40">&middot;</span>
+                  <span className="font-mono">{company.amazon_dsp_code}</span>
+                </>
               )}
-              <span className="text-xs text-muted-foreground">{formatZone(company.timezone)}</span>
-              <span className="text-xs text-muted-foreground">
-                Created {formatDate(company.created_at)}
-              </span>
+              <span aria-hidden className="opacity-40">&middot;</span>
+              <span>{formatZone(company.timezone)}</span>
+              <span aria-hidden className="opacity-40">&middot;</span>
+              <span>Created {formatDate(company.created_at)}</span>
             </div>
           </div>
         </div>
@@ -543,32 +550,49 @@ function CompanyRow({
                re-running bootstrap with a corrected address could not see that
                an Owner already existed. */
             <div
-              className="flex items-center justify-between gap-3 flex-wrap text-xs"
+              className="flex items-center justify-between gap-3 flex-wrap"
               onClick={e => e.stopPropagation()}
             >
-              <div className="min-w-0">
-                <span className="text-muted-foreground">Owner </span>
-                <span className="text-foreground font-medium">{company.owner.name}</span>
-                {company.owner.email && (
-                  <span className="text-muted-foreground font-mono"> · {company.owner.email}</span>
-                )}
-                {company.owner.pending_email && (
-                  <span className="text-warning">
-                    {' '}· changing to {company.owner.pending_email}, awaiting confirmation
+              {/* An avatar and a two-line stack, not a run of inline text. The
+                  Owner is the one PERSON on this card, and a label-plus-sentence
+                  in a full-width band both under-uses the space and gives the
+                  name no more weight than the slug above it. */}
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex items-center justify-center w-8 h-8 rounded-full bg-brand/10 border border-brand/20 shrink-0">
+                  <span className="text-xs font-semibold text-brand">
+                    {company.owner.name.trim().charAt(0).toUpperCase()}
                   </span>
-                )}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+                      Owner
+                    </span>
+                    <span className="text-xs font-semibold text-foreground truncate">
+                      {company.owner.name}
+                    </span>
+                  </div>
+                  {company.owner.email && (
+                    <p className="text-xs text-muted-foreground font-mono truncate">
+                      {company.owner.email}
+                    </p>
+                  )}
+                  {company.owner.pending_email && (
+                    <p className="text-xs text-warning truncate">
+                      Changing to {company.owner.pending_email} &mdash; awaiting confirmation
+                    </p>
+                  )}
+                </div>
               </div>
-              <span
-                className={
-                  company.owner.account_status === 'pending_verification'
-                    ? 'text-warning shrink-0'
-                    : 'text-success shrink-0'
-                }
-              >
-                {company.owner.account_status === 'pending_verification'
-                  ? 'Invite pending'
-                  : 'Registered'}
-              </span>
+              {company.owner.account_status === 'pending_verification' ? (
+                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning font-medium shrink-0">
+                  <Clock className="w-3 h-3" /> Invite pending
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-success/10 text-success font-medium shrink-0">
+                  <CheckCircle2 className="w-3 h-3" /> Registered
+                </span>
+              )}
             </div>
           ) : (
             <BootstrapForm companyId={company.id} onDone={setBootstrapResult} />

@@ -166,7 +166,9 @@ class TestAPendingAdminIsEditable:
         body = _src("edit_owner")
         assert "InviteToken.employee_id == admin.id).delete()" in body, \
             "editing leaves the previous invite live (ADR-451 D2)"
-        assert "send_invite_email" in body
+        # Any invite sender satisfies D2; ADR-455 moved this to the Owner
+        # template, so match the shared suffix rather than one function name.
+        assert "invite_email(" in body, "a fresh invite is not sent after the edit"
 
     def test_a_pending_admin_can_be_removed(self):
         body = _src("delete_owner")

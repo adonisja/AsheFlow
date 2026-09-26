@@ -24,7 +24,10 @@ from app.services.tenant_machine_client import (
 )
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
-from app.services.email import send_invite_email, send_owner_email_change_email
+from app.services.email import (
+    send_owner_email_change_email,
+    send_owner_invite_email,
+)
 from datetime import time as dt_time
 
 logger = logging.getLogger(__name__)
@@ -837,9 +840,13 @@ def bootstrap_company_admin(
 
     invite_sent = False
     try:
-        send_invite_email(
+        # The Owner template, not the employee one: there is no manager yet
+        # (this is the first account in the tenant) and a manager could not
+        # create an Owner regardless (ADR-455).
+        send_owner_invite_email(
             to_email=employee.email,
-            employee_name=employee.name,
+            owner_name=employee.name,
+            company_name=company.name,
             token=token_str,
         )
         invite_sent = True
@@ -2081,9 +2088,14 @@ def edit_owner(
     if token_str:
         invite_sent = False
         try:
-            send_invite_email(
+            # Re-issued invite for the same role, so the same Owner
+            # template (ADR-455). edit_owner loads only the Owner, so the
+            # company name is fetched for the copy.
+            company = db.query(Company).filter(Company.id == company_id).first()
+            send_owner_invite_email(
                 to_email=admin.email,
-                employee_name=admin.name,
+                owner_name=admin.name,
+                company_name=company.name if company else "your company",
                 token=token_str,
             )
             invite_sent = True
