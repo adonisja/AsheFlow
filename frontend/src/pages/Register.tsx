@@ -322,7 +322,6 @@ export default function Register() {
                   {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
                     <p className="text-xs text-danger">Must be a numeric snowflake ID (17-20 digits only).</p>
                   )}
-                  <p className="text-xs text-subtle">Your own account’s numeric ID, so dispatch can @mention you. Not the server ID.</p>
                 </div>
 
                 {/* Phone */}
@@ -349,7 +348,10 @@ export default function Register() {
                       <span className="font-mono font-semibold text-foreground">···{tokenInfo!.phone_last4}</span>.
                     </p>
                   ) : (
-                    <p className="text-xs text-subtle">Your mobile number for account verification.</p>
+                    /* No number was on file, so nothing is being matched.
+                       The old copy promised "account verification", which is
+                       not what this branch does (ADR-457 D3). */
+                    <p className="text-xs text-subtle">How your company reaches you.</p>
                   )}
                 </div>
 

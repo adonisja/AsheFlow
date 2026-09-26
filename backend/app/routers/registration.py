@@ -57,6 +57,11 @@ class ValidateResponse(BaseModel):
     phone_last4: str | None  # last 4 digits of phone on file, or None
 
 
+#: Roles provisioned one-to-one by a platform super-admin, who has no
+#: independently-recorded phone number to challenge against (ADR-457 D2).
+_NO_PHONE_CHALLENGE_ROLES = frozenset({"admin"})
+
+
 class CompleteRequest(BaseModel):
     token: str
     discord_id: str
@@ -430,9 +435,24 @@ def validate_token(
     if employee.company_id != record.company_id:
         raise HTTPException(status_code=400, detail="Invite link is invalid.")
 
-    # Extract last 4 digits from phone_number if present
+    # The last-4 challenge, and who it is NOT for (ADR-457 D2).
+    #
+    # It works because a manager recorded the number from hiring paperwork
+    # BEFORE the invite went out, so matching it proves the recipient is the
+    # intended person. That holds for field staff.
+    #
+    # It cannot hold for an Owner. Nobody has their number: the super-admin
+    # would have to ask for it and type it in, after which the Owner "confirms"
+    # the digits they themselves supplied. A challenge is only worth anything
+    # when the confirming party did not supply the value being confirmed.
+    #
+    # Today the Owner form collects no phone, so this is moot -- which is
+    # exactly why it is enforced here rather than left to that form. Adding a
+    # phone field to Create Owner is an obvious-looking improvement, and it
+    # would silently turn a real check into a self-referential one with no
+    # error anywhere.
     phone_last4 = None
-    if employee.phone_number:
+    if employee.phone_number and employee.role not in _NO_PHONE_CHALLENGE_ROLES:
         digits = "".join(c for c in employee.phone_number if c.isdigit())
         if len(digits) >= 4:
             phone_last4 = digits[-4:]
