@@ -90,6 +90,36 @@ def test_company_name_is_html_escaped():
     assert "&lt;script&gt;" in html_body
 
 
+def test_setup_reads_as_a_numbered_checklist():
+    """Four setup tasks, numbered, in BOTH bodies (ADR-455 D6).
+
+    They were one prose sentence, which reads as a wall and hides that the work
+    is finite. The numbers must appear in the plain-text body too: plenty of
+    clients show it instead of the HTML, and a checklist that only exists in one
+    body is half a checklist.
+    """
+    _, text, html_body = _rendered()
+    for n in ("1", "2", "3", "4"):
+        assert n in html_body
+    for line in ("1.", "2.", "3.", "4."):
+        assert line in text, f"plain text is missing step {line}"
+    for task in ("Choose a password", "Bring in your people",
+                 "Set what each of them sees", "Tell AsheFlow how your day runs"):
+        assert task in html_body
+        assert task.split(",")[0] in text
+
+
+def test_steps_are_table_rows_not_list_markup():
+    """Outlook's Word engine drops <ol> markers and ignores flex.
+
+    Pinned because <ol><li> is the obvious refactor and it degrades to an
+    unnumbered run in the client most likely to receive this email.
+    """
+    _, _, html_body = _rendered()
+    assert "<ol" not in html_body and "<li" not in html_body
+    assert "display:flex" not in html_body
+
+
 def test_html_carries_the_register_link_and_no_stray_placeholders():
     import re
     _, text, html_body = _rendered(token="abc987")
