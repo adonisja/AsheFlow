@@ -141,7 +141,17 @@ class TestTheSuperAdminNavMatchesTheTenantOne:
         """Same bones, distinct skin: super admin spans every tenant and must
         not be mistaken for one of them."""
         src = LAYOUT.read_text()
-        assert "violet" in src, "the super admin surface lost its violet identity"
+        # The TOKEN, not the word: `violet` also appears in comments, and an
+        # earlier version of this passed while the colour itself was hardcoded
+        # as `violet-500` — a literal that does not follow a palette change and
+        # is invisible to the contrast gate.
+        assert "text-brand" in src or "bg-brand" in src, (
+            "the super admin surface lost its brand-violet identity"
+        )
+        assert "violet-500" not in src, (
+            "a raw colour literal is back; use the brand token so the contrast "
+            "gate can see it"
+        )
 
     def test_it_still_omits_the_tenant_scoped_widgets(self):
         """ADR-396. NotificationBanner, CommandPalette and FeedbackModal all

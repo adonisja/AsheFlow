@@ -62,11 +62,11 @@ function TitleBar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-4">
         {/* Brand — the tenant navbar's tile treatment, in violet */}
         <div className="flex items-center gap-2 font-bold text-base tracking-tight shrink-0">
-          <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-violet-500/15 border border-violet-500/30">
-            <Shield className="h-3.5 w-3.5 text-violet-500" />
+          <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-brand/15 border border-brand/30">
+            <Shield className="h-3.5 w-3.5 text-brand" />
           </div>
           <span className="font-display text-foreground">AsheFlow</span>
-          <span className="hidden sm:inline text-xs font-normal text-violet-500 border border-violet-500/30 bg-violet-500/10 rounded-md px-1.5 py-0.5">
+          <span className="hidden sm:inline text-xs font-normal text-brand border border-brand/30 bg-brand/10 rounded-md px-1.5 py-0.5">
             Super Admin
           </span>
         </div>
@@ -79,7 +79,7 @@ function TitleBar() {
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenuOpen(o => !o)}
-              className="flex items-center rounded-full focus:outline-none focus:ring-2 focus:ring-violet-500/40 press"
+              className="flex items-center rounded-full focus:outline-none focus:ring-2 focus:ring-brand/40 press"
               title="Account"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
@@ -132,17 +132,19 @@ export default function SuperAdminLayout() {
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
       isActive
-        ? 'bg-violet-500/10 text-violet-500'
+        ? 'bg-brand/10 text-brand'
         : 'text-muted-foreground hover:text-foreground hover:bg-accent'
     }`;
 
   return (
     <div className="relative min-h-screen bg-background flex flex-col">
-      {/* Ambient backdrop — distinct violet tint to visually separate from company UI */}
+      {/* Ambient backdrop — the brand violet, separating this surface from any
+          tenant's UI. It referenced `--violet`, which is not a token and never
+          has been, so this gradient has been rendering nothing. */}
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         <div
           className="absolute -top-32 -left-32 w-[640px] h-[640px] rounded-full opacity-[0.15] dark:opacity-[0.20]"
-          style={{ background: 'radial-gradient(circle, hsl(var(--violet) / 0.6), transparent 70%)' }}
+          style={{ background: 'radial-gradient(circle, hsl(var(--brand) / 0.6), transparent 70%)' }}
         />
         <div
           className="absolute top-[40%] -right-40 w-[520px] h-[520px] rounded-full opacity-[0.10] dark:opacity-[0.18]"
