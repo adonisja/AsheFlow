@@ -352,7 +352,7 @@ export default function AnchorPointsScreen() {
                 value={apLocation}
                 onChangeText={setApLocation}
                 placeholder="e.g. 5th Ave & 42nd St"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
               />
 
               {/* Suggestions from recent APs */}
@@ -379,7 +379,7 @@ export default function AnchorPointsScreen() {
                 value={apEta}
                 onChangeText={setApEta}
                 placeholder="e.g. 8:30 AM"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
               />
 
               <Text style={s.fieldLabel}>Notes (optional)</Text>
@@ -388,7 +388,7 @@ export default function AnchorPointsScreen() {
                 value={apNotes}
                 onChangeText={setApNotes}
                 placeholder="Anything dispatch should know…"
-                placeholderTextColor={c.mutedForeground}
+                placeholderTextColor={c.placeholder}
                 multiline
                 numberOfLines={3}
                 textAlignVertical="top"
@@ -422,7 +422,7 @@ export default function AnchorPointsScreen() {
               value={arriveLocation}
               onChangeText={setArriveLocation}
               placeholder="Confirm or update location"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
             />
 
             <Text style={s.fieldLabel}>Notes (optional)</Text>
@@ -431,7 +431,7 @@ export default function AnchorPointsScreen() {
               value={arriveNotes}
               onChangeText={setArriveNotes}
               placeholder="Any notes for dispatch…"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
               multiline
               numberOfLines={3}
               textAlignVertical="top"

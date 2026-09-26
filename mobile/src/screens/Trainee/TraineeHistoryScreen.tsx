@@ -165,7 +165,7 @@ export default function TraineeHistoryScreen() {
                       value={rv.comment}
                       onChangeText={t => setComment(r.record_id, t)}
                       placeholder="Optional comment (private)…"
-                      placeholderTextColor={c.mutedForeground}
+                      placeholderTextColor={c.placeholder}
                       multiline
                       numberOfLines={3}
                       textAlignVertical="top"
