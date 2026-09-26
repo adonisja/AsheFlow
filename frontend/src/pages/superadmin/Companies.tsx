@@ -7,6 +7,7 @@ import {
   ChevronDown, ChevronUp, Send, AlertTriangle, ChevronRight,
   ShieldCheck, ShieldAlert, X, UserX,
 } from 'lucide-react';
+import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import StatCard from '../../components/ui/StatCard';
@@ -16,6 +17,18 @@ import { SkeletonCard } from '../../components/ui/Skeleton';
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** The timezones a DSP can operate in. Shared so the create form and the
+ *  company detail editor cannot drift apart. */
+export const TIMEZONES: SelectOption[] = [
+  { value: 'America/New_York',    label: 'America/New_York (ET)' },
+  { value: 'America/Chicago',     label: 'America/Chicago (CT)' },
+  { value: 'America/Denver',      label: 'America/Denver (MT)' },
+  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (PT)' },
+  { value: 'America/Phoenix',     label: 'America/Phoenix (AZ)' },
+  { value: 'America/Anchorage',   label: 'America/Anchorage (AKT)' },
+  { value: 'Pacific/Honolulu',    label: 'Pacific/Honolulu (HT)' },
+];
 
 interface Company {
   id: string;
@@ -242,19 +255,17 @@ function CreateCompanyForm({
           </div>
           <div>
             <label className="block text-xs text-muted-foreground mb-1">Timezone</label>
-            <select
-              className="input-field"
+            {/* House dropdown, not a native <select>: the native one renders
+                with the OS palette, so on a dark theme it opened as a white
+                panel with a system-blue highlight (the same failure
+                CollectionData.tsx documents). */}
+            <SelectMenu
               value={timezone}
-              onChange={e => setTimezone(e.target.value)}
-            >
-              <option value="America/New_York">America/New_York (ET)</option>
-              <option value="America/Chicago">America/Chicago (CT)</option>
-              <option value="America/Denver">America/Denver (MT)</option>
-              <option value="America/Los_Angeles">America/Los_Angeles (PT)</option>
-              <option value="America/Phoenix">America/Phoenix (AZ)</option>
-              <option value="America/Anchorage">America/Anchorage (AKT)</option>
-              <option value="Pacific/Honolulu">Pacific/Honolulu (HT)</option>
-            </select>
+              options={TIMEZONES}
+              placeholder="Select a timezone"
+              ariaLabel="Timezone"
+              onChange={setTimezone}
+            />
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-4">
