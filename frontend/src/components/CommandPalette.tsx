@@ -128,7 +128,7 @@ export default function CommandPalette() {
                   value={query}
                   onValueChange={setQuery}
                   placeholder="Search pages, actions, settings…"
-                  className="flex-1 bg-transparent outline-none text-sm text-foreground placeholder:text-muted-foreground"
+                  className="flex-1 bg-transparent outline-none text-sm text-foreground"
                   autoFocus
                 />
                 <span className="kbd">esc</span>

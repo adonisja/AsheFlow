@@ -67,12 +67,12 @@ function AddFreightForm({ date, busy, onDone }: {
           <input
             value={r.tba} onChange={e => update(i, { tba: e.target.value })}
             placeholder="TBA / tracking #"
-            className="flex-1 min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="flex-1 min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
           <input
             value={r.address} onChange={e => update(i, { address: e.target.value })}
             placeholder="Delivery address"
-            className="flex-[2] min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="flex-[2] min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
           <select
             value={r.size ?? ''} onChange={e => update(i, { size: e.target.value })}
@@ -384,7 +384,7 @@ function TruckSection({
                 value={filter}
                 onChange={e => setFilter(e.target.value)}
                 placeholder="Filter bag or dock…"
-                className="w-full pl-7 pr-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full pl-7 pr-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
             <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">

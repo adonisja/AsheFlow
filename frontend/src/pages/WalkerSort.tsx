@@ -384,7 +384,7 @@ function AssignCombobox({
             value={q}
             onChange={e => setQ(e.target.value)}
             placeholder="Search staff…"
-            className="w-full px-3 py-1.5 text-xs bg-accent/30 border-b border-border text-foreground placeholder:text-muted-foreground focus:outline-none"
+            className="w-full px-3 py-1.5 text-xs bg-accent/30 border-b border-border text-foreground focus:outline-none"
           />
           <div className="max-h-56 overflow-y-auto py-1">
             {groups.map(g => g.list.length > 0 && (

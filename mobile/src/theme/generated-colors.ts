@@ -12,6 +12,7 @@ export type GeneratedColors = {
   card:                   string;
   foreground:             string;
   mutedForeground:        string;
+  placeholder:            string;
   subtleForeground:       string;
   brandText:              string;
   primary:                string;
@@ -64,6 +65,7 @@ export const generatedLight: GeneratedColors = {
   card:                   '#FFFFFF',
   foreground:             '#111522',
   mutedForeground:        '#656C7B',
+  placeholder:            '#6E7687',
   subtleForeground:       '#575D6B',
   brandText:              '#8517D3',
   primary:                '#1B296A',
@@ -116,6 +118,7 @@ export const generatedDark: GeneratedColors = {
   card:                   '#181D39',
   foreground:             '#F2F5F7',
   mutedForeground:        '#ABB2BF',
+  placeholder:            '#828CA1',
   subtleForeground:       '#8D95A5',
   brandText:              '#B475EB',
   primary:                '#7E95F1',

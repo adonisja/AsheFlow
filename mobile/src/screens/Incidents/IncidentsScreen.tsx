@@ -184,7 +184,7 @@ export default function IncidentsScreen() {
                   value={bodyPart}
                   onChangeText={setBodyPart}
                   placeholder="e.g. left hand"
-                  placeholderTextColor={c.mutedForeground}
+                  placeholderTextColor={c.placeholder}
                 />
                 <Text style={s.label}>Medical Attention Required?</Text>
                 <View style={s.boolRow}>
@@ -205,13 +205,13 @@ export default function IncidentsScreen() {
             {category === 'stolen_packages' && (
               <>
                 <Text style={s.label}>Time of Incident</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={stolenTime} onChangeText={setStolenTime} placeholder="e.g. 2:30 PM" placeholderTextColor={c.mutedForeground} />
+                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={stolenTime} onChangeText={setStolenTime} placeholder="e.g. 2:30 PM" placeholderTextColor={c.placeholder} />
                 <Text style={s.label}>TBA Count</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={tbaCount} onChangeText={setTbaCount} placeholder="Number of packages" placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
+                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={tbaCount} onChangeText={setTbaCount} placeholder="Number of packages" placeholderTextColor={c.placeholder} keyboardType="numeric" />
                 <Text style={s.label}>Location</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={location} onChangeText={setLocation} placeholder="Street / landmark" placeholderTextColor={c.mutedForeground} />
+                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={location} onChangeText={setLocation} placeholder="Street / landmark" placeholderTextColor={c.placeholder} />
                 <Text style={s.label}>Witness Name</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={witness} onChangeText={setWitness} placeholder="Optional" placeholderTextColor={c.mutedForeground} />
+                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={witness} onChangeText={setWitness} placeholder="Optional" placeholderTextColor={c.placeholder} />
               </>
             )}
 
@@ -222,7 +222,7 @@ export default function IncidentsScreen() {
               value={description}
               onChangeText={setDescription}
               placeholder="Describe what happened…"
-              placeholderTextColor={c.mutedForeground}
+              placeholderTextColor={c.placeholder}
               multiline
               numberOfLines={5}
               textAlignVertical="top"

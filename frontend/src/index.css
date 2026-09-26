@@ -336,9 +336,25 @@
   .btn-ghost:active { transform: scale(0.97); }
 
   /* ---------- Inputs ---------- */
+  /* Placeholder text, on EVERY field — including the ones that hand-rolled
+     their styling and never used .input-field.
+
+     It used to inherit `muted-foreground`, the same value as real secondary
+     text, so an empty field looked filled in: "DSPX1234" read as a DSP code
+     somebody had already entered rather than an example of one.
+
+     A dedicated token rather than an opacity: light mode's muted-foreground is
+     only 5.28:1 to begin with, so 0.75 alpha lands at 3.22:1 and fails WCAG.
+     The token is tuned per theme instead -- visibly lighter than body text in
+     both, and still >= 4.5:1, because a hint nobody can read is not a hint. */
+  input::placeholder,
+  textarea::placeholder {
+    color: hsl(var(--placeholder));
+  }
+
   .input-field {
     @apply w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm
-           text-foreground placeholder:text-muted-foreground
+           text-foreground
            transition-colors duration-200;
   }
   /* Solid outline on focus (WCAG 2.4.11) + supplementary glow ring */

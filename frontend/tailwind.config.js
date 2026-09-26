@@ -22,6 +22,10 @@ export default {
           DEFAULT: 'hsl(var(--surface))',
           muted: 'hsl(var(--surface-muted))',
         },
+        // ADR follow-up: placeholders had no colour of their own and used
+        // muted-foreground, the same value as real secondary text -- which is
+        // why an empty field read as a filled one.
+        placeholder: 'hsl(var(--placeholder))',
         primary: {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))',
