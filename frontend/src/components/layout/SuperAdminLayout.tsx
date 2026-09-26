@@ -59,11 +59,11 @@ function TitleBar() {
 
   return (
     <div className="relative z-10 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-4">
         {/* Brand — the tenant navbar's tile treatment, in violet */}
         <div className="flex items-center gap-2 font-bold text-base tracking-tight shrink-0">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand/15 border border-brand/30">
-            <Shield className="h-4 w-4 text-brand" />
+          <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-brand/15 border border-brand/30">
+            <Shield className="h-3.5 w-3.5 text-brand" />
           </div>
           <span className="font-display text-foreground">AsheFlow</span>
           <span className="hidden sm:inline text-xs font-normal text-brand border border-brand/30 bg-brand/10 rounded-md px-1.5 py-0.5">
@@ -130,7 +130,7 @@ export default function SuperAdminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200 press ${
+    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200 press ${
       isActive
         ? 'bg-brand/10 text-brand'
         : 'text-muted-foreground hover:text-foreground hover:bg-accent'
@@ -160,12 +160,12 @@ export default function SuperAdminLayout() {
             compete for width with a wordmark that never changes. */}
         <nav className="glass border-x-0 border-t-0 border-b border-border/60 rounded-none">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-11">
+            <div className="flex items-center justify-between h-10">
               <div className="hidden md:flex items-center min-w-0 flex-1">
                 <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none pr-2">
                   {NAV.map(({ to, label, icon: Icon }) => (
                     <NavLink key={to} to={to} className={linkClass}>
-                      <Icon className="w-4 h-4" />
+                      <Icon className="w-3.5 h-3.5" />
                       {label}
                     </NavLink>
                   ))}
