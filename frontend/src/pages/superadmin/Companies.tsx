@@ -18,16 +18,41 @@ import { SkeletonCard } from '../../components/ui/Skeleton';
 // Types
 // ---------------------------------------------------------------------------
 
-/** The timezones a DSP can operate in. Shared so the create form and the
- *  company detail editor cannot drift apart. */
+/** Current abbreviation and UTC offset for an IANA zone, e.g. "EDT · UTC-4".
+ *
+ *  COMPUTED, never hardcoded. Half these zones shift twice a year and they do
+ *  not shift together: today Denver is MDT (UTC-7) while Phoenix, which does
+ *  not observe DST at all, is MST (UTC-7) — and in January they diverge again.
+ *  A written-down table is wrong for roughly half the year, silently, in a
+ *  field whose whole job is to be unambiguous about time.
+ */
+function zoneHint(tz: string): string {
+  const now = new Date();
+  const abbr = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+    .formatToParts(now).find(p => p.type === 'timeZoneName')?.value ?? '';
+  const gmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' })
+    .formatToParts(now).find(p => p.type === 'timeZoneName')?.value ?? '';
+  // "GMT-4" reads as UTC to anyone scheduling across zones; "GMT" invites the
+  // question of whether it means London, which in summer it does not.
+  return `${abbr} · ${gmt.replace('GMT', 'UTC')}`;
+}
+
+/** The timezones a DSP can operate in, grouped by region.
+ *
+ *  Shared so the create form and the company detail editor cannot drift apart.
+ *  Grouped because a flat list of "America/..." strings makes the reader parse
+ *  a path prefix that carries no information once the heading says it.
+ */
 export const TIMEZONES: SelectOption[] = [
-  { value: 'America/New_York',    label: 'America/New_York (ET)' },
-  { value: 'America/Chicago',     label: 'America/Chicago (CT)' },
-  { value: 'America/Denver',      label: 'America/Denver (MT)' },
-  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (PT)' },
-  { value: 'America/Phoenix',     label: 'America/Phoenix (AZ)' },
-  { value: 'America/Anchorage',   label: 'America/Anchorage (AKT)' },
-  { value: 'Pacific/Honolulu',    label: 'Pacific/Honolulu (HT)' },
+  { value: '_us', label: 'United States', header: true },
+  { value: 'America/New_York',    label: 'New York',    hint: zoneHint('America/New_York') },
+  { value: 'America/Chicago',     label: 'Chicago',     hint: zoneHint('America/Chicago') },
+  { value: 'America/Denver',      label: 'Denver',      hint: zoneHint('America/Denver') },
+  { value: 'America/Phoenix',     label: 'Phoenix',     hint: zoneHint('America/Phoenix') },
+  { value: 'America/Los_Angeles', label: 'Los Angeles', hint: zoneHint('America/Los_Angeles') },
+  { value: '_nc', label: 'Non-contiguous', header: true },
+  { value: 'America/Anchorage',   label: 'Anchorage',   hint: zoneHint('America/Anchorage') },
+  { value: 'Pacific/Honolulu',    label: 'Honolulu',    hint: zoneHint('Pacific/Honolulu') },
 ];
 
 interface Company {

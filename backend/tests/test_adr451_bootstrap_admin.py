@@ -358,6 +358,30 @@ class TestTheSuperAdminUsesTheHouseDropdown:
         for page in self.PAGES:
             assert "SelectMenu" in page.read_text(), f"{page.name} has no SelectMenu"
 
+    def test_the_offsets_are_computed_not_hardcoded(self):
+        """Half these zones shift twice a year, and not together.
+
+        Today Denver is MDT and Phoenix is MST — both UTC-7 — and in January
+        they diverge again. A written-down offset is wrong for roughly half the
+        year, silently, in a field whose whole job is to be unambiguous about
+        time.
+        """
+        src = self.PAGES[0].read_text()
+        assert "Intl.DateTimeFormat" in src and "timeZoneName" in src, (
+            "timezone offsets are not computed from Intl — a hardcoded table "
+            "goes wrong at every DST transition"
+        )
+        # A literal offset beside a city name is the smell this guards against.
+        import re
+        assert not re.search(r"label: '(?:New York|Chicago|Denver)[^']*UTC-\d", src), \
+            "an offset is hardcoded into a label"
+
+    def test_the_zones_are_grouped_under_headers(self):
+        """A flat list makes the reader parse an "America/" path prefix that
+        carries no information once a heading says it."""
+        src = self.PAGES[0].read_text()
+        assert "header: true" in src, "the timezone list has no group headings"
+
     def test_the_timezone_list_is_defined_once(self):
         """Two copies drift: one page gains a zone and the other does not."""
         companies, detail = self.PAGES
