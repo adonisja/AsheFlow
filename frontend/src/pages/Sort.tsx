@@ -17,7 +17,7 @@ import {
   Route, Zap, Download,
 } from 'lucide-react';
 import ReportDamagedModal from '../components/ReportDamagedModal';
-import { getLocalYMD } from '../utils/date';
+import { formatDayHeader, getLocalYMD } from '../utils/date';
 
 // How each truck's territory seed was resolved (ADR-169 fallback chain)
 const ANCHOR_SOURCE_LABELS: Record<string, string> = {
@@ -1195,7 +1195,7 @@ function CrewStationView({ today }: { today: string }) {
       <SectionHeader
         eyebrow="Station Loading"
         title="Tote check-off"
-        description={`Check your truck's totes onto the truck as they are staged. ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        description={`Check your truck's totes onto the truck as they are staged. ${formatDayHeader(today)}`}
         actions={
           <button onClick={check} className="btn-ghost flex items-center gap-1.5 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
@@ -1296,7 +1296,7 @@ export default function SortPage() {
       <SectionHeader
         eyebrow="Station Operations"
         title="Station Sort"
-        description={`Upload manifest, assign packages to truck zones, and hand off to AP Sort for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        description={`Upload manifest, assign packages to truck zones, and hand off to AP Sort for ${formatDayHeader(today)}`}
         actions={
           <div className="flex items-center gap-2">
             <button onClick={() => setShowDamaged(true)} className="btn-ghost flex items-center gap-1.5 text-sm">

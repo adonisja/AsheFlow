@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { getSchedule, createOffDay } from '../api/preferences';
 import { createTimeOffRequest } from '../api/timeOffRequests';
-import { fmtDate } from '../utils/date';
+import { fmtDate, formatDayHeaderFull } from '../utils/date';
 import {
   CalendarDays, Clock, Users, CheckCircle2, XCircle, ClipboardCheck,
   ChevronLeft, ChevronRight, AlertTriangle, BarChart2, Calendar,
@@ -674,7 +674,7 @@ const Schedule = () => {
               <h2 className="section-title mb-4 flex items-center gap-2">
                 <CalendarDays className="w-5 h-5 text-primary" />
                 {selectedDate
-                  ? new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+                  ? formatDayHeaderFull(selectedDate)
                   : 'Select a Date'}
               </h2>
 

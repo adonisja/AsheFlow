@@ -8,7 +8,7 @@ import {
   ShieldCheck, ShieldAlert, X, UserX,
 } from 'lucide-react';
 import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
-import { formatZone, zoneOffset } from '../../utils/date';
+import { formatDate, formatZone, zoneOffset } from '../../utils/date';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import StatCard from '../../components/ui/StatCard';
@@ -324,10 +324,10 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
     <div onClick={e => e.stopPropagation()}>
       <button
         onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-1.5 text-xs text-violet-500 hover:text-violet-400 transition-colors font-medium"
+        className="flex items-center gap-1.5 text-xs text-brand hover:text-brand/80 transition-colors font-medium"
       >
         <Send className="w-3.5 h-3.5" />
-        Bootstrap Admin
+        Create Owner
         {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
       </button>
 
@@ -344,7 +344,7 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
               {error && <p className="text-xs text-danger mb-2">{error}</p>}
               <form onSubmit={handleSubmit} className="space-y-2">
                 <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Admin Name</label>
+                  <label className="block text-xs text-muted-foreground mb-1">Owner Name</label>
                   <input
                     className="input-field text-sm"
                     value={name}
@@ -354,7 +354,7 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-muted-foreground mb-1">Admin Email</label>
+                  <label className="block text-xs text-muted-foreground mb-1">Owner Email</label>
                   <input
                     type="email"
                     className="input-field text-sm"
@@ -443,7 +443,7 @@ function CompanyRow({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       onClick={() => navigate(`/superadmin/companies/${company.id}`)}
-      className="card hover:shadow-md hover:border-violet-500/30 transition-all cursor-pointer group"
+      className="card hover:shadow-md hover:border-brand/30 transition-all cursor-pointer group"
     >
       <div className="flex items-start justify-between gap-4 flex-wrap">
         {/* Left: identity */}
@@ -455,7 +455,7 @@ function CompanyRow({
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <p className="font-semibold text-sm group-hover:text-violet-400 transition-colors">{company.name}</p>
+              <p className="font-semibold text-sm group-hover:text-brand transition-colors">{company.name}</p>
               {company.is_active ? (
                 <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-success/10 text-success font-medium">
                   <ShieldCheck className="w-3 h-3" /> Active
@@ -486,7 +486,7 @@ function CompanyRow({
               )}
               <span className="text-xs text-muted-foreground">{formatZone(company.timezone)}</span>
               <span className="text-xs text-muted-foreground">
-                Created {new Date(company.created_at).toLocaleDateString()}
+                Created {formatDate(company.created_at)}
               </span>
             </div>
           </div>
@@ -508,7 +508,7 @@ function CompanyRow({
               : <><CheckCircle2 className="w-3.5 h-3.5" /> Reactivate</>
             }
           </button>
-          <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-violet-400 transition-colors" />
+          <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-brand transition-colors" />
         </div>
       </div>
 

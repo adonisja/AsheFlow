@@ -1,4 +1,5 @@
 import { errorText } from '../utils/errorText';
+import { formatDateTime } from '../utils/date';
 import React, { useEffect, useState } from 'react';
 import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -89,7 +90,7 @@ function StatusBadge({ status }: { status: GearItemResponse['status'] }) {
 }
 
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return formatDateTime(iso);
 }
 
 // ---------------------------------------------------------------------------

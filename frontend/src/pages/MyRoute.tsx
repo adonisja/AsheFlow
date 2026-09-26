@@ -15,7 +15,7 @@ import type {
   RTSPackageCreate, MissingPackageCreate, ArrivalConfirmResponse,
   BuildingProfileCreate, BuildingType,
 } from '../api/types';
-import { getLocalYMD } from '../utils/date';
+import { formatDateShort, getLocalYMD } from '../utils/date';
 
 const TODAY = getLocalYMD();
 
@@ -583,7 +583,7 @@ export default function MyRoute() {
       {/* Header */}
       <div>
         <h1 className="page-title">My Route</h1>
-        <p className="text-subtle mt-1">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
+        <p className="text-subtle mt-1">{formatDateShort(new Date())}</p>
       </div>
 
       {/* Out-of-zone packages to hand back to the driver (ADR-178) */}

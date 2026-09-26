@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
-import { getLocalYMD } from '../../utils/date';
+import { formatDateShort, formatMonthDay, getLocalYMD } from '../../utils/date';
 import {
   Loader2, Users, ClipboardList, History, MessageSquare,
   AlertTriangle, Star, CheckCircle2, XCircle, RefreshCw,
@@ -64,7 +64,7 @@ function HandoffNote({ data }: { data: { comments: string; record_date: string; 
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-violet shrink-0" />
           <span className="text-sm font-semibold text-foreground">
-            Handoff Note — Day {data.day_number} ({new Date(data.record_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })})
+            Handoff Note — Day {data.day_number} ({formatDateShort(data.record_date)})
           </span>
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
@@ -150,9 +150,7 @@ function TodayTab({
         <div className="text-right shrink-0">
           <p className="text-xs text-subtle uppercase tracking-wider">Today</p>
           <p className="text-sm font-semibold text-foreground">
-            {new Date(getLocalYMD() + 'T00:00:00').toLocaleDateString('en-US', {
-              weekday: 'long', month: 'short', day: 'numeric',
-            })}
+            {formatDateShort(getLocalYMD())}
           </p>
         </div>
       </div>
@@ -230,9 +228,7 @@ function SessionCard({ session }: { session: { record: any; tasks: any[] } }) {
           {hasEscalated && <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />}
           <span className="font-semibold text-sm text-foreground">
             Day {record.current_day_number} &middot;{' '}
-            {new Date(record.record_date + 'T00:00:00').toLocaleDateString('en-US', {
-              weekday: 'short', month: 'short', day: 'numeric',
-            })}
+            {formatDateShort(record.record_date)}
           </span>
           {debtTasks.length > 0 && (
             <span className="text-xs text-danger font-medium bg-danger/10 px-1.5 py-0.5 rounded">
@@ -376,7 +372,7 @@ function HistoryTab({ trainerId }: { trainerId: string }) {
               </div>
               <div className="flex items-center gap-2 shrink-0 mt-1">
                 <span className="text-xs text-muted-foreground hidden sm:block">
-                  Last: {new Date(sessions[0].record.record_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  Last: {formatMonthDay(sessions[0].record.record_date)}
                 </span>
                 {isOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
               </div>

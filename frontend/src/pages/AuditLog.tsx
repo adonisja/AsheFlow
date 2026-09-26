@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { formatDateShort } from '../utils/date';
 import { Shield, ChevronLeft, ChevronRight, RefreshCw, X, ChevronDown, ChevronUp, User, Search, Check } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
@@ -300,7 +301,7 @@ function dayLabel(iso: string): string {
   const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
   if (diff === 0) return 'Today';
   if (diff === 1) return 'Yesterday';
-  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  return formatDateShort(d);
 }
 
 function fmtTime(iso: string) {

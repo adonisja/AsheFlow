@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatDateShort } from './utils/date';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './components/auth/Login';
 import Register from './pages/Register';
@@ -190,7 +191,7 @@ function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {[
           { label: 'Role', value: groups.join(', ') || 'Pending', icon: Users, color: 'text-primary' },
-          { label: 'Today', value: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }), icon: Calendar, color: 'text-info' },
+          { label: 'Today', value: formatDateShort(new Date()), icon: Calendar, color: 'text-info' },
         ].map(stat => (
           <div key={stat.label} className="card-elevated flex items-center gap-4">
             <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary/5">

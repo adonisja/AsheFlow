@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import SelectMenu from '../../components/ui/SelectMenu';
 import { TIMEZONES } from './Companies';
-import { formatZone } from '../../utils/date';
+import { formatDate, formatZone } from '../../utils/date';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 
@@ -592,7 +592,7 @@ function IdentityCard({
               )}
               <span className="text-xs text-muted-foreground">{formatZone(detail.timezone)}</span>
               <span className="text-xs text-muted-foreground">
-                Created {new Date(detail.created_at).toLocaleDateString()}
+                Created {formatDate(detail.created_at)}
               </span>
             </div>
           </div>
@@ -770,7 +770,7 @@ function EmployeeCard({ companyId }: { companyId: string }) {
             {summary.admins.length === 0 ? (
               <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/5 border border-warning/20">
                 <UserX className="w-4 h-4 text-warning shrink-0" />
-                <p className="text-sm text-warning">No admin bootstrapped yet. Use the Bootstrap Admin action from the companies list.</p>
+                <p className="text-sm text-warning">No Owner yet. Use the Create Owner action from the companies list.</p>
               </div>
             ) : (
               <div className="space-y-2">

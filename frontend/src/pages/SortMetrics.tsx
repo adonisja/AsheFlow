@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { formatMonthDay } from '../utils/date';
 import { Route as RouteIcon, RefreshCw, AlertTriangle, Info } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
@@ -86,12 +87,9 @@ function num(v: number | null | undefined, digits = 0): string {
   return v.toFixed(digits);
 }
 
-function fmtDate(iso: string): string {
-  // 'T00:00:00' with no Z parses as LOCAL midnight. Appending 'Z' would shift
-  // the label back a day for anyone west of UTC.
-  const d = new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
+// formatMonthDay parses a date-only string in local time, so the 'T00:00:00'
+// this used to append is no longer needed.
+const fmtDate = formatMonthDay;
 
 export default function SortMetrics() {
   const [windowDays, setWindowDays] = useState(28);

@@ -11,7 +11,7 @@ import {
   UserCheck, Loader2, ShieldAlert, Send, Zap, CircleAlert,
   ArrowRightLeft, Shuffle,
 } from 'lucide-react';
-import { getLocalYMD } from '../utils/date';
+import { formatDayHeader, getLocalYMD } from '../utils/date';
 import ApPullsPanel from '../components/ApPullsPanel';
 import CrewStatusPanel from '../components/CrewStatusPanel';
 import ReportDamagedModal from '../components/ReportDamagedModal';
@@ -1774,7 +1774,7 @@ export default function WalkerSortMonitor() {
       <SectionHeader
         eyebrow="Anchor Point Operations"
         title="AP Sort"
-        description={`Package sort, route assignment, and walker dispatch for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        description={`Package sort, route assignment, and walker dispatch for ${formatDayHeader(today)}`}
         actions={
           <div className="flex items-center gap-2">
             <button onClick={() => setShowDamaged(true)} className="btn-ghost flex items-center gap-1.5 text-sm">

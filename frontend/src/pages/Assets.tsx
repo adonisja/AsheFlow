@@ -1,4 +1,5 @@
 import { errorText } from '../utils/errorText';
+import { formatDate } from '../utils/date';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
@@ -990,7 +991,7 @@ function PeopleTab() {
                               <span className="font-medium text-foreground text-sm">{emp.name}</span>
                               {emp.injury_status === 'injured' && (
                                 <span
-                                  title={`Injured${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
+                                  title={`Injured${emp.injury_status_since ? ` since ${formatDate(emp.injury_status_since)}` : ''}`}
                                   className="inline-flex items-center gap-1 text-[10px] font-semibold bg-orange-500/10 text-orange-500 border border-orange-500/20 px-1.5 py-0.5 rounded-full"
                                 >
                                   <ShieldAlert className="w-2.5 h-2.5" /> Injured
@@ -998,7 +999,7 @@ function PeopleTab() {
                               )}
                               {emp.injury_status === 'disabled' && (
                                 <span
-                                  title={`Disabled${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
+                                  title={`Disabled${emp.injury_status_since ? ` since ${formatDate(emp.injury_status_since)}` : ''}`}
                                   className="inline-flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger border border-danger/20 px-1.5 py-0.5 rounded-full"
                                 >
                                   <ShieldOff className="w-2.5 h-2.5" /> Disabled
