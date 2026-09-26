@@ -4,7 +4,7 @@ import os
 import secrets
 import threading
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Union
 from uuid import UUID
 from botocore.exceptions import ClientError
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 import requests as http_requests
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (RoleChecker, Pagination, get_caller_employee,
@@ -24,8 +24,13 @@ from app.models.employee import Employee
 from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
-from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
+from app.schemas.employee import (
+    _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse,
+    EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse,
+    BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest,
+)
 from app.services.audit import write_audit
+from app.api.ratelimit import limiter
 from app.services import mfa_containment
 from app.services.company_onboarding import is_onboarding, onboarding_note
 from app.services.email import send_invite_email
@@ -429,6 +434,10 @@ FIELD_ROLES       = {"driver", "walker", "trainer", "trainee"}
 # Roles that only admins may create, edit, deactivate, or view
 PROTECTED_ROLES   = {"management", "admin"}
 
+# ADR-458 D2. Who appears on the escalation list. field_supervisor is in
+# OVERSIGHT_ROLES but not here: it oversees the road, not the company.
+ESCALATION_ROLES  = ("admin", "management")
+
 
 def _assert_not_protected(caller_groups: set, target_role: str) -> None:
     """Raise 403 if target has a protected role and caller is not admin."""
@@ -439,7 +448,15 @@ def _assert_not_protected(caller_groups: set, target_role: str) -> None:
         )
 
 
-@router.get("/", response_model=list[EmployeeResponse])
+@router.get(
+    "/",
+    response_model=list[
+        Union[EmployeeResponse, EmployeeOfficeResponse, EmployeePublicResponse]
+    ],
+    # ADR-458 D1. Three shapes by caller role and row role. Declared as a
+    # union because a single response_model makes FastAPI coerce every row to
+    # it, which would undo the redaction the handler just applied.
+)
 def get_all_employees(
     caller: Employee = Depends(get_caller_employee),
     pg: Pagination = Depends(),
@@ -461,15 +478,93 @@ def get_all_employees(
     else:
         q = q.filter(Employee.is_active == True)
 
-    # Management callers cannot see management or admin accounts
-    if caller.role == "management":
-        q = q.filter(Employee.role.notin_(PROTECTED_ROLES))
-
     employees = pg.apply(q).all()
 
-    if is_privileged:
+    if not is_privileged:
+        return [EmployeePublicResponse.model_validate(e) for e in employees]
+
+    # ADR-458 D1. Office rows appear on the roster but WITHOUT contact details.
+    #
+    # Two things changed here and they pull in opposite directions. Management
+    # used to be filtered away from these rows entirely (`role.notin_(
+    # PROTECTED_ROLES)`), so a manager could not see that an owner existed --
+    # the role most likely to need to escalate could not find anyone to
+    # escalate to. They now see the row.
+    #
+    # And dispatch used to receive the full record, so an owner's personal
+    # mobile sat behind a click-to-copy button on a routine screen. It no
+    # longer does. Reaching an owner is GET /employees/escalation: deliberate,
+    # role-gated and audited.
+    #
+    # An admin still sees everything: they are the role the escalation list
+    # exists to reach, and hiding peers from them buys nothing.
+    if caller.role == "admin":
         return [EmployeeResponse.model_validate(e) for e in employees]
-    return [EmployeePublicResponse.model_validate(e) for e in employees]
+
+    return [
+        EmployeeOfficeResponse.model_validate(e)
+        if e.role in PROTECTED_ROLES
+        else EmployeeResponse.model_validate(e)
+        for e in employees
+    ]
+
+
+@router.get("/escalation", response_model=List[EmployeeEscalationResponse])
+@limiter.limit("20/minute")
+def get_escalation_contacts(
+    request: Request,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Who to call when something is wrong (ADR-458 D2).
+
+    The roster answers "who works here". This answers "who do I escalate to",
+    and they are different artifacts with different audiences -- which is why
+    the contact details live here rather than on a screen people read all day.
+
+    Gate is broad on purpose. Dispatch is who is on shift at 4am when a truck
+    is stranded, and a list they cannot open is useless exactly when it is
+    needed. Management is included because the previous arrangement filtered
+    admin rows away from them entirely: the role most likely to need to
+    escalate could not see anyone to escalate to.
+
+    Ordered admin first: an ordered list is the useful form of "who do I call",
+    and alphabetical within a role keeps it stable between calls.
+    """
+    contacts = (
+        db.query(Employee)
+        .filter(
+            Employee.company_id == caller.company_id,
+            Employee.is_active == True,
+            Employee.role.in_(ESCALATION_ROLES),
+        )
+        .all()
+    )
+    # admin before management, then by name. Done in Python because the
+    # ordering is a two-key rule over a small list, not a query concern.
+    rank = {"admin": 0, "management": 1}
+    contacts.sort(key=lambda e: (rank.get(e.role, 9), (e.name or "").lower()))
+
+    # ADR-458 D3. The first READ this codebase audits, and the reason the
+    # endpoint is defensible: a gate that leaves no trace cannot answer "who
+    # looked at the owner's mobile, and when".
+    #
+    # The row records the actor and how many rows were returned -- NOT the
+    # numbers. Logging those would copy the PII being protected into a second
+    # store, which is the Dimension 7 failure this decision exists to avoid.
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.escalation_viewed",
+        target_table="employees",
+        target_id=str(caller.company_id),
+        detail={"returned": len(contacts)},
+    )
+    db.commit()
+
+    return [EmployeeEscalationResponse.model_validate(e) for e in contacts]
 
 
 @router.get("/me", response_model=EmployeeResponse)

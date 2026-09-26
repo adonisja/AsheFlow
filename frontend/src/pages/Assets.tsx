@@ -5,7 +5,7 @@ import {
   AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-import type { CompanyZone, CornerPoint } from '../api/types';
+import type { CompanyZone, CornerPoint, EscalationContact } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -601,6 +601,30 @@ function PeopleTab() {
   const [promotingId, setPromotingId]     = useState<string | null>(null);
   const [promoteMsg, setPromoteMsg]       = useState<{ id: string; ok: boolean; text: string } | null>(null);
 
+  // ADR-458 D2. Fetched ONLY when the panel is opened, never on page load:
+  // the server writes an audit row per call, and a list that fetches itself
+  // whenever anyone visits the roster would fill that log with views nobody
+  // performed -- noise that makes the real ones unfindable.
+  const [escalation, setEscalation]       = useState<EscalationContact[] | null>(null);
+  const [escalationOpen, setEscalationOpen] = useState(false);
+  const [escalationBusy, setEscalationBusy] = useState(false);
+  const [escalationError, setEscalationError] = useState<string | null>(null);
+
+  const openEscalation = async () => {
+    setEscalationOpen(true);
+    if (escalation || escalationBusy) return;   // one audited fetch per visit
+    setEscalationBusy(true);
+    setEscalationError(null);
+    try {
+      const r = await axiosClient.get('/employees/escalation');
+      setEscalation(r.data);
+    } catch {
+      setEscalationError('Could not load the escalation list. Try again.');
+    } finally {
+      setEscalationBusy(false);
+    }
+  };
+
   const load = () => {
     setLoading(true);
     setLoadError(null);
@@ -925,6 +949,16 @@ function PeopleTab() {
         <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
           <RefreshCw className="w-4 h-4" />
         </button>
+        {/* ADR-458 D2. Office contact details are not on the roster; this is
+            where they live. Labelled by the JOB ("who to call"), not the
+            mechanism, because that is what someone at 4am is looking for. */}
+        <button
+          onClick={openEscalation}
+          className="btn-ghost flex items-center gap-2 text-sm"
+          title="Contact details for owners and managers"
+        >
+          <Phone className="w-4 h-4" /> Who to call
+        </button>
         {canImport && (
           <button
             onClick={() => setShowImport(true)}
@@ -940,6 +974,62 @@ function PeopleTab() {
           <Plus className="w-4 h-4" /> Invite Employee
         </button>
       </div>
+
+      {escalationOpen && (
+        <div className="card p-0 overflow-hidden border-primary/20">
+          <div className="flex items-start justify-between gap-3 px-4 py-3 bg-accent/40 border-b border-border">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Who to call</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Owners and managers, most senior first. Opening this list is recorded.
+              </p>
+            </div>
+            <button
+              onClick={() => setEscalationOpen(false)}
+              className="btn-ghost p-1.5 text-muted-foreground shrink-0"
+              aria-label="Close the escalation list"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {escalationBusy && (
+            <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
+          )}
+          {escalationError && (
+            <p className="px-4 py-3 text-sm text-danger">{escalationError}</p>
+          )}
+          {escalation && escalation.length === 0 && (
+            <p className="px-4 py-3 text-sm text-muted-foreground">
+              Nobody to escalate to. This company has no active owner or manager.
+            </p>
+          )}
+          {escalation && escalation.length > 0 && (
+            <ul className="divide-y divide-border">
+              {escalation.map(c => (
+                <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-medium text-foreground truncate">{c.name}</span>
+                    <span className={badge(c.role)}>{c.role}</span>
+                  </span>
+                  {c.phone_number ? (
+                    /* A tel: link, not text to select and copy: this surface
+                       exists to get someone on the phone (ADR-267). */
+                    <a
+                      href={`tel:${c.phone_number}`}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md bg-success/10 text-success hover:bg-success/20 transition-colors shrink-0"
+                    >
+                      <Phone className="w-3 h-3" /> {c.phone_number}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-warning italic shrink-0">No number on file</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {visible.length !== employees.length && (
         <p className="text-xs text-subtle">{visible.length} of {employees.length} shown</p>
@@ -1016,12 +1106,16 @@ function PeopleTab() {
                         <span className={badge(emp.role)}>{emp.role}</span>
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs truncate max-w-[180px]">
-                        {emp.email ?? <span className="text-subtle italic">—</span>}
+                        {emp.email ?? (isOfficeRole(emp.role)
+                          ? <WithheldCell />
+                          : <span className="text-subtle italic">—</span>)}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell">
                         {emp.discord_id
                           ? <CopyableId value={emp.discord_id} />
-                          : <span className="text-xs text-warning italic">not set</span>}
+                          : isOfficeRole(emp.role)
+                            ? <WithheldCell />
+                            : <span className="text-xs text-warning italic">not set</span>}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
                         {emp.phone_number
@@ -1036,7 +1130,9 @@ function PeopleTab() {
                               <Copy className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-50 transition-opacity" />
                             </button>
                           )
-                          : <span className="text-subtle italic text-xs">—</span>}
+                          : isOfficeRole(emp.role)
+                            ? <WithheldCell />
+                            : <span className="text-subtle italic text-xs">—</span>}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
@@ -1297,6 +1393,30 @@ function PeopleTab() {
 // ---------------------------------------------------------------------------
 // Fleet Tab
 // ---------------------------------------------------------------------------
+
+/** Office roles, whose contact details do not ride the roster (ADR-458 D1). */
+function isOfficeRole(role: string): boolean {
+  return role === 'admin' || role === 'management';
+}
+
+/** "Withheld", not "missing" (ADR-458 D1).
+ *
+ *  The server omits contact fields on office rows, so these cells fall through
+ *  to an empty state. Rendering the normal one would say the data is ABSENT,
+ *  and a manager reading "not set" goes hunting for a bug -- or asks the owner
+ *  to re-enter a number that is already on file. The title attribute says
+ *  where to find it instead.
+ */
+function WithheldCell() {
+  return (
+    <span
+      className="text-xs text-subtle italic"
+      title="Office contact details are on the escalation list"
+    >
+      Not shown
+    </span>
+  );
+}
 
 function CopyableId({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
