@@ -352,6 +352,18 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: '"file" — dispatch manually uploads the day\'s manifest each morning.',
     note: '"api" mode is only available if an API integration has been provisioned for your account.',
   },
+  /* The only entry here that is about the PERSON rather than the company's
+     server. "Discord ID" alone is ambiguous between the two, and the account
+     setup screen asks for this one, so the title and the first line of the
+     detail both say whose. */
+  discord_user_id: {
+    title: 'Your Discord User ID',
+    summary: 'Your personal Discord account ID. Not your server\u2019s ID.',
+    detail:
+      'This identifies YOU in Discord, so dispatch can @mention you directly when a route, a truck change or a callout concerns you. It is not your username, and it is not the server (guild) ID your company set up. To find it: in Discord, open User Settings \u2192 Advanced and turn on Developer Mode, then right-click your own name or avatar and choose \u201cCopy User ID.\u201d',
+    example: '"123456789012345678" \u2014 17 to 20 digits, numbers only',
+    note: 'On mobile, tap your avatar, then the three dots, then Copy User ID.',
+  },
   discord_guild_id: {
     title: 'Discord Server ID (Guild ID)',
     summary: 'The numeric ID of your Discord server.',

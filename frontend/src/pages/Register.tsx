@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Lock, Phone, Hash, AlertCircle, HelpCircle, Pencil } from 'lucide-react';
+import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1';
 
@@ -68,24 +69,15 @@ export default function Register() {
   // 'form' | 'review'
   const [step, setStep] = useState<'form' | 'review'>('form');
 
-  const [showDiscordTip, setShowDiscordTip] = useState(false);
-  const tipRef = useRef<HTMLDivElement>(null);
+  // The shared help drawer, as on Company Settings, Preferences and Crew Pins.
+  // This page had its own popover, which was the only hand-rolled help
+  // affordance left in the app.
+  const [helpKey, setHelpKey] = useState<string | null>(null);
 
   const handlePhoneChange = (v: string) => {
     setPhone(formatUSPhone(v));
     setFieldError('');
   };
-
-  useEffect(() => {
-    if (!showDiscordTip) return;
-    const handler = (e: MouseEvent) => {
-      if (tipRef.current && !tipRef.current.contains(e.target as Node)) {
-        setShowDiscordTip(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showDiscordTip]);
 
   useEffect(() => {
     if (!token) {
@@ -269,33 +261,20 @@ export default function Register() {
                 {/* Discord ID */}
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-1.5">
+                    {/* "Discord ID" alone is ambiguous: the company also has a
+                        server (guild) ID, and a new Owner has just been told to
+                        set one up. Say whose. */}
                     <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                      Discord ID <span className="text-danger">*</span>
+                      Your Discord User ID <span className="text-danger">*</span>
                     </label>
-                    <div className="relative" ref={tipRef}>
-                      <button
-                        type="button"
-                        onClick={() => setShowDiscordTip(v => !v)}
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                        aria-label="How to find your Discord ID"
-                      >
-                        <HelpCircle className="w-3.5 h-3.5" />
-                      </button>
-                      {showDiscordTip && (
-                        <div className="absolute left-0 top-6 z-20 w-64 rounded-xl border border-border bg-card shadow-lg p-3 text-xs text-foreground leading-relaxed">
-                          <p className="font-semibold mb-1">How to find your Discord ID</p>
-                          <p className="text-subtle mb-2">Enable Developer Mode in Discord settings, then right-click your profile and select <span className="font-medium text-foreground">Copy User ID</span>.</p>
-                          <a
-                            href="https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary font-medium hover:underline"
-                          >
-                            Step-by-step guide →
-                          </a>
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setHelpKey('discord_user_id')}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="How to find your Discord user ID"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                   <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
                     <span className="flex items-center px-3 text-muted-foreground bg-accent/60 border-r border-border shrink-0">
@@ -315,7 +294,7 @@ export default function Register() {
                   {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
                     <p className="text-xs text-danger">Must be a numeric snowflake ID (17-20 digits only).</p>
                   )}
-                  <p className="text-xs text-subtle">Your numeric Discord user ID, used for dispatch notifications.</p>
+                  <p className="text-xs text-subtle">Your own account\u2019s numeric ID, so dispatch can @mention you. Not the server ID.</p>
                 </div>
 
                 {/* Phone */}
@@ -428,6 +407,8 @@ export default function Register() {
           <span className="font-semibold text-muted-foreground">No self-signup.</span>
         </p>
       </div>
+
+      <SettingsHelpDrawer fieldKey={helpKey} onClose={() => setHelpKey(null)} />
     </div>
   );
 }
