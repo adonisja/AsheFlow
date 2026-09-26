@@ -80,6 +80,20 @@ export function formatZone(tz: string): string {
 /** Accepts what the API actually returns: an ISO string, an epoch, or a Date. */
 type Dateish = string | number | Date | null | undefined;
 
+/** `YYYY-MM-DD` with nothing after it — a calendar date, not an instant. */
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** True when the input carries a date but no time of day.
+ *
+ *  A time formatter must not invent one. `new Date('2026-09-26')` has a
+ *  perfectly real `getHours()` of 0, so "at 12:00 AM" renders as though the
+ *  event happened at midnight -- the same failure as epoch 0 standing in for a
+ *  null timestamp: absent data wearing a plausible value.
+ */
+function isDateOnly(d: Dateish): boolean {
+  return typeof d === 'string' && DATE_ONLY.test(d.trim());
+}
+
 function toDate(d: Dateish): Date | null {
   // NULL MUST BE CHECKED BEFORE `new Date()`, which coerces null to epoch 0 --
   // a perfectly valid Date that NaN-checks clean and renders "Dec. 31, 1969".
@@ -96,7 +110,7 @@ function toDate(d: Dateish): Date | null {
   // These come from the API as calendar dates (a dispatch date, a created_at
   // day), not instants, so they are constructed in LOCAL time instead.
   if (typeof d === 'string') {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d.trim());
+    const m = DATE_ONLY.exec(d.trim());
     if (m) {
       const [y, mo, day] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
       const v = new Date(y, mo, day);
@@ -149,6 +163,7 @@ export function formatDate(d: Dateish): string {
 export function formatDateTime(d: Dateish): string {
   const v = toDate(d);
   if (!v) return '—';
+  if (isDateOnly(d)) return formatDate(v);   // no time to show; do not invent one
   const time = v.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   return `${formatDate(v)} at ${time}`;
 }
@@ -194,6 +209,7 @@ export function formatDayHeaderFull(d: Dateish): string {
 export function formatDateTimeShort(d: Dateish): string {
   const v = toDate(d);
   if (!v) return '—';
+  if (isDateOnly(d)) return formatMonthDay(v);   // as above: no invented midnight
   const time = v.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   return `${apMonth(v)} ${v.getDate()}, ${time}`;
 }
