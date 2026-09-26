@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { formatDateTime } from '../../utils/date';
 import { AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -37,7 +38,7 @@ function typeLabel(t: string): string {
 function fmt(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  return formatDateTime(d);
 }
 
 /** "3 minutes ago" beats a timestamp for "is this still happening". */

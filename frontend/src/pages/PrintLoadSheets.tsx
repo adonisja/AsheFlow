@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import type { RostersResponse, TruckRoster, RosterTote } from '../api/types';
-import { getLocalYMD } from '../utils/date';
+import { formatDayHeaderFull, getLocalYMD } from '../utils/date';
 
 /**
  * Printable per-truck load sheets (ADR-174) — the driver's physical manifest.
@@ -100,9 +100,7 @@ function Sheet({ roster, date, accent, finalized }: {
     else aisles.push({ aisle, totes: [t] });
   });
 
-  const niceDate = new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-  });
+  const niceDate = formatDayHeaderFull(date);
 
   return (
     <div className="sheet" style={{ padding: '20px 28px' }}>

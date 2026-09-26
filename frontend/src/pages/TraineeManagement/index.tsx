@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
-import { getLocalYMD } from '../../utils/date';
+import { formatDate, formatDateShort, getLocalYMD } from '../../utils/date';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -285,7 +285,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
             </p>
           </div>
           <p className="text-subtle">
-            Last sent {new Date(existing.updated_at).toLocaleDateString()}
+            Last sent {formatDate(existing.updated_at)}
           </p>
         </div>
       ) : (
@@ -463,9 +463,7 @@ function HistoryView({
                         <div>
                           <span className="font-semibold text-foreground text-sm">
                             Day {record.current_day_number} &middot;{' '}
-                            {new Date(record.record_date + 'T00:00:00').toLocaleDateString('en-US', {
-                              weekday: 'short', month: 'short', day: 'numeric',
-                            })}
+                            {formatDateShort(record.record_date)}
                           </span>
                           {record.trainer_id && (
                             <span className="text-xs text-muted-foreground ml-2">

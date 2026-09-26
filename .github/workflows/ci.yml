@@ -141,6 +141,14 @@ jobs:
       - name: Operator copy style
         run: python scripts/check_ui_copy_style.py
 
+      # A bare toLocaleDateString() renders "9/26/2026" -- ambiguous outside the
+      # US and shaped like an ID. Worse, `new Date('2026-09-26')` parses as UTC
+      # midnight and renders in LOCAL time, so a calendar date shows the
+      # previous day west of Greenwich. utils/date.ts fixes both in one place;
+      # this keeps call sites from reintroducing either (ADR-453).
+      - name: Dates go through the shared formatter
+        run: python scripts/check_date_formatting.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit

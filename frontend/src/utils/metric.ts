@@ -8,6 +8,7 @@
  *
  * Always route nullable metrics through these helpers rather than `?? 0`.
  */
+import { formatMonthDay } from './date';
 
 const DASH = '—';
 
@@ -59,7 +60,7 @@ export function shortDate(iso: string | null | undefined): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? DASH
-    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    : formatMonthDay(d);
 }
 
 /** Trend direction → arrow + label. null trend means "not enough data". */
