@@ -11,7 +11,7 @@ import axiosClient from '../api/axiosClient';
 import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mail, Info, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
 import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse, ClearDispatchResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { getLocalYMD } from '../utils/date';
+import { getLocalYMD, formatZone } from '../utils/date';
 import PreviousAssignments from '../components/PreviousAssignments';
 import { useNotificationContext } from '../contexts/NotificationContext';
 
@@ -1450,7 +1450,7 @@ function CurrentAssignments() {
               {selectedDate}
             </span>
             {companyTimezone && (
-              <span className="text-xs text-muted-foreground whitespace-nowrap">({companyTimezone})</span>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">({formatZone(companyTimezone)})</span>
             )}
           </div>
           {isAdmin && (

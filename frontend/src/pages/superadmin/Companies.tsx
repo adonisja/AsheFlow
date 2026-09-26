@@ -8,6 +8,7 @@ import {
   ShieldCheck, ShieldAlert, X, UserX,
 } from 'lucide-react';
 import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
+import { formatZone, zoneOffset } from '../../utils/date';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import StatCard from '../../components/ui/StatCard';
@@ -18,16 +19,23 @@ import { SkeletonCard } from '../../components/ui/Skeleton';
 // Types
 // ---------------------------------------------------------------------------
 
-/** The timezones a DSP can operate in. Shared so the create form and the
- *  company detail editor cannot drift apart. */
+
+/** The timezones a DSP can operate in, grouped by region.
+ *
+ *  Shared so the create form and the company detail editor cannot drift apart.
+ *  Grouped because a flat list of "America/..." strings makes the reader parse
+ *  a path prefix that carries no information once the heading says it.
+ */
 export const TIMEZONES: SelectOption[] = [
-  { value: 'America/New_York',    label: 'America/New_York (ET)' },
-  { value: 'America/Chicago',     label: 'America/Chicago (CT)' },
-  { value: 'America/Denver',      label: 'America/Denver (MT)' },
-  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (PT)' },
-  { value: 'America/Phoenix',     label: 'America/Phoenix (AZ)' },
-  { value: 'America/Anchorage',   label: 'America/Anchorage (AKT)' },
-  { value: 'Pacific/Honolulu',    label: 'Pacific/Honolulu (HT)' },
+  { value: '_us', label: 'United States', header: true },
+  { value: 'America/New_York',    label: 'New York',    hint: zoneOffset('America/New_York') },
+  { value: 'America/Chicago',     label: 'Chicago',     hint: zoneOffset('America/Chicago') },
+  { value: 'America/Denver',      label: 'Denver',      hint: zoneOffset('America/Denver') },
+  { value: 'America/Phoenix',     label: 'Phoenix',     hint: zoneOffset('America/Phoenix') },
+  { value: 'America/Los_Angeles', label: 'Los Angeles', hint: zoneOffset('America/Los_Angeles') },
+  { value: '_nc', label: 'Non-contiguous', header: true },
+  { value: 'America/Anchorage',   label: 'Anchorage',   hint: zoneOffset('America/Anchorage') },
+  { value: 'Pacific/Honolulu',    label: 'Honolulu',    hint: zoneOffset('Pacific/Honolulu') },
 ];
 
 interface Company {
@@ -476,7 +484,7 @@ function CompanyRow({
               {company.amazon_dsp_code && (
                 <span className="text-xs text-muted-foreground">{company.amazon_dsp_code}</span>
               )}
-              <span className="text-xs text-muted-foreground">{company.timezone}</span>
+              <span className="text-xs text-muted-foreground">{formatZone(company.timezone)}</span>
               <span className="text-xs text-muted-foreground">
                 Created {new Date(company.created_at).toLocaleDateString()}
               </span>

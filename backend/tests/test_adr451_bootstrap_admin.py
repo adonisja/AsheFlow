@@ -358,6 +358,66 @@ class TestTheSuperAdminUsesTheHouseDropdown:
         for page in self.PAGES:
             assert "SelectMenu" in page.read_text(), f"{page.name} has no SelectMenu"
 
+    def test_the_offsets_are_computed_not_hardcoded(self):
+        """Half these zones shift twice a year, and not together.
+
+        Today Denver is MDT and Phoenix is MST — both UTC-7 — and in January
+        they diverge again. A written-down offset is wrong for roughly half the
+        year, silently, in a field whose whole job is to be unambiguous about
+        time.
+        """
+        # The computation moved to utils/date.ts when four display sites
+        # needed it too; the picker imports it rather than keeping a copy.
+        util = (ROOT / "frontend" / "src" / "utils" / "date.ts").read_text()
+        assert "Intl.DateTimeFormat" in util and "timeZoneName" in util, (
+            "timezone offsets are not computed from Intl — a hardcoded table "
+            "goes wrong at every DST transition"
+        )
+        src = self.PAGES[0].read_text()
+        # A literal offset beside a city name is the smell this guards against.
+        import re
+        assert not re.search(r"label: '(?:New York|Chicago|Denver)[^']*UTC-\d", src), \
+            "an offset is hardcoded into a label"
+
+    def test_every_display_site_formats_the_zone(self):
+        """Four pages SHOW a company timezone. A raw "America/New_York" is a
+        path, not a label, and four sites rendering it four ways is how a
+        format drifts."""
+        import re
+        sites = [
+            ROOT / "frontend" / "src" / "components" / "dashboard" / "ManagementView.tsx",
+            ROOT / "frontend" / "src" / "pages" / "DispatchDashboard.tsx",
+            ROOT / "frontend" / "src" / "pages" / "superadmin" / "CompanyDetail.tsx",
+            ROOT / "frontend" / "src" / "pages" / "superadmin" / "Companies.tsx",
+        ]
+        # A zone INTERPOLATED INTO TEXT: `>{...timezone}` or `({...timezone})`.
+        # `value={timezone}` and `onChange={setTimezone}` are props, not text.
+        rendered_re = re.compile(r"[>(]\s*\{\s*[a-zA-Z.]*[Tt]imezone\s*\}")
+        for f in sites:
+            src = f.read_text()
+            hits = rendered_re.findall(src)
+            assert not hits, (
+                f"{f.name} renders a raw IANA string {hits} — it is a path, "
+                "not a label (use formatZone)"
+            )
+            if "imezone" in src:
+                assert "formatZone" in src, f"{f.name} shows a zone without formatZone"
+
+    def test_the_formatter_lives_in_one_place(self):
+        """It was briefly duplicated between the picker and the display sites."""
+        date_util = (ROOT / "frontend" / "src" / "utils" / "date.ts").read_text()
+        assert "export function zoneOffset" in date_util
+        assert "export function formatZone" in date_util
+        companies = self.PAGES[0].read_text()
+        assert "function zoneHint" not in companies, \
+            "the picker keeps a private copy of the offset logic"
+
+    def test_the_zones_are_grouped_under_headers(self):
+        """A flat list makes the reader parse an "America/" path prefix that
+        carries no information once a heading says it."""
+        src = self.PAGES[0].read_text()
+        assert "header: true" in src, "the timezone list has no group headings"
+
     def test_the_timezone_list_is_defined_once(self):
         """Two copies drift: one page gains a zone and the other does not."""
         companies, detail = self.PAGES

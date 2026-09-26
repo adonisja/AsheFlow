@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import SelectMenu from '../../components/ui/SelectMenu';
 import { TIMEZONES } from './Companies';
+import { formatZone } from '../../utils/date';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 
@@ -589,7 +590,7 @@ function IdentityCard({
               {detail.amazon_dsp_code && (
                 <span className="text-xs text-muted-foreground">{detail.amazon_dsp_code}</span>
               )}
-              <span className="text-xs text-muted-foreground">{detail.timezone}</span>
+              <span className="text-xs text-muted-foreground">{formatZone(detail.timezone)}</span>
               <span className="text-xs text-muted-foreground">
                 Created {new Date(detail.created_at).toLocaleDateString()}
               </span>
