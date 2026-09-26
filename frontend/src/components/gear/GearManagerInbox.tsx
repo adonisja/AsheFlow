@@ -1,4 +1,5 @@
 import { errorText } from '../../utils/errorText';
+import { formatDateTimeShort } from '../../utils/date';
 import React, { useEffect, useState, useCallback } from 'react';
 import { CheckCircle2, XCircle, Package, Loader2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -77,10 +78,7 @@ function StatusBadge({ status }: { status: GearItemResponse['status'] }) {
 }
 
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+  return formatDateTimeShort(iso);
 }
 
 function roleBadge(role: string) {

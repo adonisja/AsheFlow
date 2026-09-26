@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/date';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, XCircle, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
@@ -162,7 +163,7 @@ export default function GraduationQuizReview() {
 
       <SectionHeader
         title={`Quiz Review — ${quiz.trainee_name ?? 'Trainee'}`}
-        description={`Attempt ${quiz.attempt_number} · Submitted ${quiz.submitted_at ? new Date(quiz.submitted_at).toLocaleDateString() : '—'}`}
+        description={`Attempt ${quiz.attempt_number} · Submitted ${quiz.submitted_at ? formatDate(quiz.submitted_at) : '—'}`}
       />
 
       {error && <ErrorBanner message={error} />}

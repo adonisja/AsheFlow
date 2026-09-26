@@ -1,4 +1,5 @@
 import { errorText } from '../utils/errorText';
+import { formatDate } from '../utils/date';
 import { useState, useEffect, useCallback } from 'react';
 import {
   Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw, Upload,
@@ -521,7 +522,7 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
               {profile.initial_anchor_set_by_name && (
                 <p className="text-[10px] text-muted-foreground">
                   Set by {profile.initial_anchor_set_by_name}
-                  {profile.initial_anchor_set_at ? ` · ${new Date(profile.initial_anchor_set_at).toLocaleDateString()}` : ''}
+                  {profile.initial_anchor_set_at ? ` · ${formatDate(profile.initial_anchor_set_at)}` : ''}
                 </p>
               )}
             </div>
@@ -532,7 +533,7 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
             </div>
           )}
 
-          <p className="text-xs text-muted-foreground">Submitted by {profile.submitted_by_name} · {new Date(profile.created_at).toLocaleDateString()}</p>
+          <p className="text-xs text-muted-foreground">Submitted by {profile.submitted_by_name} · {formatDate(profile.created_at)}</p>
 
           {/* Actions */}
           <div className="flex flex-wrap gap-2 pt-1">

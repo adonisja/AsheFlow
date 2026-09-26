@@ -1,4 +1,5 @@
 import { errorText } from '../utils/errorText';
+import { formatDate } from '../utils/date';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -489,7 +490,7 @@ const ScheduleChanges = () => {
                   {req.proposed_schedule?.length > 0 && <span className="text-subtle">New schedule: {req.proposed_schedule.join(', ')}</span>}
                 </div>
                 {req.reason && <p className="text-xs text-subtle">"{req.reason}"</p>}
-                <p className="text-xs text-subtle">{new Date(req.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                <p className="text-xs text-subtle">{formatDate(req.created_at)}</p>
               </li>
             ))}
           </ul>

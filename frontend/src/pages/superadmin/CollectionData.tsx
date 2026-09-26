@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatDate, formatDateTime } from '../../utils/date';
 import * as XLSX from 'xlsx';
 import {
   ClipboardList, RefreshCw, Plus, Ban, Copy, Check, Upload, Lock, Trash2,
@@ -201,7 +202,7 @@ function SortableTh({ label, col, sortKey, sortDir, onSort }: {
 const fmt = (iso: string | null): string => {
   if (!iso) return '—';
   const d = new Date(iso);
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  return formatDateTime(d);
 };
 
 /** CSV escape: quote always, double interior quotes. Addresses carry commas and
@@ -811,7 +812,7 @@ export default function CollectionData({ platform = true }: {
                         {' · '}
                         {t.submission_count} total · cap {t.daily_cap}/day
                         {dead && ' · revoked'}
-                        {!dead && t.expires_at && ` · expires ${new Date(t.expires_at).toLocaleDateString()}`}
+                        {!dead && t.expires_at && ` · expires ${formatDate(t.expires_at)}`}
                         {t.created_by_name && ` · ${t.created_by_name}`}
                       </span>
                     </button>

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import type { RemovalsResponse } from '../api/types';
-import { getLocalYMD } from '../utils/date';
+import { formatDayHeaderFull, getLocalYMD } from '../utils/date';
 
 /**
  * Printable Returns Manifest (ADR-176) — the paper trail for handing
@@ -44,9 +44,7 @@ export default function ReturnsManifestPrint() {
 
   const totalPkgs = data.removals.reduce((n, r) => n + r.package_count, 0);
   const pending = data.flagged_count;
-  const niceDate = new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-  });
+  const niceDate = formatDayHeaderFull(date);
 
   return (
     <div id="returns-manifest">
