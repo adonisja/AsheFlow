@@ -75,7 +75,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
         f"Your AsheFlow account is now active. Join the team Discord server using the link below:\n\n"
         f"{invite_url}\n\n"
         f"This invite is single-use and expires in 7 days.\n\n"
-        f"– The AsheFlow Team"
+        f"The AsheFlow Team"
     )
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -156,8 +156,8 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
         f"  Temporary password: {temp_password}\n\n"
         f"Sign in at: {login_url}\n\n"
         f"You will be prompted to set a new password on your first login.\n"
-        f"Keep your credentials safe — do not share them.\n\n"
-        f"– The AsheFlow Team"
+        f"Keep your credentials safe. Do not share them.\n\n"
+        f"The AsheFlow Team"
     )
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -286,7 +286,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
         f"Click the link below to set up your username and password:\n"
         f"{register_url}\n\n"
         f"This link expires in {settings.invite_expiry_days} days.\n\n"
-        f"– The AsheFlow Team"
+        f"The AsheFlow Team"
     )
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -354,6 +354,132 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
         raise
 
 
+def send_owner_invite_email(
+    *, to_email: str, owner_name: str, company_name: str, token: str
+) -> None:
+    """The FIRST account in a company — its Owner. Deliberately not send_invite_email.
+
+    That template says "Your manager has created an AsheFlow account for you",
+    which is false twice over here: there is no manager yet (this is the first
+    account in the tenant), and a manager could not create an Owner regardless —
+    only a platform super-admin can. An Owner reading it would reasonably
+    wonder who "your manager" is, and the answer is nobody.
+
+    It is also the wrong FRAME. The employee invite tells someone their account
+    is ready; this one hands over a company. The copy says what the recipient
+    is receiving and what they will be expected to do with it, because the
+    person opening it is about to become responsible for everyone else's
+    accounts.
+
+    Visually it uses the actual brand: navy (#1B2A6B, `primary`) as the field,
+    violet (#8517D3, `brand`) as the accent on the one thing to click. The
+    employee template's full-bleed violet-to-purple gradient uses the accent as
+    the entire identity, which is why it reads as somebody else's email.
+    """
+    register_url = f"{settings.app_base_url}/register?token={token}"
+    first_name, first_name_html = _greeting_name(owner_name)
+    company_html = html.escape(company_name)
+
+    subject = f"Welcome to AsheFlow, {first_name}"
+    body_text = (
+        f"Hi {first_name},\n\n"
+        f"Welcome to AsheFlow. {company_name} has an account now, and it is "
+        f"yours to run.\n\n"
+        f"Your next step is to set the company up. Choose a password, then "
+        f"bring in your dispatchers, drivers and walkers, set what each of "
+        f"them can see, and tell AsheFlow how your day runs.\n\n"
+        f"Get started here:\n"
+        f"{register_url}\n\n"
+        f"The link works for {settings.invite_expiry_days} days.\n\n"
+        f"The AsheFlow Team"
+    )
+    body_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F9F9FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F9F9FB;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+
+        <tr><td style="background:#1B2A6B;border-radius:14px 14px 0 0;padding:28px 40px;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="padding-right:10px;">
+              <div style="width:30px;height:30px;background:#8517D3;border-radius:8px;text-align:center;line-height:30px;">
+                <span style="color:#fff;font-size:13px;font-weight:700;">AF</span>
+              </div>
+            </td>
+            <td><span style="color:#fff;font-size:17px;font-weight:600;letter-spacing:-0.2px;">AsheFlow</span></td>
+          </tr></table>
+        </td></tr>
+
+        <tr><td style="background:#ffffff;padding:36px 40px 32px;border-left:1px solid #DCDFE5;border-right:1px solid #DCDFE5;">
+          <p style="margin:0 0 6px;font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8517D3;">
+            {company_html}
+          </p>
+          <h1 style="margin:0 0 14px;font-size:23px;line-height:1.25;font-weight:700;color:#111522;">
+            Welcome, {first_name_html}.
+          </h1>
+          <p style="margin:0 0 20px;font-size:15px;color:#4B5563;line-height:1.6;">
+            {company_html} has an account on AsheFlow now, and it is yours to run.
+          </p>
+          <p style="margin:0 0 24px;font-size:15px;color:#4B5563;line-height:1.6;">
+            Your next step is to set the company up. Choose a password, then bring in
+            your dispatchers, drivers and walkers, set what each of them can see, and
+            tell AsheFlow how your day runs.
+          </p>
+
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding:4px 0 22px;">
+              <a href="{register_url}"
+                 style="display:inline-block;background:#8517D3;color:#ffffff;text-decoration:none;
+                        font-size:15px;font-weight:600;padding:13px 34px;border-radius:9px;">
+                Set up your company
+              </a>
+            </td></tr>
+          </table>
+
+          <p style="margin:0 0 6px;font-size:12px;color:#6B7280;text-align:center;">
+            Or paste this link into your browser:
+          </p>
+          <p style="margin:0;font-size:12px;text-align:center;word-break:break-all;">
+            <a href="{register_url}" style="color:#8517D3;text-decoration:none;">{register_url}</a>
+          </p>
+        </td></tr>
+
+        <tr><td style="background:#F9F9FB;border:1px solid #DCDFE5;border-top:none;border-radius:0 0 14px 14px;padding:18px 40px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#6B7280;line-height:1.6;">
+            The link works for {settings.invite_expiry_days} days.
+            If you weren't expecting this, you can ignore this email.<br>
+            &copy; AsheFlow &middot; Field operations, simplified
+          </p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+    client = boto3.client("ses", region_name=settings.aws_region)
+    try:
+        client.send_email(
+            **_configuration_set_kwargs(),
+            Source=settings.ses_from_email,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": body_text, "Charset": "UTF-8"},
+                    "Html": {"Data": body_html,  "Charset": "UTF-8"},
+                },
+            },
+        )
+        logger.info("Owner invite email sent to %s", to_email)
+    except ClientError as e:
+        _log_ses_failure(to_email, e)
+        raise
+
+
 def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
                          company_name: str) -> None:
     """Tell a company admin to authorise the bot in their Discord server (ADR-448 D4).
@@ -377,11 +503,11 @@ def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
         f"join that server.\n\n"
         f"{invite_url}\n\n"
         f"Until the bot is in the server, dispatch notifications, crew rooms and "
-        f"employee Discord invites will not work — even though your settings are "
+        f"employee Discord invites will not work, even though your settings are "
         f"correct.\n\n"
         f"If you are not the Discord admin for {company_name}, forward this link "
         f"to whoever is.\n\n"
-        f"— AsheFlow"
+        f"The AsheFlow Team"
     )
 
     body_html = f"""<!DOCTYPE html>
@@ -419,7 +545,7 @@ def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
             <tr><td style="padding:14px 18px;">
               <p style="margin:0;font-size:13px;color:#9a5b1e;line-height:1.6;">
                 Until the bot is in the server, dispatch notifications, crew rooms
-                and employee Discord invites will not work &mdash; even though your
+                and employee Discord invites will not work, even though your
                 settings are correct.
               </p>
             </td></tr>
@@ -481,7 +607,7 @@ def send_owner_email_change_email(*, to_email: str, owner_name: str, token: str,
         f"nothing changes and your current address keeps working.\n\n"
         f"If you were not expecting this, ignore this email. No change happens "
         f"without the link.\n\n"
-        f"— AsheFlow"
+        f"The AsheFlow Team"
     )
 
     body_html = f"""<!DOCTYPE html>
