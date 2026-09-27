@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { CheckCircle2, Lock, Phone, Hash, AlertCircle, HelpCircle, Pencil } from 'lucide-react';
+import { CheckCircle2, Lock, Mail, Phone, Hash, AlertCircle, HelpCircle, Pencil } from 'lucide-react';
 import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1';
@@ -176,24 +176,98 @@ export default function Register() {
   // ── Done screen ───────────────────────────────────────────────────────────
   if (done) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background px-4">
-        <div className="max-w-sm w-full space-y-6 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-success/10 flex items-center justify-center mx-auto">
-            <CheckCircle2 className="w-8 h-8 text-success" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">You're all set!</h1>
-            <p className="text-sm text-muted-foreground mt-1">Your account has been created.</p>
+      /* The end of the flow, so it keeps the flow's furniture: the same brand
+         mark, the same max-w-md card, and both step dots filled. Dropping them
+         made the last screen look like a different product, and floating a
+         max-w-sm card in an empty viewport read as an error page rather than a
+         success. */
+      <div className="min-h-screen bg-background flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-md space-y-6 animate-slide-up">
+
+          {/* Brand mark — identical to the other steps */}
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary shadow-lg shadow-primary/30 mx-auto">
+              <span className="text-primary-foreground text-xl font-extrabold tracking-tight">AF</span>
+            </div>
+            <div>
+              <h1 className="text-2xl font-extrabold text-foreground tracking-tight">AsheFlow</h1>
+              <p className="text-sm text-muted-foreground">Field operations, simplified</p>
+            </div>
           </div>
 
-          <div className="card p-4 text-left space-y-2">
-            <p className="text-sm text-foreground">
-              An email has been sent to <span className="font-semibold">{tokenInfo!.email}</span> with your username and a temporary password.
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Open that email, then return here to sign in. You'll be prompted to set a new password on first login.
-            </p>
+          <div className="card p-0 overflow-hidden">
+            <div className="bg-success/10 border-b border-success/20 px-6 py-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-success/15 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-5 h-5 text-success" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-bold text-foreground tracking-tight">
+                      You&apos;re all set, {tokenInfo!.name.trim().split(/\s+/)[0]}.
+                    </h2>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Your account is ready.
+                    </p>
+                  </div>
+                </div>
+                {/* Both dots filled: the flow is finished, not abandoned. */}
+                <div className="flex items-center gap-1.5 shrink-0 pt-2" aria-hidden>
+                  <span className="w-6 h-1.5 rounded-full bg-success" />
+                  <span className="w-6 h-1.5 rounded-full bg-success" />
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-5 space-y-5">
+              {/* The username is already known here and was previously thrown
+                  away. It is what they type to sign in, and the email can be
+                  slow or filtered -- so it is shown rather than only mailed. */}
+              <div className="rounded-xl border border-border bg-accent/30 overflow-hidden">
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <span className="text-xs text-muted-foreground shrink-0">Username</span>
+                  <span className="text-sm font-mono font-semibold text-foreground truncate">
+                    {done.username}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                  One more step
+                </p>
+                <ol className="space-y-2.5">
+                  <li className="flex items-start gap-2.5">
+                    <Mail className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <span className="text-sm text-foreground">
+                      Open the email we sent to{' '}
+                      <span className="font-medium">{tokenInfo!.email}</span> for your
+                      temporary password.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <Lock className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <span className="text-sm text-foreground">
+                      Sign in with it, then choose a password of your own.
+                    </span>
+                  </li>
+                </ol>
+              </div>
+
+              {/* Previously the screen said "return here to sign in" and gave
+                  them nothing to click. */}
+              <a
+                href="/login"
+                className="btn-primary w-full py-2.5 flex items-center justify-center gap-2"
+              >
+                Go to sign in
+              </a>
+            </div>
           </div>
+
+          <p className="text-center text-xs text-subtle">
+            No email after a few minutes? Check spam, then ask your admin to resend it.
+          </p>
         </div>
       </div>
     );

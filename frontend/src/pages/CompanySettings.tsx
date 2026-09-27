@@ -32,13 +32,6 @@ interface CompanyConfig {
   phase4_pass_score: number | null;
   underperforming_trainer_threshold: number | null;
   max_training_phase: number | null;
-  dispatch_weight_driver: number | null;
-  dispatch_weight_trainer: number | null;
-  dispatch_weight_walker: number | null;
-  dispatch_mutual_bonus: number | null;
-  dispatch_tridirectional_bonus: number | null;
-  dispatch_consecutive_penalty: number | null;
-  dispatch_weight_cap: number | null;
   flag_threshold: number | null;
   driver_checkin_count: number | null;
   late_window_minutes: number | null;
@@ -121,13 +114,6 @@ const TRAINING_RULES: FieldMeta[] = [
 ];
 
 const DISPATCH_WEIGHTS: FieldMeta[] = [
-  { key: 'dispatch_weight_driver', label: 'Driver Preference Weight', type: 'float', required: true, description: 'Influence of driver preference history.', placeholder: '0.70', min: 0, max: 1, step: 0.01 },
-  { key: 'dispatch_weight_trainer', label: 'Trainer Preference Weight', type: 'float', required: true, description: 'Influence of trainer preference history.', placeholder: '0.50', min: 0, max: 1, step: 0.01 },
-  { key: 'dispatch_weight_walker', label: 'Walker Preference Weight', type: 'float', required: true, description: 'Influence of walker preference history.', placeholder: '0.30', min: 0, max: 1, step: 0.01 },
-  { key: 'dispatch_mutual_bonus', label: 'Mutual Preference Bonus', type: 'float', required: true, description: 'Score bonus for mutual two-way preferences.', placeholder: '0.10', min: 0, max: 1, step: 0.01 },
-  { key: 'dispatch_tridirectional_bonus', label: 'Three-Way Preference Bonus', type: 'float', required: true, description: 'Score bonus for all-three-way mutual preferences.', placeholder: '0.20', min: 0, max: 1, step: 0.01 },
-  { key: 'dispatch_consecutive_penalty', label: 'Consecutive Truck Penalty', type: 'float', required: true, description: 'Deduction for same crew on same truck back-to-back.', placeholder: '0.05', min: 0, max: 1, step: 0.01 },
-  { key: 'dispatch_weight_cap', label: 'Max Preference Score Cap', type: 'float', required: true, description: 'Ceiling on any preference score contribution.', placeholder: '0.85', min: 0, max: 1, step: 0.01 },
 ];
 
 const WALKER_RATING: FieldMeta[] = [
@@ -214,9 +200,7 @@ const CONFIG_KEYS: string[] = [
   'shift_start', 'shift_end', 'checkin_open', 'checkin_close', 'dispatch_confirmation_cutoff',
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'phase4_pass_score', 'underperforming_trainer_threshold', 'max_training_phase',
-  'dispatch_weight_driver', 'dispatch_weight_trainer', 'dispatch_weight_walker',
-  'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus', 'dispatch_consecutive_penalty',
-  'dispatch_weight_cap', 'flag_threshold', 'driver_checkin_count',
+  'flag_threshold', 'driver_checkin_count',
   'late_window_minutes', 'ncns_cutoff_minutes',
   'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
   'scorecard_dcr_target', 'scorecard_dnr_dpmo_target', 'scorecard_pod_target',
@@ -241,9 +225,7 @@ const INT_FIELDS = new Set([
   'scorecard_dnr_dpmo_target', 'scorecard_dsb_dpmo_target', 'scorecard_fico_target',
 ]);
 const FLOAT_FIELDS = new Set([
-  'phase4_pass_score', 'dispatch_weight_driver', 'dispatch_weight_trainer',
-  'dispatch_weight_walker', 'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus',
-  'dispatch_consecutive_penalty', 'dispatch_weight_cap', 'flag_threshold',
+  'phase4_pass_score', 'flag_threshold',
   'effort_time_factor', 'effort_physical_factor',
   'scorecard_dcr_target', 'scorecard_pod_target', 'scorecard_cc_target',
   'scorecard_cdf_target', 'scorecard_speeding_rate_target',
@@ -254,9 +236,7 @@ const STRING_FIELDS = new Set(['ingestion_mode']);
 const REQUIRED_KEYS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'phase4_pass_score', 'underperforming_trainer_threshold', 'max_training_phase',
-  'dispatch_weight_driver', 'dispatch_weight_trainer', 'dispatch_weight_walker',
-  'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus', 'dispatch_consecutive_penalty',
-  'dispatch_weight_cap', 'flag_threshold',
+  'flag_threshold',
 ]);
 
 function configToFormValues(config: CompanyConfig): Record<string, string> {
@@ -546,13 +526,6 @@ const SETUP_DEFAULTS: Record<string, string> = {
   phase4_pass_score: '90.0',
   underperforming_trainer_threshold: '3',
   max_training_phase: '4',
-  dispatch_weight_driver: '0.70',
-  dispatch_weight_trainer: '0.50',
-  dispatch_weight_walker: '0.30',
-  dispatch_mutual_bonus: '0.10',
-  dispatch_tridirectional_bonus: '0.20',
-  dispatch_consecutive_penalty: '0.05',
-  dispatch_weight_cap: '0.85',
   flag_threshold: '1.0',
   driver_checkin_count: '4',
   effort_time_factor: '0.5',

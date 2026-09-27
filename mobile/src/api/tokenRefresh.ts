@@ -17,6 +17,20 @@ const CLIENT_ID = COGNITO_CLIENT_ID ?? '';
 /** Force re-login after this much inactivity (a full shift + margin). */
 export const INACTIVITY_LIMIT_MS = 12 * 60 * 60 * 1000;
 
+/** Hard cap on one sign-in, regardless of activity (ADR-463 D6).
+ *
+ *  The inactivity window alone bounds nothing for a daily user: a walker who
+ *  opens the app every morning refreshes forever, limited only by the 30-day
+ *  refresh token. SP 800-63-4 makes establishing an overall timeout a SHALL,
+ *  and there was none here.
+ *
+ *  24h, matching the web FIELD tier -- this app is walkers, drivers, captains
+ *  and field supervisors. It deliberately does NOT carry the web's 12h/30min
+ *  privileged rule: nobody privileged is expected here, and importing that
+ *  tier would sign a walker out mid-shift for a threat this app does not run.
+ */
+export const ABSOLUTE_SESSION_LIMIT_MS = 24 * 60 * 60 * 1000;
+
 /** Refresh when the ID token has less than this long left. */
 const EXPIRY_MARGIN_MS = 5 * 60 * 1000;
 
@@ -28,13 +42,39 @@ const KEYS = [
 ];
 
 export function tokenExpiresAt(idToken: string): number {
+  return claimMs(idToken, 'exp');
+}
+
+/** When the user actually AUTHENTICATED, in ms. 0 when unreadable.
+ *
+ *  The anchor for the absolute cap. Not the token's issue time: a refresh
+ *  mints a new token with a new `iat`, so anchoring there restarts the clock
+ *  on every refresh and the cap never fires. `auth_time` survives refreshes.
+ */
+export function tokenAuthTime(idToken: string): number {
+  return claimMs(idToken, 'auth_time');
+}
+
+function claimMs(idToken: string, claim: 'exp' | 'auth_time'): number {
   try {
     const base64 = idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
     const payload = JSON.parse(atob(base64));
-    return (payload.exp ?? 0) * 1000;
+    return (payload[claim] ?? 0) * 1000;
   } catch {
     return 0;
   }
+}
+
+/** True when this sign-in has outlived the absolute cap (ADR-463 D6).
+ *
+ *  A missing or unreadable auth_time returns FALSE -- an unexpected token
+ *  shape must not sign a walker out mid-route. The inactivity window still
+ *  applies, so the session is not unbounded even then.
+ */
+export function isPastAbsoluteLimit(idToken: string): boolean {
+  const authTime = tokenAuthTime(idToken);
+  if (!authTime) return false;
+  return Date.now() - authTime >= ABSOLUTE_SESSION_LIMIT_MS;
 }
 
 export async function touchLastActive(): Promise<void> {
@@ -63,6 +103,14 @@ let inflight: Promise<string | null> | null = null;
 export async function getValidIdToken(): Promise<string | null> {
   const idToken = await AsyncStorage.getItem('asheflow_id_token');
   if (!idToken) return null;
+
+  // ADR-463 D6. BEFORE the freshness check, deliberately. A still-valid ID
+  // token is returned unexamined below, so testing the cap after it would let
+  // a session outlive the limit by up to the token's full hour.
+  if (isPastAbsoluteLimit(idToken)) {
+    await clearTokens();
+    return null;
+  }
 
   if (tokenExpiresAt(idToken) - Date.now() > EXPIRY_MARGIN_MS) {
     return idToken;   // still fresh
