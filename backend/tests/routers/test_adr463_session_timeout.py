@@ -12,6 +12,7 @@ POLICY = ROOT / "frontend/src/utils/sessionPolicy.ts"
 HOOK = ROOT / "frontend/src/hooks/useSessionTimeout.ts"
 APP = ROOT / "frontend/src/App.tsx"
 LOGIN = ROOT / "frontend/src/components/auth/Login.tsx"
+MOBILE_TOKENS = ROOT / "mobile/src/api/tokenRefresh.ts"
 
 
 def test_privileged_is_twelve_hours_and_thirty_minutes():
@@ -116,3 +117,49 @@ def test_reading_counts_as_activity():
 def test_activity_clears_a_visible_warning():
     """Making a demonstrably-present user click 'Stay signed in' is theatre."""
     assert "setIdleWarningSeconds(prev =>" in HOOK.read_text()
+
+
+# ── D6: mobile ──────────────────────────────────────────────────────────────
+
+def test_mobile_has_an_absolute_session_cap():
+    """The inactivity window alone bounds nothing for a daily user: a walker
+    who opens the app each morning refreshes forever."""
+    src = MOBILE_TOKENS.read_text()
+    m = re.search(r"ABSOLUTE_SESSION_LIMIT_MS = ([^;]+);", src)
+    assert m, "mobile has no absolute session cap"
+    assert "24 * 60 * 60 * 1000" in m.group(1), f"cap is {m.group(1).strip()}, not 24h"
+
+
+def test_mobile_checks_the_cap_before_the_freshness_shortcut():
+    """getValidIdToken returns a still-valid token unexamined. Testing the cap
+    after that lets a session outlive the limit by up to the token's full hour.
+    """
+    src = MOBILE_TOKENS.read_text()
+    body = src.split("export async function getValidIdToken")[1]
+    cap = body.index("isPastAbsoluteLimit")
+    fresh = body.index("tokenExpiresAt(idToken) - Date.now()")
+    assert cap < fresh, "the absolute cap is checked after the freshness shortcut"
+
+
+def test_mobile_anchors_on_auth_time_not_issue_time():
+    """A refresh mints a token with a new `iat`; anchoring there restarts the
+    clock on every refresh and the cap never fires."""
+    src = MOBILE_TOKENS.read_text()
+    fn = src.split("export function isPastAbsoluteLimit")[1].split("\n}")[0]
+    assert "tokenAuthTime" in fn
+    assert "iat" not in fn
+
+
+def test_a_missing_auth_time_does_not_strand_a_walker():
+    """An unexpected token shape must not sign someone out mid-route."""
+    src = MOBILE_TOKENS.read_text()
+    fn = src.split("export function isPastAbsoluteLimit")[1].split("\n}")[0]
+    assert "if (!authTime) return false;" in fn
+
+
+def test_mobile_does_not_carry_the_privileged_tier():
+    """The app is walkers, drivers, captains and field supervisors. Importing
+    the 12h/30min rule would sign a walker out mid-shift for a threat this app
+    does not run (ADR-463 D6)."""
+    src = MOBILE_TOKENS.read_text()
+    assert "30 * 60 * 1000" not in src, "mobile has picked up the 30-minute idle rule"
