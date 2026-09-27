@@ -356,6 +356,175 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
      server. "Discord ID" alone is ambiguous between the two, and the account
      setup screen asks for this one, so the title and the first line of the
      detail both say whose. */
+  // ── Dispatch preference targets (ADR-356 / ADR-461 D2) ───────────────────
+  //
+  // One entry per tier. They share a shape deliberately: an operator comparing
+  // two tiers should be able to read the same sentence twice with one number
+  // changed, rather than parse two different explanations.
+  //
+  // Every entry says the unit out loud -- "per candidate, per truck" -- because
+  // the obvious misreading is "how often this crew rides together", which would
+  // make 0.80 look broken when the measured outcome is lower.
+  dispatch_target_oneway_weak: {
+    title: 'Target: a walker favours you',
+    summary: 'How often a one-way favour from a walker should place you together.',
+    detail:
+      'A probability per candidate, per truck. It is not a share of the week. Leave blank to use the platform default of 0.22. Raising it makes a walker’s pick pull harder than a trainer’s, which inverts the intended ladder.',
+    example: '0.22 (the platform default)',
+  },
+  dispatch_target_oneway_trainer: {
+    title: 'Target: a trainer favours you',
+    summary: 'How often a one-way favour from a trainer should place you together.',
+    detail:
+      'A probability per candidate, per truck. Default 0.25. Sits just above a walker’s pick: a trainer knows who they can teach beside.',
+    example: '0.25 (the platform default)',
+  },
+  dispatch_target_oneway_captain: {
+    title: 'Target: a captain favours you',
+    summary: 'How often a one-way favour from a captain should place you together.',
+    detail:
+      'A probability per candidate, per truck. Default 0.28. A captain leads the truck, so their pick outranks a walker’s or a trainer’s.',
+    example: '0.28 (the platform default)',
+  },
+  dispatch_target_oneway_driver: {
+    title: 'Target: a driver favours you',
+    summary: 'The strongest one-way signal. How often a driver’s pick should land.',
+    detail:
+      'A probability per candidate, per truck. Default 0.33. The driver controls the day’s route and pace, so a one-way pick from them is the strongest single-direction signal.',
+    example: '0.33 (the platform default)',
+  },
+  dispatch_target_mutual_weak: {
+    title: 'Target: mutual pair',
+    summary: 'Two people who picked each other, neither a driver or captain.',
+    detail:
+      'A probability per candidate, per truck. Default 0.45. Reciprocation is the point: a mutual pair outranks every one-way tier, because both people asked for it.',
+    example: '0.45 (the platform default)',
+  },
+  dispatch_target_mutual_lead_crew: {
+    title: 'Target: mutual with a driver or captain',
+    summary: 'A reciprocated pair where one half leads the truck.',
+    detail:
+      'A probability per candidate, per truck. Default 0.55. A crew lead who wants someone, and is wanted back, shapes the whole day rather than one pairing.',
+    example: '0.55 (the platform default)',
+  },
+  dispatch_target_mutual_driver_trainer: {
+    title: 'Target: mutual driver and trainer',
+    summary: 'A driver and a trainer who picked each other.',
+    detail:
+      'A probability per candidate, per truck. Default 0.60. Less friction for the trainer means they can focus on their paired trainee instead of the route.',
+    example: '0.60 (the platform default)',
+  },
+  dispatch_target_mutual_driver_captain: {
+    title: 'Target: mutual driver and captain',
+    summary: 'The strongest pair. Both people who run the truck chose each other.',
+    detail:
+      'A probability per candidate, per truck. Default 0.65. The driver and captain jointly control and organise the truck, so their bond has the largest effect on the day.',
+    example: '0.65 (the platform default)',
+  },
+  dispatch_target_tridirectional: {
+    title: 'Target: full trio',
+    summary: 'Six reciprocal favours among a driver, a captain and a walker.',
+    detail:
+      'A probability per candidate, per truck. Default 0.80. The strongest signal the system can express through preference. Anything stronger is a crew pin, not a preference.',
+    example: '0.80 (the platform default)',
+    note: 'Measured outcomes land a few points below target. A candidate with a trio on two trucks sees roughly half on each. The even-distribution pass can still move someone afterwards.',
+  },
+  dispatch_target_trio_plus: {
+    title: 'Target: trio plus a trainer',
+    summary: 'A full trio, and a trainer favours the candidate as well.',
+    detail:
+      'A probability per candidate, per truck. Default 0.88. This is the ceiling of the ladder. A target of 1.0 is rejected: “always this truck” is a crew pin, not a preference, and the two are different tools.',
+    example: '0.88 (the platform default)',
+  },
+
+  invite_expiry_days: {
+    title: 'Invite Expiry (days)',
+    summary: 'How long a registration link stays usable before it must be reissued.',
+    detail:
+      'Counted from when the invite is sent. After it lapses the link returns an error and an admin must resend. Shorter is safer, since an invite is a one-time key to an account. Too short strands someone who was off for a week.',
+    example: '7 days',
+  },
+
+  // ── Route sort tuning (ADR-272 / ADR-273) ────────────────────────────────
+  route_assembly_mode: {
+    title: 'Assembly Mode',
+    summary: 'Whether a route finishes a block before moving on, or pulls it whole.',
+    detail:
+      'Block completion walks the crawl and takes what fits. Group first pulls a block’s totes whole before crawling onward, which keeps a building together at the cost of some route shape (ADR-272).',
+    example: 'block_completion (the default)',
+  },
+  sort_w_dense: {
+    title: 'Seed Weight — Density',
+    summary: 'The baseline seed weight. The other two must stay at or above it.',
+    detail:
+      'Seeds are the blocks a route is built outward from. Density favours blocks with the most packages per stop. It is the baseline: raising it above urgency or difficulty means a dense but unremarkable block outranks a known-urgent one.',
+    example: '1.0 (the platform default)',
+  },
+  sort_w_time: {
+    title: 'Seed Weight — Urgency',
+    summary: 'How strongly a time-committed block pulls a route toward itself.',
+    detail:
+      'Must stay at or above density, so a known-urgent block outranks the densest unknown one. Lowering it below density is how a time-committed delivery ends up late in a route.',
+    example: '1.5 (the platform default)',
+  },
+  sort_w_diff: {
+    title: 'Seed Weight — Difficulty',
+    summary: 'How strongly a hard block pulls a route toward itself.',
+    detail:
+      'Hard blocks are better done early, while the walker is fresh and the day has slack. Must stay at or above density.',
+    example: '1.3 (the platform default)',
+  },
+  sort_w_doorman: {
+    title: 'Seed Weight — Doorman',
+    summary: 'Subtracted, not added: defers easy doorman-heavy blocks.',
+    detail:
+      'A doorman building is fast, so it makes a poor seed. It is the work you want left when time is short. This weight is SUBTRACTED, which is why raising it pushes such blocks later rather than earlier.',
+    example: '0.5 (the platform default)',
+    note: 'The only seed weight that works in the opposite direction. Raising it defers more.',
+  },
+  sort_walk_budget_m: {
+    title: 'Walk Budget (m)',
+    summary: 'Cumulative metres a route may accumulate along its traversal.',
+    detail:
+      'Measured along the crawl, not as the crow flies. Inert when blocks have no coordinates. A tenant whose blocks are unmapped will see no effect from changing this.',
+    example: '900 m (the platform default)',
+  },
+  sort_span_cap_m: {
+    title: 'Span Cap (m)',
+    summary: 'Straight-line diameter a single route may cover.',
+    detail:
+      'Bounds how spread out a route is, where walk budget bounds how far it walks. A route can stay inside the budget while sprawling; this is the cap that stops that. Also inert without coordinates.',
+    example: '700 m (the platform default)',
+  },
+  sort_max_consecutive_no_fit: {
+    title: 'Max Steps Without Collecting',
+    summary: 'Closes a route that keeps stepping to blocks whose totes will not fit.',
+    detail:
+      'A route near capacity can walk past block after block, collecting nothing. This closes it after this many fruitless steps rather than letting it wander.',
+    example: '2 (the platform default)',
+  },
+  sort_f5_load_floor_hs: {
+    title: 'F5 Load Floor (half-slots)',
+    summary: 'Thin-block consolidation fires below this load.',
+    detail:
+      'Half-slots, not totes: 6 is about 3 totes. A route ending under this is a thin route, and consolidation tries to fold it into a neighbour rather than send someone out with almost nothing.',
+    example: '6 half-slots (about 3 totes)',
+  },
+  sort_f5_max_hops: {
+    title: 'F5 Max Hops',
+    summary: 'How many street steps consolidation may bridge.',
+    detail:
+      'Adjacency is the primary gate. This bounds how far consolidation will reach along it. Raising it folds thin routes together more aggressively and can produce routes that read as disconnected on the ground.',
+    example: '2 (the platform default)',
+  },
+  sort_f5_walk_radius_km: {
+    title: 'F5 Walk Radius (km)',
+    summary: 'A sanity cap on which blocks consolidation may reach.',
+    detail:
+      'A backstop, not the main rule. Adjacency decides what is reachable; this stops a chain of hops wandering across the map. Lowering it below the typical block spacing disables consolidation entirely.',
+    example: '0.8 km (the platform default)',
+  },
+
   discord_user_id: {
     title: 'Your Discord User ID',
     summary: 'Your personal Discord account ID.',
