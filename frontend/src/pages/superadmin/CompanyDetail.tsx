@@ -36,13 +36,16 @@ interface CompanyConfig {
   phase4_pass_score: number | null;
   underperforming_trainer_threshold: number | null;
   max_training_phase: number | null;
-  dispatch_weight_driver: number | null;
-  dispatch_weight_trainer: number | null;
-  dispatch_weight_walker: number | null;
-  dispatch_mutual_bonus: number | null;
-  dispatch_tridirectional_bonus: number | null;
-  dispatch_consecutive_penalty: number | null;
-  dispatch_weight_cap: number | null;
+  dispatch_target_oneway_weak: number | null;
+  dispatch_target_oneway_trainer: number | null;
+  dispatch_target_oneway_captain: number | null;
+  dispatch_target_oneway_driver: number | null;
+  dispatch_target_mutual_weak: number | null;
+  dispatch_target_mutual_lead_crew: number | null;
+  dispatch_target_mutual_driver_trainer: number | null;
+  dispatch_target_mutual_driver_captain: number | null;
+  dispatch_target_tridirectional: number | null;
+  dispatch_target_trio_plus: number | null;
   flag_threshold: number | null;
   driver_checkin_count: number | null;
   // Route-sort tuning (ADR-273). null = the algorithm's built-in default.
@@ -98,13 +101,19 @@ const PLATFORM_DEFAULTS: Record<string, string> = {
   phase4_pass_score: '90.0',
   underperforming_trainer_threshold: '3',
   max_training_phase: '4',
-  dispatch_weight_driver: '0.70',
-  dispatch_weight_trainer: '0.50',
-  dispatch_weight_walker: '0.30',
-  dispatch_mutual_bonus: '0.10',
-  dispatch_tridirectional_bonus: '0.20',
-  dispatch_consecutive_penalty: '0.05',
-  dispatch_weight_cap: '0.85',
+  /* Blank, not pre-filled: an empty field means "use the platform default",
+     which is every tenant's current state. Pre-filling would make a save pin
+     the company to today's numbers (ADR-461 D2). */
+  dispatch_target_oneway_weak: '',
+  dispatch_target_oneway_trainer: '',
+  dispatch_target_oneway_captain: '',
+  dispatch_target_oneway_driver: '',
+  dispatch_target_mutual_weak: '',
+  dispatch_target_mutual_lead_crew: '',
+  dispatch_target_mutual_driver_trainer: '',
+  dispatch_target_mutual_driver_captain: '',
+  dispatch_target_tridirectional: '',
+  dispatch_target_trio_plus: '',
   flag_threshold: '1.0',
   driver_checkin_count: '4',
 };
@@ -161,16 +170,33 @@ const CONFIG_SECTIONS: { heading: string; description?: string; fields: ConfigFi
     ],
   },
   {
-    heading: 'Dispatch Weights',
-    description: 'Controls how assignment preferences are weighted during dispatch.',
+    /* ADR-461 D1/D2. The seven weight fields here were superseded by ADR-356
+       and are read by NOTHING; these ten are what calculate_weights.py
+       actually consults, via target_for(tier, cfg).
+
+       required: false, unlike the weights. NULL means "use the platform
+       default", which is what every tenant has today -- so the placeholder
+       shows the default rather than pre-filling it, and saving this page does
+       not silently pin a company to today's numbers.
+
+       max 0.99, not 1: weight_for_target REJECTS 1.0 because it divides by
+       (1 - P). A target of 1.0 is "always this truck", which is a crew pin. */
+    heading: 'Dispatch Preference Targets',
+    description:
+      'How often a preferred crew should actually be placed together, as a probability '
+      + 'per candidate per truck. Leave blank to use the platform default shown in each '
+      + 'field. These are pull strengths, not guarantees: "always together" is a crew pin.',
     fields: [
-      { key: 'dispatch_weight_driver',        label: 'Driver Weight',        type: 'float', required: true, min: 0, max: 1, step: 0.01 },
-      { key: 'dispatch_weight_trainer',       label: 'Trainer Weight',       type: 'float', required: true, min: 0, max: 1, step: 0.01 },
-      { key: 'dispatch_weight_walker',        label: 'Walker Weight',        type: 'float', required: true, min: 0, max: 1, step: 0.01 },
-      { key: 'dispatch_mutual_bonus',         label: 'Mutual Bonus',         type: 'float', required: true, min: 0, max: 1, step: 0.01 },
-      { key: 'dispatch_tridirectional_bonus', label: 'Tridirectional Bonus', type: 'float', required: true, min: 0, max: 1, step: 0.01 },
-      { key: 'dispatch_consecutive_penalty',  label: 'Consecutive Penalty',  type: 'float', required: true, min: 0, max: 1, step: 0.01 },
-      { key: 'dispatch_weight_cap',           label: 'Weight Cap',           type: 'float', required: true, min: 0, max: 1, step: 0.01 },
+      { key: 'dispatch_target_oneway_weak',           label: 'A walker favours you',       type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.22' },
+      { key: 'dispatch_target_oneway_trainer',        label: 'A trainer favours you',      type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.25' },
+      { key: 'dispatch_target_oneway_captain',        label: 'A captain favours you',      type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.28' },
+      { key: 'dispatch_target_oneway_driver',         label: 'A driver favours you',       type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.33' },
+      { key: 'dispatch_target_mutual_weak',           label: 'Mutual pair',                type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.45' },
+      { key: 'dispatch_target_mutual_lead_crew',      label: 'Mutual with driver/captain', type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.55' },
+      { key: 'dispatch_target_mutual_driver_trainer', label: 'Mutual driver + trainer',    type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.60' },
+      { key: 'dispatch_target_mutual_driver_captain', label: 'Mutual driver + captain',    type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.65' },
+      { key: 'dispatch_target_tridirectional',        label: 'Full trio, six favours',     type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.80' },
+      { key: 'dispatch_target_trio_plus',             label: 'Trio, plus a trainer',       type: 'float', required: false, min: 0, max: 0.99, step: 0.01, placeholder: '0.88' },
     ],
   },
   {

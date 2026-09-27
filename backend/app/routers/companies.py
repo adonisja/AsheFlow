@@ -177,6 +177,16 @@ class CompanyConfigResponse(BaseModel):
     dispatch_tridirectional_bonus:    Optional[float]
     dispatch_consecutive_penalty:     Optional[float]
     dispatch_weight_cap:              Optional[float]
+    dispatch_target_oneway_weak:                   Optional[float]
+    dispatch_target_oneway_trainer:                Optional[float]
+    dispatch_target_oneway_captain:                Optional[float]
+    dispatch_target_oneway_driver:                 Optional[float]
+    dispatch_target_mutual_weak:                   Optional[float]
+    dispatch_target_mutual_lead_crew:              Optional[float]
+    dispatch_target_mutual_driver_trainer:         Optional[float]
+    dispatch_target_mutual_driver_captain:         Optional[float]
+    dispatch_target_tridirectional:                Optional[float]
+    dispatch_target_trio_plus:                     Optional[float]
     flag_threshold:                   Optional[float]
     driver_checkin_count:             Optional[int]
     late_window_minutes:              Optional[int]
@@ -243,6 +253,16 @@ class CompanyConfigResponse(BaseModel):
             dispatch_tridirectional_bonus=obj.dispatch_tridirectional_bonus,
             dispatch_consecutive_penalty=obj.dispatch_consecutive_penalty,
             dispatch_weight_cap=obj.dispatch_weight_cap,
+            dispatch_target_oneway_weak=obj.dispatch_target_oneway_weak,
+            dispatch_target_oneway_trainer=obj.dispatch_target_oneway_trainer,
+            dispatch_target_oneway_captain=obj.dispatch_target_oneway_captain,
+            dispatch_target_oneway_driver=obj.dispatch_target_oneway_driver,
+            dispatch_target_mutual_weak=obj.dispatch_target_mutual_weak,
+            dispatch_target_mutual_lead_crew=obj.dispatch_target_mutual_lead_crew,
+            dispatch_target_mutual_driver_trainer=obj.dispatch_target_mutual_driver_trainer,
+            dispatch_target_mutual_driver_captain=obj.dispatch_target_mutual_driver_captain,
+            dispatch_target_tridirectional=obj.dispatch_target_tridirectional,
+            dispatch_target_trio_plus=obj.dispatch_target_trio_plus,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
             late_window_minutes=obj.late_window_minutes,
@@ -880,7 +900,25 @@ _SORT_TUNING_FIELDS = frozenset({
     "route_assembly_mode",
 })
 
-_SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"}) | _SORT_TUNING_FIELDS
+# ADR-461 D3: dispatch preference targets are super-admin only, for the same
+# reason ADR-273 gave for route-sort tuning. A target is a per-candidate-
+# per-truck PROBABILITY whose consequences are not self-evident -- ADR-356's own
+# Consequences note that measured outcomes land a few points below target, and
+# that a candidate with a trio on two trucks sees ~43% each. A tenant setting
+# 0.95 and finding the crew apart would reasonably conclude the system is
+# broken. The control they actually want -- "these people always ride together"
+# -- is a crew pin, which exists and does exactly that.
+_DISPATCH_TARGET_FIELDS = frozenset({
+    "dispatch_target_oneway_weak", "dispatch_target_oneway_trainer",
+    "dispatch_target_oneway_captain", "dispatch_target_oneway_driver",
+    "dispatch_target_mutual_weak", "dispatch_target_mutual_lead_crew",
+    "dispatch_target_mutual_driver_trainer", "dispatch_target_mutual_driver_captain",
+    "dispatch_target_tridirectional", "dispatch_target_trio_plus",
+})
+
+_SUPER_ADMIN_ONLY_FIELDS = (
+    frozenset({"invite_expiry_days"}) | _SORT_TUNING_FIELDS | _DISPATCH_TARGET_FIELDS
+)
 
 # ADR-289: fields that carry guards a generic field-setter cannot express — for
 # operating_mode: a no-op 400, an in-flight 409, a typed confirmation and a
@@ -941,6 +979,21 @@ class CompanyConfigUpdate(BaseModel):
     dispatch_tridirectional_bonus:   Optional[float] = Field(None, ge=0.0, le=1.0)
     dispatch_consecutive_penalty:    Optional[float] = Field(None, ge=0.0, le=1.0)
     dispatch_weight_cap:             Optional[float] = Field(None, ge=0.0, le=1.0)
+
+    # ADR-461 D2. The targets calculate_weights.py actually reads.
+    # lt=1.0, not le=1.0: weight_for_target divides by (1 - P), and a target
+    # of 1.0 is "always this truck" -- a crew pin, not a preference. Mirrors
+    # the DB CHECK (>= 0 AND < 1).
+    dispatch_target_oneway_weak:                   Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_oneway_trainer:                Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_oneway_captain:                Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_oneway_driver:                 Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_mutual_weak:                   Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_mutual_lead_crew:              Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_mutual_driver_trainer:         Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_mutual_driver_captain:         Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_tridirectional:                Optional[float] = Field(None, ge=0.0, lt=1.0)
+    dispatch_target_trio_plus:                     Optional[float] = Field(None, ge=0.0, lt=1.0)
 
     # Walker rating
     flag_threshold:                  Optional[float] = Field(None, ge=0.0, le=10.0)
