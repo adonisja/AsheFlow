@@ -88,6 +88,10 @@ _full_mode = _configured + [Depends(RequireMode(MODE_FULL))]
 # routing path reachable per company.
 _workforce_mode = _configured + [Depends(RequireMode(MODE_WORKFORCE))]
 
+# ADR-464 D1. BEFORE the gated router: FastAPI matches in registration order,
+# and /employees/me would otherwise be shadowed by the gated router's
+# /employees/{employee_id}. No `dependencies=` -- that is the point.
+api_v1_router.include_router(employees.identity_router)
 api_v1_router.include_router(employees.router,                dependencies=_configured)
 api_v1_router.include_router(trucks.router,                   dependencies=_configured)
 api_v1_router.include_router(truck_assignments.router,        dependencies=_configured)
