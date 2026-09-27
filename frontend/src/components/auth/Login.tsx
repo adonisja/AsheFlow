@@ -13,6 +13,12 @@ export default function Login() {
   const [newPassword,            setNewPassword]            = useState('');
   const [error,                  setError]                  = useState('');
   const [successMsg,             setSuccessMsg]             = useState('');
+  /* Written by useSessionTimeout on the way out (ADR-463). Read once: a
+     reload should not keep re-announcing an old sign-out. */
+  const [sessionEnded] = useState<string | null>(() => {
+    const v = new URLSearchParams(window.location.search).get('ended');
+    return v === 'idle' || v === 'absolute' ? v : null;
+  });
   /* ADR-362 — the step sign-in stopped on, if any.
      This was a single `isNewPasswordRequired` boolean plus a catch-all that
      rendered `Action required: CONFIRM_SIGN_IN_WITH_TOTP_CODE` and went no
@@ -199,6 +205,17 @@ export default function Login() {
           {error && (
             <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">
               {error}
+            </div>
+          )}
+
+          {/* ADR-463. A session that vanishes with no explanation reads as a
+              crash, and the user's next move is to report a bug. Styled as an
+              error, not a success: the user lost work-in-progress. */}
+          {sessionEnded && (
+            <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">
+              {sessionEnded === 'idle'
+                ? 'You were signed out after a period of inactivity. Sign in to continue.'
+                : 'Your session reached its time limit. Sign in to continue.'}
             </div>
           )}
 

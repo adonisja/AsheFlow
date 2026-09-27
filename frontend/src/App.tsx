@@ -50,6 +50,7 @@ import MyRoute from './pages/MyRoute';
 import BuildingProfilesPage from './pages/BuildingProfiles';
 import TruckBuildingsPage from './pages/TruckBuildings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { NotificationProvider } from './contexts/NotificationContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
@@ -66,7 +67,7 @@ function CompanyDetailWithKey() {
 import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
 import WorkerView from './components/dashboard/WorkerView';
-import { Users, Calendar } from 'lucide-react';
+import { Users, Calendar, AlertTriangle } from 'lucide-react';
 import CompanyStandingCard from './components/CompanyStandingCard';
 import ScorecardAppeals from './pages/ScorecardAppeals';
 import ScorecardRoster from './pages/ScorecardRoster';
@@ -74,6 +75,45 @@ import Scorecards from './pages/Scorecards';
 import FieldPackages from './pages/FieldPackages';
 import WalkerLog from './pages/WalkerLog';
 
+
+/** Runs the session clocks and renders the idle warning (ADR-463).
+ *
+ *  A separate component because ProtectedRoute returns early in several
+ *  branches -- a hook called above those returns would run conditionally, which
+ *  React forbids. This mounts only once the user is past every guard.
+ */
+const SessionGuard = ({ children }: { children: React.ReactNode }) => {
+  const { groups, isAuthenticated } = useAuth();
+  const { idleWarningSeconds, staySignedIn } = useSessionTimeout(groups, isAuthenticated);
+
+  return (
+    <>
+      {children}
+      {idleWarningSeconds !== null && (
+        /* An idle sign-out that happens silently reads as a crash. This says it
+           is coming and offers the one-click way out. */
+        <div
+          role="alertdialog"
+          aria-live="assertive"
+          className="fixed bottom-4 right-4 z-[60] max-w-sm rounded-xl border border-warning/30 bg-card shadow-lg px-4 py-3 flex items-start gap-3 animate-slide-up"
+        >
+          <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">
+              Signing you out in {idleWarningSeconds}s
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              You have been inactive. Your account holds access worth protecting.
+            </p>
+            <button onClick={staySignedIn} className="btn-primary mt-2 px-3 py-1.5 text-xs">
+              Stay signed in
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
   const { isAuthenticated, isLoading, groups, isConfigured } = useAuth();
@@ -111,7 +151,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
     }
   }
 
-  return <>{children}</>;
+  return <SessionGuard>{children}</SessionGuard>;
 };
 
 function RoleRedirect() {
