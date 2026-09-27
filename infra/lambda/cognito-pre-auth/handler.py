@@ -13,6 +13,7 @@ smaller harm. The one case it fails CLOSED on is an explicit refusal below.
 """
 import logging
 import os
+from datetime import datetime, timezone
 
 import boto3
 
@@ -34,6 +35,12 @@ ENROL_HINT = (
     "Open AsheFlow on the web and go to Account > Security to set it up."
 )
 
+# ADR-459 D3. Stamped on the one sign-in this trigger lets through unenrolled.
+# Its ONLY job is to record that the one-time exemption has been spent, so the
+# window cannot be replayed. Never read for authorisation: a forged value can
+# only make an account MORE restricted (immediate refusal), never less.
+FIRST_SEEN_ATTR = "custom:mfa_first_seen"
+
 _client = None
 
 
@@ -42,6 +49,27 @@ def _cognito():
     if _client is None:
         _client = boto3.client("cognito-idp", region_name=os.environ.get("AWS_REGION", "us-east-2"))
     return _client
+
+
+def _stamp_first_seen(pool_id: str, username: str) -> None:
+    """Spend the one-time exemption (ADR-459 D3).
+
+    Fails SOFT and deliberately. If this write fails the user still signs in --
+    they simply keep the exemption, and the next attempt retries the stamp. The
+    alternative is refusing a sign-in because a bookkeeping write failed, which
+    reintroduces the lockout this whole change exists to remove.
+    """
+    try:
+        _cognito().admin_update_user_attributes(
+            UserPoolId=pool_id,
+            Username=username,
+            UserAttributes=[{
+                "Name": FIRST_SEEN_ATTR,
+                "Value": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }],
+        )
+    except Exception:
+        logger.exception("pre-auth: could not stamp %s; exemption not spent", username)
 
 
 def _groups(event) -> set:
@@ -105,6 +133,31 @@ def handler(event, context):
         # field. So this is the best available signal, and it is correct where
         # it is load-bearing.
         if user.get("UserMFASettingList"):
+            return event
+
+        # ADR-459 D1. A privileged account with no factor AND no prior sign-in
+        # is let through exactly once.
+        #
+        # The refusal below is a dead end for them: it says "go to Account >
+        # Security", which is INSIDE the app they are being kept out of.
+        # PreAuthentication fires before Cognito validates credentials and so
+        # before any MFA challenge, which means this trigger pre-empts the
+        # enrolment-during-sign-in flow rather than coexisting with it. Every
+        # Owner of every new tenant met this wall.
+        #
+        # Signal chosen after measuring the alternatives on the live pool:
+        # UserStatus reads CONFIRMED for everyone including the locked-out
+        # account, and remembered-device count is inverted (the locked-out user
+        # had 1, both enrolled users had 0). The lambda has no database, by
+        # design -- it runs in the auth path and must not need the app to be up
+        # -- so it records the fact itself.
+        attrs = {a["Name"]: a.get("Value") for a in user.get("UserAttributes", [])}
+        if not attrs.get(FIRST_SEEN_ATTR):
+            _stamp_first_seen(pool_id, username)
+            logger.info(
+                "pre-auth: allowing %s once to enrol — privileged, no factor, "
+                "no prior sign-in (ADR-459)", username,
+            )
             return event
 
         logger.info("pre-auth: refusing %s — privileged with no MFA factor", username)
