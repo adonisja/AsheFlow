@@ -2,11 +2,12 @@ import { errorText } from '../../utils/errorText';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import SettingsHelpDrawer from '../../components/ui/SettingsHelpDrawer';
 import {
   ArrowLeft, Building2, Settings2, Save, RotateCcw,
   ShieldCheck, ShieldAlert, Pencil, X, Users, AlertTriangle,
   CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, PackageCheck, PackageX,
-  KeyRound, Trash2,
+  KeyRound, Trash2, HelpCircle,
 } from 'lucide-react';
 import SelectMenu from '../../components/ui/SelectMenu';
 import { TIMEZONES } from './Companies';
@@ -866,6 +867,7 @@ function ConfigEditorCard({
   config: CompanyConfig;
   onUpdated: (cfg: CompanyConfig) => void;
 }) {
+  const [helpKey, setHelpKey] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -909,6 +911,7 @@ function ConfigEditorCard({
   };
 
   return (
+    <>
     <SectionCard
       title={
         <>
@@ -941,10 +944,24 @@ function ConfigEditorCard({
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {section.fields.map(f => (
                 <div key={String(f.key)} className="bg-accent/40 rounded-xl p-3">
-                  <p className="text-xs text-muted-foreground mb-1.5">
-                    {f.label}
-                    {f.required && <span className="text-danger ml-0.5">*</span>}
-                  </p>
+                  {/* ADR-461. Hints render only while `editing`, so in read
+                      mode -- the default -- this page was 49 bare numbers. The
+                      drawer works in both modes and holds the longer
+                      explanation a one-line hint cannot. */}
+                  <div className="flex items-start justify-between gap-1.5 mb-1.5">
+                    <p className="text-xs text-muted-foreground">
+                      {f.label}
+                      {f.required && <span className="text-danger ml-0.5">*</span>}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setHelpKey(String(f.key))}
+                      className="text-muted-foreground hover:text-foreground transition-colors shrink-0 -mt-0.5 -mr-0.5 p-0.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                      aria-label={`What is ${f.label}?`}
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   {editing ? (
                     f.type === 'select' ? (
                       <SelectMenu
@@ -1009,6 +1026,10 @@ function ConfigEditorCard({
         </div>
       )}
     </SectionCard>
+    {/* Outside SectionCard: the drawer is an overlay, and nesting it inside a
+        card that clips or scrolls is how a drawer ends up cut off. */}
+    <SettingsHelpDrawer fieldKey={helpKey} onClose={() => setHelpKey(null)} />
+    </>
   );
 }
 
