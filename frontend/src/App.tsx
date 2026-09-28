@@ -159,6 +159,18 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
      and the admin reaches setup exactly as before. */
   if (groups.includes('admin') && !isConfigured
       && mfaResolved
+      // ADR-471. A BLOCKED admin must not be pulled off the wall. Guard 1 above
+      // exempts /mfa-setup and sends every other route there; this one exempted
+      // only /setup, so on /mfa-setup it fired and sent them to /setup -- where
+      // guard 1 fired and sent them back. Two <Navigate> components ping-ponging
+      // forever, with ZERO network requests, which is why the console showed
+      // only Chrome's navigation-throttle warning and no failing call.
+      //
+      // Ordering alone does not fix this: guard 1 correctly declines to act once
+      // the user is already on /mfa-setup, and that is exactly when guard 2 must
+      // also decline. Enrolment comes first; company setup is unreachable for a
+      // blocked account anyway, since /setup's own API calls are MFA-gated.
+      && !mfaStatus?.blocked
       && location.pathname !== '/setup') {
     return <Navigate to="/setup" replace />;
   }
