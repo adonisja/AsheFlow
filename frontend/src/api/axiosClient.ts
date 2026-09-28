@@ -44,6 +44,21 @@ axiosClient.interceptors.response.use(
       }
       window.location.href = '/login';
     }
+
+    /* ADR-465 D3. The API refuses a blocked caller with this code, and the
+       client must route on it -- otherwise a session that becomes blocked
+       mid-flight (enrolment cleared elsewhere) shows silent failures instead of
+       the wall.
+       Routed on the CODE, never the message: string-matching an error text
+       breaks the moment the copy is edited.
+       Not signOut(): they are legitimately signed in and simply owe a factor.
+       Signing them out would make the fix harder to reach, which is the
+       opposite of the intent. */
+    if (error.response?.status === 403
+        && error.response?.data?.detail?.code === 'mfa_enrolment_required'
+        && window.location.pathname !== '/mfa-setup') {
+      window.location.assign('/mfa-setup');
+    }
     return Promise.reject(error);
   }
 );

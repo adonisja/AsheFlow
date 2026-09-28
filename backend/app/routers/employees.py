@@ -42,6 +42,21 @@ from app.services.integration_alerts import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/employees", tags=["employees"])
 
+# ADR-464 D1. Endpoints that answer "who am I", mounted WITHOUT
+# require_configured.
+#
+# `router` above is gated on the company being configured, which is right for a
+# roster (meaningless before setup) and wrong for identity: AuthContext calls
+# /employees/me and /me/mfa-status on EVERY authenticated load, including the
+# setup page whose whole purpose is to clear that condition. Gating them made
+# setup unreachable -- 503 "Company setup is not complete" on the page that
+# completes setup.
+#
+# The rule: a gate that tests COMPANY state must not cover an endpoint that
+# answers WHO THE CALLER IS. Identity is what the client needs to decide
+# whether this user may fix the state.
+identity_router = APIRouter(prefix="/employees", tags=["employees"])
+
 
 def _fire_discord_dm(discord_id: str, message: str) -> None:
     bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
@@ -567,7 +582,7 @@ def get_escalation_contacts(
     return [EmployeeEscalationResponse.model_validate(e) for e in contacts]
 
 
-@router.get("/me", response_model=EmployeeResponse)
+@identity_router.get("/me", response_model=EmployeeResponse)
 def get_my_employee(
     caller: Employee = Depends(get_caller_employee),
 ):
@@ -575,7 +590,7 @@ def get_my_employee(
     return EmployeeResponse.model_validate(caller)
 
 
-@router.get("/me/mfa-status")
+@identity_router.get("/me/mfa-status")
 def get_my_mfa_status(
     db: Session = Depends(get_db),
     # OPTIONAL, not get_caller_employee: a platform account (super_admin,

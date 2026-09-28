@@ -208,6 +208,13 @@ def _check_containment_permissions(region: str, pool_id: str) -> list[str]:
         ("AdminForgetDevice", lambda: client.admin_forget_device(
             UserPoolId=pool_id, Username=PROBE_USER,
             DeviceKey=f"{region}_00000000-0000-0000-0000-000000000000")),
+        # ADR-466 D1: the reset clears custom:mfa_first_seen along with the
+        # factor, so a privileged user who spent their enrolment pass is not
+        # left refused. Losing this grant makes the reset silently insufficient
+        # for exactly the tier that needs it most.
+        ("AdminDeleteUserAttributes", lambda: client.admin_delete_user_attributes(
+            UserPoolId=pool_id, Username=PROBE_USER,
+            UserAttributeNames=["custom:mfa_first_seen"])),
     ]
 
     for action, call in probes:

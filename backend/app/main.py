@@ -9,7 +9,7 @@ from app.database import engine
 from app import models
 from app.models.base import Base
 from app.core.config import settings
-from app.api.deps import require_configured, RequireMode
+from app.api.deps import require_configured, require_mfa_enrolled, RequireMode
 from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.api.ratelimit import limiter
 from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones, platform_alerts, crew_pins, truck_pins, separations, collection, sns_events
@@ -74,7 +74,15 @@ api_v1_router = APIRouter(prefix="/api/v1")
 # registration and companies.company_admin_router are exempt:
 #   - registration: employees register before the company may be configured
 #   - company_admin_router: this IS the setup endpoint — must be reachable to complete setup
-_configured = [Depends(require_configured)]
+# ADR-465 D3. Paired with require_configured because they share their
+# exemptions exactly: the identity endpoints (ADR-464), registration, and the
+# company-admin setup router must all stay reachable to a caller who is
+# BLOCKED, or the wall has no door.
+#
+# A blocked privileged caller is refused 403 mfa_enrolment_required. Without
+# this the D1 redirect is a suggestion -- ADR-459 hands that caller a valid
+# token for one session, deliberately, and a token is all an API call needs.
+_configured = [Depends(require_configured), Depends(require_mfa_enrolled)]
 
 # ADR-289: routers whose feature only exists when the tenant has an Amazon package
 # feed. RequireMode returns 404 (not 403) — a company without a feed should not be
@@ -88,6 +96,10 @@ _full_mode = _configured + [Depends(RequireMode(MODE_FULL))]
 # routing path reachable per company.
 _workforce_mode = _configured + [Depends(RequireMode(MODE_WORKFORCE))]
 
+# ADR-464 D1. BEFORE the gated router: FastAPI matches in registration order,
+# and /employees/me would otherwise be shadowed by the gated router's
+# /employees/{employee_id}. No `dependencies=` -- that is the point.
+api_v1_router.include_router(employees.identity_router)
 api_v1_router.include_router(employees.router,                dependencies=_configured)
 api_v1_router.include_router(trucks.router,                   dependencies=_configured)
 api_v1_router.include_router(truck_assignments.router,        dependencies=_configured)
@@ -198,9 +210,17 @@ api_v1_router.include_router(companies.public_router)
 # no owning tenant, and a super admin must be able to read them precisely
 # when a company's configuration is broken.
 api_v1_router.include_router(platform_alerts.router)
-api_v1_router.include_router(crew_pins.router)
-api_v1_router.include_router(separations.router)
-api_v1_router.include_router(truck_pins.router)
+# ADR-465 D3. These three carry ordinary tenant data and were ungated by
+# omission, not by the ADR-335 reasoning above -- that argument is specific to
+# platform alerts, which may have no owning tenant.
+#
+# They get the MFA gate but NOT require_configured: whether they should also be
+# setup-gated is a separate question with its own blast radius, and widening
+# two gates at once makes a regression impossible to attribute.
+_mfa_only = [Depends(require_mfa_enrolled)]
+api_v1_router.include_router(crew_pins.router,   dependencies=_mfa_only)
+api_v1_router.include_router(separations.router, dependencies=_mfa_only)
+api_v1_router.include_router(truck_pins.router,  dependencies=_mfa_only)
 # Bot-facing internal endpoints — authenticated by X-Internal-Secret, not Cognito
 api_v1_router.include_router(internal.router)
 # Mount the v1 router to the main app
