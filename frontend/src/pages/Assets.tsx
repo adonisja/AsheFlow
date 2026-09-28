@@ -44,7 +44,11 @@ type EmployeeLifecycle =
 function getLifecycle(e: Employee): EmployeeLifecycle {
   if (e.account_status === 'active' && !e.is_active) return 'deactivated';
   if (e.account_status === 'active'  &&  e.is_active) return 'active';
-  // pending_verification below
+  // ADR-468 D1. The column now says this itself. The username inference is kept
+  // as a fallback rather than replaced: a row created by a path that stamps a
+  // username without the status still reads correctly, and during the deploy
+  // window the API and this bundle may disagree by one version.
+  if (e.account_status === 'registered') return 'registered';
   if (e.username) return 'registered';   // form submitted, Cognito account exists, not signed in yet
   // ADR-445 — ahead of 'invited' deliberately. The invite WAS sent, so the old
   // order showed "Invited" and the admin waited for a reply that cannot come.
@@ -927,7 +931,11 @@ function PeopleTab() {
   const injuredCount  = employees.filter(e => e.injury_status === 'injured').length;
   const disabledCount = employees.filter(e => e.injury_status === 'disabled').length;
   const activeCount   = employees.filter(e => e.account_status === 'active' && e.is_active).length;
-  const pendingCount  = employees.filter(e => e.account_status === 'pending_verification').length;
+  // ADR-468 D1. 'registered' is still pending in the sense this card means it --
+  // invited and not yet working. Counting only pending_verification would silently
+  // drop every registered employee out of the tile the moment the migration ran.
+  const pendingCount  = employees.filter(e =>
+    e.account_status === 'pending_verification' || e.account_status === 'registered').length;
   const deactivatedCount = employees.filter(e => e.account_status === 'active' && !e.is_active).length;
 
   return (

@@ -276,6 +276,16 @@ const ACCOUNT_STATUS_BADGE: Record<string, { label: string; className: string; i
     className: 'bg-success/10 text-success',
     icon: <UserCheck className="w-3 h-3" />,
   },
+  // ADR-468 D1. Without an entry the badge falls back to rendering the raw
+  // column value, so a super admin would read "registered" in a row of
+  // sentence-case labels. Distinct from Pending on purpose: it is the state where
+  // the account exists and the person has not signed in, which is the one an
+  // admin can act on.
+  registered: {
+    label: 'Registered',
+    className: 'bg-info/10 text-info',
+    icon: <UserCheck className="w-3 h-3" />,
+  },
   pending_verification: {
     label: 'Pending',
     className: 'bg-warning/10 text-warning',
@@ -819,6 +829,10 @@ function EmployeeCard({ companyId }: { companyId: string }) {
                         {/* ADR-442 D1. Beside the status it explains: an admin
                             reading "Pending" is the moment someone asks why the
                             invite never arrived. */}
+                        {/* ADR-468 D1. Deliberately still pending_verification only:
+                            a REGISTERED admin has already used their invite, so
+                            offering to resend it is the wrong action -- what they
+                            need is resend-credentials, which is a different path. */}
                         {admin.account_status === 'pending_verification' && admin.email && (
                           resent[admin.employee_id] === 'sent' ? (
                             <span className="text-xs text-success">Invite sent</span>

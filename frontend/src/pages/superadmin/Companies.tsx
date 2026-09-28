@@ -584,6 +584,9 @@ function CompanyRow({
                   )}
                 </div>
               </div>
+              {/* ADR-468 D1. 'registered' means the Cognito account exists, so the
+                  invite is NOT pending -- the else arm ("Registered") is right for
+                  it, and testing only pending_verification keeps it there. */}
               {company.owner.account_status === 'pending_verification' ? (
                 <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning font-medium shrink-0">
                   <Clock className="w-3 h-3" /> Invite pending

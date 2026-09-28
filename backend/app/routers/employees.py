@@ -933,8 +933,15 @@ def update_employee(
     # Wrong-email recovery — only valid while the account is still pending.
     # Delete the old Cognito user and recreate with the corrected email so a
     # fresh invite is sent. Active accounts must use the Cognito console.
+    # ADR-468 D2. This arm is FOR the registered case (its own comment says
+    # "ADR-380 F7 -- REGISTERED"), and it reached it via pending_verification +
+    # username because that WAS how a registered row looked. Under ADR-468 D1 the
+    # status is 'registered', so the old test matched nothing and every wrong-email
+    # recovery on a registered employee fell through to the shell-account arm
+    # below -- which deletes by email, a Username that registered account does not
+    # have.
     if (new_email and new_email != old_email
-            and db_employee.account_status == "pending_verification"
+            and db_employee.account_status in ("pending_verification", "registered")
             and db_employee.username):
         # ADR-380 F7 — REGISTERED. Their Cognito Username is the derived
         # firstname.lastname and does not change with their email, so this is an
@@ -969,6 +976,9 @@ def update_employee(
                 detail="Email updated in DB but Cognito update failed. Contact support.",
             )
 
+    # ADR-468 D2. Stays on pending_verification alone, and that is now EXACT
+    # rather than incidental: this arm is the shell account with no username, and
+    # 'registered' by definition has one. The arm above takes the other case.
     elif new_email and new_email != old_email and db_employee.account_status == "pending_verification":
         # NOT registered: no Employee.username, so the Cognito Username IS the
         # email. The account is a shell, and recreating it is what sends a fresh
@@ -1053,8 +1063,15 @@ def update_employee(
                 db_employee.id, e.response.get("Error", {}).get("Code", "Unknown"),
             )
 
-    # Sync Cognito group when role changes on an active account
-    elif new_role and new_role != old_role and db_employee.email and db_employee.account_status != "pending_verification":
+    # Sync Cognito group when role changes on an account that HAS one.
+    #
+    # ADR-468 D2. Was `!= "pending_verification"`, which happened to be true only
+    # for 'active' -- so a REGISTERED employee (Cognito account created, not yet
+    # signed in) never had their group synced, and their very first token carried
+    # the old role. The condition means "a Cognito account exists to sync", which
+    # is `username`, and cognito_username_for on the next line already relies on
+    # exactly that.
+    elif new_role and new_role != old_role and db_employee.email and db_employee.username:
         # ADR-380 F7 — was `db_employee.email`, which is only the Cognito
         # Username BEFORE registration. On a registered employee this raised
         # UserNotFoundException into the log below and the group never synced,
