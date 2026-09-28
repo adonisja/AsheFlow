@@ -117,7 +117,7 @@ const SessionGuard = ({ children }: { children: React.ReactNode }) => {
 };
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
-  const { isAuthenticated, isLoading, groups, isConfigured, mfaStatus } = useAuth();
+  const { isAuthenticated, isLoading, groups, isConfigured, mfaStatus, mfaResolved } = useAuth();
   const location = useLocation();
 
   if (isLoading) {
@@ -143,8 +143,23 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
     return <Navigate to="/mfa-setup" replace />;
   }
 
-  // Unconfigured admin: redirect to setup for every route except /setup itself
-  if (groups.includes('admin') && !isConfigured && location.pathname !== '/setup') {
+  /* Unconfigured admin: redirect to setup for every route except /setup itself.
+
+     ADR-469. Held until the MFA question has been ANSWERED -- not until the
+     answer is non-null. Sending an admin to /setup before then is what closed
+     the loop: /setup's first API call 403s with mfa_enrolment_required, the
+     interceptor does a full-page location.assign('/mfa-setup'), the provider
+     remounts, and the status is unknown again.
+
+     `mfaResolved`, not `mfaStatus !== null`, because null is AMBIGUOUS: it means
+     both "not fetched yet" and "the fetch failed". Gating on null would trade a
+     redirect loop for an unconfigured admin hung on a spinner forever whenever
+     Cognito is unreachable -- a worse failure, since nothing recovers it. A
+     failed read resolves to `true` with a null status, so `blocked` stays falsy
+     and the admin reaches setup exactly as before. */
+  if (groups.includes('admin') && !isConfigured
+      && mfaResolved
+      && location.pathname !== '/setup') {
     return <Navigate to="/setup" replace />;
   }
 
