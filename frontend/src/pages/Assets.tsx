@@ -837,7 +837,7 @@ function PeopleTab() {
           // factor clear succeeded, so the account may already be better off
           // than it was. Retrying is still right; implying nothing happened
           // is not.
-          ? 'Only partly completed — some settings may still be in place. Try again.'
+          ? 'Only partly completed. Some settings may still be in place. Try again.'
           : errorText(err, 'Could not reset two-factor authentication.'),
       });
     } finally {
