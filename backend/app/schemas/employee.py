@@ -175,6 +175,43 @@ class EmployeeEscalationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EmployeeMfaEnrolmentResponse(BaseModel):
+    """One privileged account's sign-in protection state (ADR-467 D1).
+
+    ADMIN ONLY. `EmployeeResponse` is "management/admin/dispatch", so putting
+    these fields there would hand them to dispatch -- and "this owner has no
+    second factor" is not a sentence that belongs on a screen dispatch reads all
+    day. ADR-458 established the pattern of choosing a response shape by caller
+    role rather than widening the shared one; this follows it.
+
+    Deliberately narrow, like EmployeeEscalationResponse: enough to recognise a
+    locked-out account and act on it. Not a second roster.
+
+    `enrolled` is THREE-VALUED and the third value carries weight:
+
+        True   a factor is on file
+        False  no factor -- if privileged, PreAuth refuses this sign-in
+        None   Cognito could not be read
+
+    None means "could not tell", NEVER "not enrolled" (ADR-377's rule). An AWS
+    hiccup must not accuse someone of being unprotected, so the UI renders
+    unknown as unknown.
+    """
+    id: UUID
+    name: str
+    role: str
+    # True once the account has spent ADR-459's one-time enrolment pass. Paired
+    # with `enrolled=False` this is the lockout signature: the pass is gone and
+    # nothing was set up with it.
+    pass_spent: bool
+    enrolled: Optional[bool] = None
+    # The lifecycle the roster shows, so the client does not recompute it from a
+    # second source and drift. 'registered' here is the crash case.
+    account_status: str
+
+    model_config = {"from_attributes": True}
+
+
 class EmployeePublicResponse(BaseModel):
     """Redacted response — returned to field staff (driver/walker/trainer/trainee).
 

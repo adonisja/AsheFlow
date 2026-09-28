@@ -159,7 +159,19 @@ def expire_registered_unused() -> dict:
             .filter(
                 # Still never signed in -- get_caller_employee promotes to
                 # `active` on the first authenticated call.
-                Employee.account_status == "pending_verification",
+                #
+                # ADR-468 D2. This read `== "pending_verification"` AND
+                # `username IS NOT NULL`, which was the definition of "registered"
+                # BEFORE the column could say it. ADR-468 D1 moves exactly that
+                # population to 'registered', so the two terms became mutually
+                # exclusive and this sweep would have matched nothing -- silently,
+                # forever, leaving every unused credential alive. A dead sweep
+                # reports "nothing to expire" and looks healthy.
+                #
+                # Both states accepted: 'registered' is the post-migration truth,
+                # and 'pending_verification' stays so a row created by some path
+                # that stamps a username without the status is still swept.
+                Employee.account_status.in_(("pending_verification", "registered")),
                 Employee.invited_at < cutoff,
                 # Registered. The complement of expire_pending_invites, so the
                 # two tasks partition the space rather than overlapping.

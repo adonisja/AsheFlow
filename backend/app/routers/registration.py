@@ -626,8 +626,18 @@ def complete_registration(
                 ),
             )
 
-    # Stamp the employee record — account_status stays pending_verification until
-    # they actually sign in (get_caller_employee flips it to active on first login)
+    # ADR-468 D1/D3. Stamped HERE, not inferred later from a request that may
+    # never arrive. The old comment read "account_status stays
+    # pending_verification until they actually sign in" -- true, and the source of
+    # the overload: the row now HAS a Cognito account, so it is no longer
+    # "invited, nothing exists", and every reader that tested
+    # != 'pending_verification' to mean "has registered" was wrong about it.
+    #
+    # This is also what closes ADR-467's crash case. A privileged account whose
+    # session dies mid-MFA-setup is visibly 'registered' rather than sitting in
+    # 'pending_verification' and rendering as a row that looks like it is waiting
+    # on the user.
+    employee.account_status = "registered"
     employee.username     = username
     employee.cognito_sub  = cognito_sub
     employee.discord_id   = body.discord_id
