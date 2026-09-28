@@ -132,6 +132,31 @@ def contain(username: str, pool_id: str, region: str,
                 )
             else:
                 factor_cleared = True
+
+            # ADR-466 D1. The enrolment pass goes with the factor.
+            #
+            # custom:mfa_first_seen records "this account has had its one chance
+            # to enrol" (ADR-459). Clearing the factor without clearing the stamp
+            # leaves a PRIVILEGED user still refused by the PreAuthentication
+            # trigger -- the "necessary and not sufficient" this endpoint's own
+            # docstring warned about, and the state the prod Owner reached after
+            # a session ended mid-setup.
+            #
+            # Deleting an attribute that is already absent is not an error in
+            # Cognito, so this needs no existence check.
+            try:
+                client.admin_delete_user_attributes(
+                    UserPoolId=pool_id, Username=username,
+                    UserAttributeNames=["custom:mfa_first_seen"],
+                )
+            except (ClientError, BotoCoreError) as exc:
+                # Soft: the factor is cleared, which is the containment this
+                # function promises. A surviving stamp costs the user a
+                # runbook step, where failing the whole call would cost them
+                # the reset entirely.
+                errors.append(f"clear_pass: {type(exc).__name__}")
+                logger.error("mfa containment: could not clear the enrolment pass: %s",
+                             type(exc).__name__)
         except (ClientError, BotoCoreError) as exc:
             errors.append(f"clear_factor: {type(exc).__name__}")
             logger.error("mfa containment: could not clear factor: %s",

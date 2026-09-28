@@ -51,6 +51,7 @@ import BuildingProfilesPage from './pages/BuildingProfiles';
 import TruckBuildingsPage from './pages/TruckBuildings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
+import MfaRequired from './pages/MfaRequired';
 import { NotificationProvider } from './contexts/NotificationContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
@@ -116,7 +117,7 @@ const SessionGuard = ({ children }: { children: React.ReactNode }) => {
 };
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
-  const { isAuthenticated, isLoading, groups, isConfigured } = useAuth();
+  const { isAuthenticated, isLoading, groups, isConfigured, mfaStatus } = useAuth();
   const location = useLocation();
 
   if (isLoading) {
@@ -131,6 +132,16 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
   }
 
   if (!isAuthenticated) return <Navigate to="/login" />;
+
+  /* ADR-465 D1. A blocked account cannot reach ANY route but this one.
+     Checked BEFORE the setup redirect: a blocked Owner would otherwise be sent
+     to /setup, whose API calls this same rule 403s -- the deadlock ADR-464 just
+     removed, rebuilt one layer up.
+     `blocked` is recomputed from Cognito on every load, never from a dismissed
+     flag, so signing out and back in returns here (D2). */
+  if (mfaStatus?.blocked && location.pathname !== '/mfa-setup') {
+    return <Navigate to="/mfa-setup" replace />;
+  }
 
   // Unconfigured admin: redirect to setup for every route except /setup itself
   if (groups.includes('admin') && !isConfigured && location.pathname !== '/setup') {
@@ -277,6 +288,21 @@ function App() {
               network round trip. */}
           <Route path="/address-log" element={<WalkerLog dataset="addresses" />} />
           
+            {/* ADR-465 — the MFA wall. Full-screen, NO navbar and no Layout: a
+                nav bar would offer links this account may not follow, and every
+                one of them redirects straight back here.
+                No allowedRoles: the block is decided by mfaStatus, which already
+                knows the tier, and a role list here would be a second copy of
+                that rule to drift. */}
+            <Route
+              path="/mfa-setup"
+              element={
+                <ProtectedRoute>
+                  <MfaRequired />
+                </ProtectedRoute>
+              }
+            />
+
           {/* Setup gate — full-screen, no navbar, shown to admins before company is configured */}
           <Route
             path="/setup"
