@@ -97,6 +97,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.device_sweep.sweep_stale_devices",
         "schedule": crontab(hour=1, minute=37),
     },
+    # ADR-470 D1. 16:30, not an early-morning slot with the other sweeps: this
+    # one produces a Discord DM a person is meant to READ and act on, and a
+    # warning that lands at 04:00 is read at the depot -- the exact moment it is
+    # too late to install an authenticator app. Afternoon means they see it
+    # while they still have a phone, signal and time.
+    "warn-before-mfa-deadline": {
+        "task": "app.tasks.mfa_deadline_warnings.warn_before_mfa_deadline",
+        "schedule": crontab(hour=16, minute=30),
+    },
     "check-role-directory-drift": {
         "task": "app.tasks.role_directory.check_role_directory_drift",
         "schedule": crontab(hour=5, minute=0),
