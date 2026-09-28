@@ -8,11 +8,36 @@ locked out with no in-product remedy. The prod Owner reached exactly that state.
 import inspect
 import pathlib
 
+import pytest
+
 from app.services import mfa_containment
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 HANDLER = ROOT / "infra/lambda/cognito-pre-auth/handler.py"
 RUNBOOK = ROOT / "docs/runbooks/MFA-Lockout-Recovery.md"
+
+# The whole of docs/ is gitignored from the public repo (.gitignore:99) and
+# reaches AsheFlow-private only through the pre-push hook, so in CI this file is
+# LEGITIMATELY absent -- unlike the proprietary modules, which ci.yml copies in
+# before pytest runs (hence the ADR-311 ban on import skip-guards: there, a
+# missing file is always a broken sync).
+#
+# So these two tests cannot run in CI, and pretending otherwise is what failed
+# PR #58. They are gated on the repo being a working copy that HAS docs/, which
+# is a real condition and not an ImportError in disguise:
+#
+#   * on a developer machine docs/ exists, so they run and can fail;
+#   * in CI the directory itself is absent, so they are reported as skipped.
+#
+# Gating on the DIRECTORY, not the file, is the point. `RUNBOOK.exists()` would
+# also skip when the runbook is deleted locally -- the exact regression these
+# tests exist to catch -- whereas docs/ missing while the file inside it is gone
+# is not a state a working copy can reach.
+DOCS_PRESENT = (ROOT / "docs" / "runbooks").is_dir()
+needs_docs = pytest.mark.skipif(
+    not DOCS_PRESENT,
+    reason="docs/ is gitignored from the public repo; runs on a working copy",
+)
 
 
 # ── D1: the reset clears the pass ───────────────────────────────────────────
@@ -78,12 +103,14 @@ def test_the_refusal_has_no_trailing_period():
 
 # ── D3: the runbook covers it ───────────────────────────────────────────────
 
+@needs_docs
 def test_the_runbook_documents_the_spent_pass_case():
     src = RUNBOOK.read_text()
     assert "custom:mfa_first_seen" in src, "the runbook does not know about the stamp"
     assert "spent its enrolment pass" in src
 
 
+@needs_docs
 def test_break_glass_remains_the_last_case():
     """An operator scanning headings should meet the ordinary remedies first."""
     src = RUNBOOK.read_text()
