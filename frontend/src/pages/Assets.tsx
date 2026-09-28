@@ -2,10 +2,10 @@ import { errorText } from '../utils/errorText';
 import { formatDate } from '../utils/date';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
+  AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-import type { CompanyZone, CornerPoint, EscalationContact } from '../api/types';
+import type { CompanyZone, CornerPoint, EscalationContact, MfaEnrolmentRow } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -610,6 +610,31 @@ function PeopleTab() {
   const [escalationBusy, setEscalationBusy] = useState(false);
   const [escalationError, setEscalationError] = useState<string | null>(null);
 
+  // ADR-467 D1. Admin-only, on demand. One Cognito read per privileged row --
+  // `list_users` carries neither UserMFASettingList nor custom:mfa_first_seen
+  // (probed on the live pool), so there is no bulk read to put on the roster.
+  const [enrolment, setEnrolment]         = useState<MfaEnrolmentRow[] | null>(null);
+  const [enrolmentOpen, setEnrolmentOpen] = useState(false);
+  const [enrolmentBusy, setEnrolmentBusy] = useState(false);
+  const [enrolmentError, setEnrolmentError] = useState<string | null>(null);
+
+  const openEnrolment = async () => {
+    setEnrolmentOpen(true);
+    // Refetched on each open, unlike the escalation list: this is live account
+    // state that a reset two minutes ago is meant to change, and a cached "no
+    // factor" would tell the admin their fix did not work.
+    setEnrolmentBusy(true);
+    setEnrolmentError(null);
+    try {
+      const r = await axiosClient.get('/employees/mfa-enrolment');
+      setEnrolment(r.data);
+    } catch {
+      setEnrolmentError('Could not check sign-in protection. Try again.');
+    } finally {
+      setEnrolmentBusy(false);
+    }
+  };
+
   const openEscalation = async () => {
     setEscalationOpen(true);
     if (escalation || escalationBusy) return;   // one audited fetch per visit
@@ -768,9 +793,18 @@ function PeopleTab() {
    *  replaces the old on re-enrolment (ADR-377 D3) -- it clears the remembered
    *  devices skipping the challenge and ends the sessions outliving the change. */
   const handleResetMfa = async (emp: any) => {
+    // ADR-467 D2. The old copy said only "must set it up again at their next
+    // sign-in", written when reset cleared nothing but the factor. Since
+    // ADR-466 D1 one press ALSO restores the one-time enrolment pass, which is
+    // the half that actually ends a lockout -- and an admin who cannot tell
+    // that from the dialog escalates instead of pressing the button.
     const ok = await confirm({
       title: 'Reset two-factor authentication',
-      message: `Reset ${emp.name}'s second factor? They will be signed out on every device and must set it up again at their next sign-in.`,
+      message:
+        `Reset ${emp.name}'s second factor? They will be signed out on every `
+        + `device, and the next time they sign in they will be able to set up `
+        + `two-factor again. Use this when they have lost their authenticator, `
+        + `or when they are stuck and cannot finish setting it up.`,
       confirmLabel: 'Reset',
       variant: 'danger',
     });
@@ -779,9 +813,18 @@ function PeopleTab() {
     setResetMfaMsg(null);
     try {
       const res = await axiosClient.post(`/employees/${emp.id}/mfa/reset`);
+      // ADR-467 D2. Name the outcome the admin pressed the button FOR -- the
+      // device count alone does not say whether the person can sign in again.
+      //
+      // NOT branched on factor_cleared, though the endpoint returns it: a
+      // surviving factor appends to `errors`, fully_contained is
+      // `signed_out and not errors`, and the endpoint raises 502 before
+      // returning. So on this path factor_cleared is always true, and a
+      // "partly done" branch here would be dead code. The partial case is
+      // already handled by the 502 arm below.
       setResetMfaMsg({
         id: emp.id, ok: true,
-        text: `Signed out. ${res.data.devices_forgotten} device(s) cleared.`,
+        text: `Sign-in unblocked. ${res.data.devices_forgotten} device(s) cleared.`,
       });
     } catch (err: any) {
       // 502 means containment did not FULLY complete. The admin must know it did
@@ -789,7 +832,12 @@ function PeopleTab() {
       setResetMfaMsg({
         id: emp.id, ok: false,
         text: err?.response?.status === 502
-          ? 'Did not fully complete. Please try again.'
+          // ADR-467 D2. This is the partial case, and it is not simply "retry":
+          // ADR-466 D1 clears the enrolment pass regardless of whether the
+          // factor clear succeeded, so the account may already be better off
+          // than it was. Retrying is still right; implying nothing happened
+          // is not.
+          ? 'Only partly completed — some settings may still be in place. Try again.'
           : errorText(err, 'Could not reset two-factor authentication.'),
       });
     } finally {
@@ -959,6 +1007,19 @@ function PeopleTab() {
         >
           <Phone className="w-4 h-4" /> Who to call
         </button>
+        {/* ADR-467 D1. Admin only: enrolment state is a security property of
+            someone else's account, and dispatch has no action to take on it.
+            Labelled by the QUESTION an admin arrives with -- "why can this
+            person not sign in" -- not by the mechanism. */}
+        {isAdmin && (
+          <button
+            onClick={openEnrolment}
+            className="btn-ghost flex items-center gap-2 text-sm"
+            title="Which owners, managers and dispatchers can sign in"
+          >
+            <ShieldCheck className="w-4 h-4" /> Sign-in protection
+          </button>
+        )}
         {canImport && (
           <button
             onClick={() => setShowImport(true)}
@@ -974,6 +1035,98 @@ function PeopleTab() {
           <Plus className="w-4 h-4" /> Invite Employee
         </button>
       </div>
+
+      {enrolmentOpen && (
+        <div className="card p-0 overflow-hidden border-primary/20">
+          <div className="flex items-start justify-between gap-3 px-4 py-3 bg-accent/40 border-b border-border">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Sign-in protection</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Owners, managers and dispatchers must set up two-factor before they
+                can sign in. Opening this list is recorded.
+              </p>
+            </div>
+            <button
+              onClick={() => setEnrolmentOpen(false)}
+              className="btn-ghost p-1.5 text-muted-foreground shrink-0"
+              aria-label="Close the sign-in protection list"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {enrolmentBusy && (
+            <p className="px-4 py-3 text-sm text-muted-foreground">Checking…</p>
+          )}
+          {enrolmentError && (
+            <p className="px-4 py-3 text-sm text-danger">{enrolmentError}</p>
+          )}
+          {enrolment && enrolment.length === 0 && (
+            <p className="px-4 py-3 text-sm text-muted-foreground">
+              No owners, managers or dispatchers on the roster yet.
+            </p>
+          )}
+          {enrolment && enrolment.length > 0 && (
+            <ul className="divide-y divide-border">
+              {enrolment.map(r => {
+                /* The lockout signature, and the reason this panel exists: the
+                   one-time enrolment pass (ADR-459) is spent and nothing was
+                   set up with it, so PreAuthentication refuses every later
+                   sign-in. The roster cannot show this -- a refused sign-in
+                   issues no token, so account_status never leaves
+                   'pending_verification' and the row reads "Registered", which
+                   looks like waiting on the user. */
+                const lockedOut = r.enrolled === false && r.pass_spent;
+                return (
+                  <li key={r.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-medium text-foreground truncate">{r.name}</span>
+                      <span className={badge(r.role)}>{r.role}</span>
+                    </span>
+                    {/* Three states, never two. `enrolled === null` means Cognito
+                        could not be read, which is NOT "not enrolled" (ADR-377):
+                        an AWS hiccup must not accuse someone of being
+                        unprotected. */}
+                    {r.enrolled === null ? (
+                      <span className="text-xs text-muted-foreground italic shrink-0">
+                        Could not check
+                      </span>
+                    ) : r.enrolled ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md bg-success/10 text-success shrink-0">
+                        <ShieldCheck className="w-3 h-3" /> Protected
+                      </span>
+                    ) : lockedOut ? (
+                      <span
+                        className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md bg-danger/10 text-danger shrink-0"
+                        title="Their one-time setup window was used without finishing. Reset two-factor on their row to let them try again."
+                      >
+                        <ShieldOff className="w-3 h-3" /> Cannot sign in
+                      </span>
+                    ) : (
+                      <span
+                        className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md bg-warning/10 text-warning shrink-0"
+                        title="They have not set up two-factor yet. They can still do it at their next sign-in."
+                      >
+                        <ShieldAlert className="w-3 h-3" /> Setup not finished
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {/* Only shown when there is actually someone stuck -- a permanent
+              instruction block is noise on a list that is usually all green. */}
+          {enrolment?.some(r => r.enrolled === false && r.pass_spent) && (
+            <p className="px-4 py-3 text-xs text-muted-foreground border-t border-border bg-accent/20">
+              To fix “Cannot sign in”: find the person on the roster below and use
+              the shield button on their row. That clears the block and lets them
+              set up two-factor at their next sign-in.
+            </p>
+          )}
+        </div>
+      )}
 
       {escalationOpen && (
         <div className="card p-0 overflow-hidden border-primary/20">
@@ -1290,15 +1443,33 @@ function PeopleTab() {
                                   {lc === 'active' ? 'Deactivate' : 'Reactivate'}
                                 </button>
                               )}
-                              {/* ADR-386 layer 4a. ACTIVE employees only: containing a
-                                  deactivated account is pointless, and the endpoint 409s on
-                                  one that never completed registration. */}
-                              {lc === 'active' && (
+                              {/* ADR-386 layer 4a, widened by ADR-467 D3.
+                                  'registered' is the state a LOCKED-OUT privileged account
+                                  is pinned in, and it was excluded -- so the one control
+                                  that unblocks them was hidden for exactly the population
+                                  that is blocked.
+
+                                  A refused sign-in issues no token, so no request reaches
+                                  get_caller_employee and account_status can never leave
+                                  'pending_verification' (deps.py:265). The row reads
+                                  'Registered' forever, which looks like "waiting on the
+                                  user" -- the one state an admin correctly ignores.
+
+                                  Still excluded, and the original reasons still hold:
+                                  'deactivated' (resetting it is pointless) and
+                                  not_invited/invited/bounced (no Cognito account, and the
+                                  endpoint 409s). Verified the boundary rather than assumed
+                                  it: the 409 keys on cognito_username_for returning None,
+                                  which resolves `username or email` -- and a 'registered'
+                                  employee has username stamped, so the call succeeds. */}
+                              {(lc === 'active' || lc === 'registered') && (
                                 <button
                                   onClick={() => handleResetMfa(emp)}
                                   disabled={resettingMfaId === emp.id}
                                   className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                                  title="Reset two-factor authentication"
+                                  title={lc === 'registered'
+                                    ? 'Clear the sign-in block and two-factor setup'
+                                    : 'Reset two-factor authentication'}
                                 >
                                   <ShieldOff className="w-3.5 h-3.5" />
                                 </button>

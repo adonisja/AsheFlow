@@ -24,6 +24,26 @@ export interface Employee {
  *  shape that carries an owner's or a manager's number, and opening the list
  *  is audited server-side.
  */
+/** ADR-467 D1. GET /employees/mfa-enrolment — admin only, privileged rows only.
+ *
+ *  Mirrors EmployeeMfaEnrolmentResponse. `enrolled` is THREE-valued and the
+ *  third value matters: null means Cognito could not be read, which is NOT
+ *  "not enrolled" (ADR-377). Render unknown as unknown -- an AWS hiccup must
+ *  not accuse someone of being unprotected.
+ *
+ *  enrolled === false && pass_spent  is the lockout signature: the one-time
+ *  enrolment pass is gone and nothing was set up with it, so PreAuthentication
+ *  refuses every later sign-in.
+ */
+export interface MfaEnrolmentRow {
+  id: string;
+  name: string;
+  role: string;
+  pass_spent: boolean;
+  enrolled: boolean | null;
+  account_status: string;
+}
+
 export interface EscalationContact {
   id: string;
   name: string;

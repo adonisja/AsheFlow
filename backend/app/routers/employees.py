@@ -27,6 +27,7 @@ from app.models.notification import Notification
 from app.schemas.employee import (
     _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse,
     EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse,
+    EmployeeMfaEnrolmentResponse,
     BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest,
 )
 from app.services.audit import write_audit
@@ -580,6 +581,124 @@ def get_escalation_contacts(
     db.commit()
 
     return [EmployeeEscalationResponse.model_validate(e) for e in contacts]
+
+
+@router.get("/mfa-enrolment", response_model=List[EmployeeMfaEnrolmentResponse])
+@limiter.limit("20/minute")
+def get_mfa_enrolment(
+    request: Request,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["admin"])),
+    db: Session = Depends(get_db),
+):
+    """Which privileged accounts can actually sign in (ADR-467 D1).
+
+    The roster cannot answer this. A privileged account that spent ADR-459's
+    one-time enrolment pass without enrolling is refused by PreAuthentication on
+    every later attempt, and because a refused sign-in issues no token, no
+    request reaches get_caller_employee and `account_status` never leaves
+    'pending_verification'. The row reads "Registered" forever -- which looks
+    like "waiting on the user", the one state an admin correctly ignores.
+
+    ADMIN ONLY, deliberately. Enrolment state is a security property of another
+    person's account, and dispatch has no action to take on it.
+
+    WHY THIS IS AN ENDPOINT AND NOT A ROSTER FIELD. Probed against the live pool
+    before designing it: `list_users` returns Attributes, Enabled,
+    UserCreateDate, UserLastModifiedDate, UserStatus, Username -- and NO
+    UserMFASettingList. It does not return custom:mfa_first_seen either (the
+    custom: list came back empty for an account that is certainly enrolled).
+    So neither signal is bulk-readable, enrolment is one admin_get_user per
+    user, and the roster loads ?limit=500. Inlining it would be 500 sequential
+    AWS round-trips on a page admins open daily.
+
+    Scoping is what makes it affordable: only MFA_PRIVILEGED_ROLES can be locked
+    out this way, which is a handful of rows.
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    from app.services import mfa_status
+
+    # Company-scoped (Dimension 1) AND role-scoped: the field roster is not just
+    # unaffordable to check, it is not at risk -- field accounts have a grace
+    # window and are never refused for holding no factor.
+    rows = (
+        db.query(Employee)
+        .filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(mfa_status.MFA_PRIVILEGED_ROLES),
+        )
+        .all()
+    )
+
+    try:
+        client = boto3.client("cognito-idp", region_name=settings.aws_region)
+    except (ClientError, BotoCoreError) as exc:
+        # No client: report every row as unknown rather than 500ing. An admin
+        # opening this during an incident needs the list of accounts even when
+        # the state beside them cannot be read.
+        logger.warning("mfa enrolment: no cognito client: %s", type(exc).__name__)
+        client = None
+
+    rank = {"admin": 0, "management": 1, "dispatch": 2}
+    rows.sort(key=lambda e: (rank.get(e.role, 9), (e.name or "").lower()))
+
+    out: list[EmployeeMfaEnrolmentResponse] = []
+    for emp in rows:
+        enrolled: bool | None = None
+        pass_spent = False
+        username = cognito_username_for(emp)
+        if client is not None and username:
+            try:
+                # ONE call per user carries both signals: UserMFASettingList for
+                # the factor, UserAttributes for the pass. Reading them
+                # separately would double the round-trips for nothing.
+                resp = client.admin_get_user(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=username,
+                )
+                # Mirrors mfa_status.is_enrolled rather than re-deriving it, so
+                # the two surfaces cannot disagree about who is enrolled.
+                enrolled = bool(resp.get("UserMFASettingList"))
+                attrs = {a["Name"]: a.get("Value")
+                         for a in resp.get("UserAttributes", [])}
+                pass_spent = bool(attrs.get("custom:mfa_first_seen"))
+            except (ClientError, BotoCoreError) as exc:
+                # Per-row, so one unreadable account does not blank the others.
+                # Stays None -- "could not tell", never "not enrolled".
+                logger.warning(
+                    "mfa enrolment: could not read %s: %s",
+                    emp.id, type(exc).__name__,
+                )
+
+        out.append(EmployeeMfaEnrolmentResponse(
+            id=emp.id, name=emp.name, role=emp.role,
+            pass_spent=pass_spent, enrolled=enrolled,
+            account_status=emp.account_status,
+        ))
+
+    # Audited for the same reason ADR-458 D3 audits the escalation list: this
+    # reads a security property of other people's accounts, and a gate that
+    # leaves no trace cannot answer "who looked, and when". Counts only -- never
+    # which accounts are unprotected, which would put a target list in a second
+    # store.
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.mfa_enrolment_viewed",
+        target_table="employees",
+        target_id=str(caller.company_id),
+        detail={
+            "returned": len(out),
+            "unenrolled": sum(1 for r in out if r.enrolled is False),
+            "unknown": sum(1 for r in out if r.enrolled is None),
+        },
+    )
+    db.commit()
+
+    return out
 
 
 @identity_router.get("/me", response_model=EmployeeResponse)
