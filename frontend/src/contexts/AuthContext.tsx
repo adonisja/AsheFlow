@@ -34,6 +34,11 @@ interface AuthContextType {
   capabilities: Capabilities | null;
   /** ADR-377 — null means "not known", not "no MFA required". */
   mfaStatus: MfaStatus | null;
+  /* ADR-469. `mfaStatus` null is ambiguous -- it means BOTH "not fetched yet"
+     and "the fetch failed", and a routing guard must tell those apart. True once
+     the question has been ASKED and answered either way, so a guard can hold
+     while unknown without hanging forever when Cognito is unreachable. */
+  mfaResolved: boolean;
   /** True when the feature is available. Returns TRUE while capabilities are
    *  unknown: a transient failure must not blank out a working nav, and every
    *  gated route is enforced server-side anyway (RequireMode → 404). Failing
@@ -57,6 +62,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
      allowed to fail without blocking sign-in, so consumers must render nothing
      on null rather than treating it as an all-clear. */
   const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
+  const [mfaResolved, setMfaResolved] = useState(false);
 
   const refreshConfigured = async () => {
     try {
@@ -152,12 +158,36 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
            runs here because no Cognito trigger fires on ConfirmDevice. Until
            this was wired, both features were reachable and never reached.
 
-           Not awaited, and errors swallowed: a status banner is worth nothing
-           if failing to fetch it stops a walker starting their shift at 05:00. */
-        void axiosClient
-          .get('/employees/me/mfa-status')
-          .then(res => setMfaStatus(res.data))
-          .catch(() => setMfaStatus(null));
+           AWAITED since ADR-469. It was fire-and-forget, on ADR-377's reasoning
+           that "a status banner is worth nothing if failing to fetch it stops a
+           walker starting their shift at 05:00" -- correct for a BANNER, and
+           wrong the moment ADR-465 made the same value gate ROUTING.
+
+           Unawaited, mfaStatus was null on the first render, so ProtectedRoute's
+           `mfaStatus?.blocked` fell through to the /setup redirect; /setup's
+           first API call 403s with mfa_enrolment_required; the interceptor does
+           location.assign('/mfa-setup'), a FULL document navigation, which
+           remounts this provider with mfaStatus null again. That is a redirect
+           loop, and it burned the prod Owner's one-time enrolment pass without
+           ever letting them enrol.
+
+           The 05:00 property is preserved by the catch, not by the lack of await:
+           a failed or slow call still resolves to null, `blocked` stays falsy,
+           and nobody is gated on a status we could not read. What changed is that
+           the answer now ARRIVES before anything routes on it. */
+        try {
+          const res = await axiosClient.get('/employees/me/mfa-status');
+          setMfaStatus(res.data);
+        } catch {
+          // null means "could not read", never "blocked" -- an AWS or network
+          // hiccup must not wall anyone (ADR-377's rule, kept).
+          setMfaStatus(null);
+        } finally {
+          // Answered, whichever way. A failed read is an ANSWER ("we cannot
+          // tell"), not a pending state -- so the setup redirect proceeds rather
+          // than hanging an unconfigured admin on a spinner forever.
+          setMfaResolved(true);
+        }
 
     } catch {
       // If this throws, the user is simply not logged in.
@@ -210,6 +240,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     refreshConfigured,
     capabilities,
     mfaStatus,
+    mfaResolved,
     hasFeature,
     federatedError,
     clearFederatedError,
