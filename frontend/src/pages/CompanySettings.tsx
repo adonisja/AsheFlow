@@ -113,9 +113,6 @@ const TRAINING_RULES: FieldMeta[] = [
   { key: 'max_training_phase', label: 'Max Training Phase', type: 'int', required: true, description: 'Total number of training phases.', placeholder: '4', min: 1, max: 10 },
 ];
 
-const DISPATCH_WEIGHTS: FieldMeta[] = [
-];
-
 const WALKER_RATING: FieldMeta[] = [
   { key: 'rating_window_hours', label: 'Rating Window (hours)', type: 'int', required: true, description: 'Hours after departure ratings can be submitted.', placeholder: '6', min: 1, max: 48 },
   { key: 'flag_threshold', label: 'Rating Flag Threshold', type: 'float', required: true, description: 'Deviation from average that triggers an anomaly flag.', placeholder: '1.0', min: 0, max: 10, step: 0.1 },
@@ -656,7 +653,6 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
   const CONFIG_SECTIONS = [
     { title: 'Shift Timing', icon: Clock, fields: SHIFT_TIMING },
     { title: 'Training Rules', icon: BookOpen, fields: TRAINING_RULES },
-    { title: 'Dispatch Weights', icon: Truck, fields: DISPATCH_WEIGHTS },
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
     { title: 'Attendance', icon: CheckSquare, fields: ATTENDANCE },
     { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },

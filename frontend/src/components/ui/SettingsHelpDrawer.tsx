@@ -208,6 +208,152 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
       'Attendance is measured against max(shift start, when the AP was established). A station-caused late start (a late AP) therefore shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
     example: '"20" — arrivals up to 20 min past the reference are on-time; later is late.',
   },
+  // ── Amazon scorecard targets (ADR-472) ──────────────────────────────────
+  //
+  // Written against Amazon's own metric resource guides, not from research.
+  // Definitions are in OUR words: the guides are Amazon Confidential and the
+  // DSP Program Agreement §7(a) obliges the tenant to protect them, so nothing
+  // here reproduces their text.
+  //
+  // THRESHOLDS ARE DELIBERATELY NOT STATED. Amazon revises them, and a number
+  // frozen into a help drawer would be read as authoritative while quietly
+  // going stale. Every entry points at the tenant's own weekly scorecard, which
+  // is also where Amazon says the truth lives.
+  //
+  // Five of the ten target columns do NOT match a real Amazon metric (ADR-473
+  // realigns them). Those carry a short entry saying so rather than a confident
+  // explanation of a field that is about to change shape -- documenting a defect
+  // authoritatively is worse than documenting nothing.
+
+  scorecard_pod_target: {
+    title: 'POD Target',
+    summary: 'Photo on Delivery acceptance rate: photos taken that Amazon accepts.',
+    detail:
+      'Measured as accepted photos divided by photos taken. A photo is rejected when the package cannot be made out -- too dark, blurred, too close, a person or pet in frame, a generic scene with no package. HIGHER is better. Two things worth telling a driver: RETAKING a photo never counts against you, so a second attempt is always better than a bad first one; but SKIPPING the photo is recorded as a defect. An attended handoff with no package visible still passes if the location is recognisable.',
+    example: '"98.0" — at least 98% of photos taken were accepted.',
+    note: 'Take the figure from your own weekly scorecard. It differs by programme, and Amazon revises it.',
+  },
+
+  scorecard_dsb_dpmo_target: {
+    title: 'DSB DPMO Ceiling',
+    summary: 'Delivery Success Behaviors: customer concessions per million packages.',
+    detail: (
+      <>
+        <p>
+          Counts concessions Amazon attributes to the driver, per million packages
+          delivered: a package reported as never received, or recorded as lost.
+        </p>
+        <p className="font-semibold text-foreground">LOWER is better</p>
+        <p>
+          A CEILING, not a target: a person passes at or BELOW your figure. The
+          behaviours behind it are coachable and specific: simultaneous
+          deliveries, finishing a stop far from the map pin, using the wrong scan
+          for attended or unattended, no photo, and scanning a package as
+          delivered that was neither delivered nor returned.
+        </p>
+        <p>
+          Delivered-not-received sits INSIDE this metric rather than beside it,
+          which is why a separate DNR target has nothing to compare against.
+        </p>
+      </>
+    ),
+    example: '"233" — no more than 233 concessions per million packages.',
+    note: 'Take the figure from your own weekly scorecard; it differs by programme.',
+  },
+
+  scorecard_fico_target: {
+    title: 'FICO Target',
+    summary: 'A driving score between 100 and 850. HIGHER is better.',
+    detail:
+      'One input to Amazon’s safety score, and the SMALLEST one â the event rates below carry far more weight between them. It also does not cover every vehicle: it applies to rented branded vans rather than the whole fleet, so a tenant may see it for some drivers and not others. Useful as a trend; not the number to coach against when a specific behaviour is the problem.',
+    example: '"800" — drivers pass at 800 or above.',
+    note: 'Take the figure from your own weekly scorecard. Walkers have no driving score and are not measured on it.',
+  },
+
+  scorecard_speeding_rate_target: {
+    title: 'Speeding Rate Ceiling',
+    summary: 'Speeding events per 100 trips. LOWER is better.',
+    detail:
+      'A CEILING: a person passes at or below your figure. It is a RATE, not a count, so a driver who works more days is not penalised for it. A "trip" is a DAY on which they delivered, so two routes or two vehicles in one day still count once. One of the heaviest inputs to the safety score. Worth reading alongside route pressure: a driver chasing a late dispatch speeds on roads they drove fine last week.',
+    example: '"8.0" — no more than 8 speeding events per 100 trips.',
+    note: 'Take the figure from your own weekly scorecard. Amazon also needs a minimum number of trips in a week before this counts at all, so a light week may show events without a rate.',
+  },
+
+  scorecard_signsignal_rate_target: {
+    title: 'Sign/Signal Rate Ceiling',
+    summary: 'Stop-sign, red-light and illegal U-turn events per 100 trips. LOWER is better.',
+    detail: (
+      <>
+        <p>
+          A CEILING: pass at or below your figure. Covers three things, not two:
+          rolling or missed stop signs, running a red light, and illegal U-turns.
+        </p>
+        <p className="font-semibold text-foreground">Not all events weigh the same</p>
+        <p>
+          Entering on a light that was ALREADY red counts many times over;
+          entering on yellow and still being in the junction when it turns does
+          not count at all. A full failure to stop counts several times a rolling
+          one. So a single serious event can move this rate more than a week of
+          minor ones. Check what the events were before treating a spike as a
+          pattern.
+        </p>
+        <p>
+          Adverse weather is not accepted as a reason for missing a stop sign.
+        </p>
+      </>
+    ),
+    example: '"8.0" — no more than 8 sign or signal events per 100 trips.',
+    note: 'Take the figure from your own weekly scorecard. Amazon’s own safety dashboard is the authority on which events counted â a camera vendor’s portal can show a different number.',
+  },
+
+  // ── Fields awaiting realignment (ADR-473) ───────────────────────────────
+  //
+  // Each of these five is stored and saveable, but does not currently match the
+  // shape of the Amazon metric it is named after: wrong direction, wrong unit,
+  // or no corresponding scorecard metric at all. Nothing compares them yet, so
+  // an out-of-shape value does no harm today.
+
+  scorecard_dcr_target: {
+    title: 'DCR Target',
+    summary: 'Delivery completion. This field is being realigned. See the note below.',
+    detail:
+      'Amazon measures delivery completion as a DEFECT RATE where lower is better, counting packages returned to station against packages dispatched, with a long list of exemptions (weather, business closed, customer unavailable, locker, damaged, reschedules). This field is currently shaped as a percentage where higher is better, which does not match.',
+    note: 'Leave this blank for now. Nothing in AsheFlow compares against it yet, and the field is being reshaped to match the real metric.',
+    noteTone: 'warning',
+  },
+  scorecard_cdf_target: {
+    title: 'CDF Target',
+    summary: 'Customer feedback. This field is being realigned. See the note below.',
+    detail:
+      'Amazon measures customer delivery feedback as negative feedback per million deliveries, where LOWER is better. This field is currently shaped as a percentage where higher is better, and caps at 100, so a real figure cannot be entered.',
+    note: 'Leave this blank for now. The field is being reshaped to match the real metric.',
+    noteTone: 'warning',
+  },
+  scorecard_cc_target: {
+    title: 'Contact Compliance Target',
+    summary: 'Customer contact. This field is being realigned. See the note below.',
+    detail:
+      'Contacting the customer matters, but Amazon treats it as a way to EXEMPT a returned package from counting against delivery completion rather than as a metric with its own target. A compliant attempt means calling and letting it ring, then following up by text if there is no answer; outside daytime hours it means contacting driver support instead. There is no separate percentage to hit.',
+    note: 'Leave this blank for now. There is no matching scorecard metric to compare it against.',
+    noteTone: 'warning',
+  },
+  scorecard_dnr_dpmo_target: {
+    title: 'DNR DPMO Ceiling',
+    summary: 'Delivered not received. Covered by DSB. See the note below.',
+    detail:
+      'A package reported as delivered but never received is counted INSIDE Delivery Success Behaviors rather than as its own scorecard line, so there is nothing separate for this target to be measured against.',
+    note: 'Leave this blank and set the DSB ceiling instead.',
+    noteTone: 'warning',
+  },
+  scorecard_dvic_target: {
+    title: 'DVIC Compliance Target',
+    summary: 'Vehicle inspections. This field is being realigned. See the note below.',
+    detail:
+      'Amazon does not score inspection COMPLETION. Completing the pre-trip is already required before the app will start a route. What is scored is inspection QUALITY â a driver reporting no defects when a later audit finds a serious one, confirmed by photo â and it forms part of a fleet composite alongside vehicle rotation and repair turnaround, as a defect rate where lower is better. A driver’s first instance is treated as a coaching opportunity and excluded.',
+    note: 'Leave this blank for now. The field is being reshaped to match the real metric. Worth knowing separately: an incomplete POST-trip inspection leaves safety events attributed to that driver even after they change vehicles.',
+    noteTone: 'warning',
+  },
+
   ncns_cutoff_minutes: {
     title: 'NCNS Cutoff',
     summary: 'Minutes past shift start before an unaccounted crew member is a no-call-no-show.',
