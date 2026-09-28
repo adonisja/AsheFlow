@@ -212,6 +212,37 @@ class EmployeeMfaEnrolmentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EmployeeMfaDeadlineResponse(BaseModel):
+    """A field employee whose MFA grace window is about to close (ADR-470 D2).
+
+    Deliberately NOT part of EmployeeMfaEnrolmentResponse (ADR-467 D1), despite
+    the obvious family resemblance. Three things differ and each one matters:
+
+      audience  that one is ADMIN ONLY, because enrolment state is a security
+                property of another person's account. This is dispatch's too --
+                they are who is on shift at 04:00 when somebody cannot start,
+                and a list they cannot open is useless exactly then (ADR-458's
+                reasoning for the escalation list).
+      cost      that one needs one admin_get_user PER ROW. This needs none:
+                days_remaining comes entirely from mfa_grace_started_at, a DB
+                column. Folding them together would drag the Cognito cost onto
+                the cheap query and the narrow gate onto the broad one.
+      question  "who is locked out" vs "who is about to be".
+
+    No `enrolled` field, and that is the point: an employee who HAS enrolled is
+    never in this list, so the field would be a constant.
+    """
+    id: UUID
+    name: str
+    role: str
+    # Whole days, floored -- 0 means the window closes today. Never negative:
+    # someone already past the deadline is blocked now, which is a different
+    # surface (ADR-467's panel) and a different conversation.
+    days_remaining: int
+
+    model_config = {"from_attributes": True}
+
+
 class EmployeePublicResponse(BaseModel):
     """Redacted response — returned to field staff (driver/walker/trainer/trainee).
 

@@ -5,7 +5,7 @@ import {
   AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-import type { CompanyZone, CornerPoint, EscalationContact, MfaEnrolmentRow } from '../api/types';
+import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -622,6 +622,23 @@ function PeopleTab() {
   const [enrolmentBusy, setEnrolmentBusy] = useState(false);
   const [enrolmentError, setEnrolmentError] = useState<string | null>(null);
 
+  /* ADR-470 D2. Auto-loaded, unlike the enrolment panel next to it. That one is
+     admin-only and costs a Cognito call per row, so it waits to be asked. This
+     one is free (a single indexed query) and answers a question nobody thinks to
+     ask -- which is the whole problem it exists for. A banner nobody opens is
+     the in-app countdown all over again. */
+  const [deadlines, setDeadlines] = useState<MfaDeadlineRow[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    axiosClient.get<MfaDeadlineRow[]>('/employees/mfa-deadline')
+      .then(r => { if (!cancelled) setDeadlines(r.data); })
+      // Silent: this is a supplementary warning strip, and failing to fetch it
+      // must not put an error on a roster that loaded fine.
+      .catch(() => { if (!cancelled) setDeadlines(null); });
+    return () => { cancelled = true; };
+  }, []);
+
   const openEnrolment = async () => {
     setEnrolmentOpen(true);
     // Refetched on each open, unlike the escalation list: this is live account
@@ -1043,6 +1060,47 @@ function PeopleTab() {
           <Plus className="w-4 h-4" /> Invite Employee
         </button>
       </div>
+
+      {/* ADR-470 D2. Only when there IS someone -- a permanently present "0
+          people" strip is noise on a page used daily, and noise is what the
+          in-app countdown already was. */}
+      {deadlines && deadlines.length > 0 && (
+        <div className="card p-0 overflow-hidden border-warning/30">
+          <div className="px-4 py-3 bg-warning/10 border-b border-warning/20">
+            <p className="text-sm font-semibold text-foreground">
+              Two-factor deadline approaching
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {deadlines.length === 1 ? 'This person' : 'These people'} will be
+              locked out of AsheFlow until they set up two-factor. They have been
+              messaged on Discord.
+            </p>
+          </div>
+          <ul className="divide-y divide-border">
+            {deadlines.map(d => (
+              <li key={d.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-medium text-foreground truncate">{d.name}</span>
+                  <span className={badge(d.role)}>{d.role}</span>
+                </span>
+                {/* 0 is "today", not "no time left" -- and the copy says which,
+                    because a bare "0 days" reads as already-expired. */}
+                <span className={`text-xs font-semibold px-2.5 py-1.5 rounded-md shrink-0 ${
+                  d.days_remaining <= 1
+                    ? 'bg-danger/10 text-danger'
+                    : 'bg-warning/10 text-warning'
+                }`}>
+                  {d.days_remaining === 0
+                    ? 'Today'
+                    : d.days_remaining === 1
+                      ? '1 day left'
+                      : `${d.days_remaining} days left`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {enrolmentOpen && (
         <div className="card p-0 overflow-hidden border-primary/20">
