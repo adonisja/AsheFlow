@@ -30,9 +30,22 @@ PRIVILEGED_GROUPS = {
     "platform_support",
 }
 
+# ADR-466 D2. Cognito wraps this in "PreAuthentication failed with error {msg}",
+# which is AWS's and not configurable -- so the user always sees our sentence
+# inside theirs. What we control is what follows.
+#
+# The previous text named this trigger and pointed at Account > Security, which
+# (a) is an internal implementation detail and (b) is no longer where enrolment
+# lives: ADR-465 routes it to /mfa-setup. Worse, someone seeing this message has
+# usually SPENT their one enrolment pass (ADR-459), so they cannot reach either
+# page and the instruction was a dead end. It now names the way out for them.
+#
+# No trailing period: the wrapper supplies its own, and two in a row was the
+# visible seam between AWS's sentence and ours.
 ENROL_HINT = (
-    "This account needs two-factor authentication before you can sign in. "
-    "Open AsheFlow on the web and go to Account > Security to set it up."
+    "Set up two-factor authentication to continue. Sign in on the web at "
+    "asheflow.com to finish setup - if you are already there, ask your "
+    "administrator to reset your two-factor setup"
 )
 
 # ADR-459 D3. Stamped on the one sign-in this trigger lets through unenrolled.

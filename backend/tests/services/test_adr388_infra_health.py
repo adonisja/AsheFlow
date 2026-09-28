@@ -174,6 +174,8 @@ class TestThePermissionProbe:
         admin_get_user="UserNotFoundException",
         # AdminForgetDevice reports a missing DEVICE, not a missing user.
         admin_forget_device="ResourceNotFoundException",
+        # ADR-466 D1 -- the enrolment-pass clear.
+        admin_delete_user_attributes="UserNotFoundException",
     )
 
     def test_all_permitted_is_clean(self):
@@ -237,9 +239,14 @@ class TestThePermissionProbe:
         c = MagicMock()  # no side effects: every call "succeeds"
         with patch("boto3.client", return_value=c):
             problems = h._check_containment_permissions("r", "p")
-        # One per probed action -- the count follows the probe list, which the
-        # ADR-395 drift check keeps aligned with contain()'s real calls.
-        assert len(problems) == 5
+        # One per probed action. DERIVED, not hardcoded: the ADR-395 drift check
+        # already forces the probe list to match contain()'s real calls, so this
+        # test has no opinion about how many there are -- only that every one
+        # reports. A literal here fails whenever containment gains a call, which
+        # is a passing test breaking on correct work.
+        import inspect as _inspect
+        probe_count = _inspect.getsource(h._check_containment_permissions).count('", lambda: client.')
+        assert len(problems) == probe_count
         assert all("unexpectedly exists" in p for p in problems), problems
 
 
@@ -265,7 +272,8 @@ class TestTheDeviceProbeUsesAWellFormedKey:
         needs its own success code or every run reports a false failure."""
         c = MagicMock()
         for m in ("admin_set_user_mfa_preference", "admin_user_global_sign_out",
-                  "admin_list_devices", "admin_get_user"):
+                  "admin_list_devices", "admin_get_user",
+                  "admin_delete_user_attributes"):
             getattr(c, m).side_effect = ClientError(
                 {"Error": {"Code": "UserNotFoundException"}}, "Op")
         c.admin_forget_device.side_effect = ClientError(
