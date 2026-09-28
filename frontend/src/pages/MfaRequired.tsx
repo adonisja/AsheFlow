@@ -40,10 +40,22 @@ export default function MfaRequired() {
             </h1>
             {/* Says what is true now, not what failed. This account has access
                 worth protecting, which is WHY the wall exists -- a bare
-                "required" reads as bureaucracy. */}
+                "required" reads as bureaucracy.
+
+                ADR-469 D4. TWO audiences, because `blocked` has two causes. A
+                privileged account is blocked from its first sign-in and holds
+                company-wide access (ADR-377: no grace). A FIELD account is
+                blocked only after its 14-day window closes -- and telling a
+                walker on day 15 that their role "can see and change things
+                across the whole company" is untrue and reads as a mistake on a
+                page that gives them no way past it. */}
             <p className="text-sm text-muted-foreground mt-1">
-              Your role can see and change things across the whole company, so
-              AsheFlow needs a second factor before you can continue.
+              {mfaStatus?.tier === 'field'
+                ? <>Your {mfaStatus.grace_days_total}-day window to set this up
+                    has passed, so AsheFlow needs a second factor before you can
+                    continue.</>
+                : <>Your role can see and change things across the whole company,
+                    so AsheFlow needs a second factor before you can continue.</>}
             </p>
           </div>
         </div>
