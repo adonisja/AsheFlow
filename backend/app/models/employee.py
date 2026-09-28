@@ -12,7 +12,20 @@ VALID_ROLES = (
     "driver", "walker", "trainer", "trainee", "dispatch", "management", "admin",
     "captain", "field_supervisor", "driver_trainee",
 )
-VALID_ACCOUNT_STATUSES = ("pending_verification", "active", "deactivated")
+# ADR-468 D1 (building ADR-379 D3). `registered` closes an overload that had
+# already produced a destructive bug: `pending_verification` meant BOTH "invited,
+# no Cognito account" and "Cognito account created, never signed in", because
+# complete_registration deliberately leaves the status alone. Readers that tested
+# `!= "pending_verification"` to mean "has registered" were therefore wrong about
+# every registered-but-not-yet-signed-in account.
+#
+#   pending_verification  invited; no Cognito account exists
+#   registered            Cognito account created; never signed in
+#   active                has signed in
+#   deactivated           manually disabled
+VALID_ACCOUNT_STATUSES = (
+    "pending_verification", "registered", "active", "deactivated",
+)
 
 
 class Employee(Base):
@@ -47,7 +60,11 @@ class Employee(Base):
             name="ck_employees_role_valid",
         ),
         CheckConstraint(
-            "account_status IN ('pending_verification', 'active', 'deactivated')",
+            # Derived, not retyped: the literal list and VALID_ACCOUNT_STATUSES
+            # were two places to add a value, and only one of them was obvious.
+            "account_status IN ({})".format(
+                ", ".join(f"'{s}'" for s in VALID_ACCOUNT_STATUSES)
+            ),
             name="ck_employees_account_status_valid",
         ),
         # Partial unique index — only enforced when discord_id is not null,

@@ -261,7 +261,15 @@ def get_caller_employee(
 
     # Activate on first successful login regardless of when cognito_sub was stamped
     # (registration now stamps it before the employee ever signs in)
-    if employee and employee.account_status == "pending_verification":
+    #
+    # ADR-468 D1. BOTH pre-active states promote. 'registered' is the normal path
+    # now that complete_registration stamps it, but 'pending_verification' must
+    # stay: an ADP-created row (tasks/adp_sync.py) and a bootstrap owner row
+    # (routers/companies.py) are created in that state and never pass through
+    # complete_registration, so a row that signs in must become active whichever
+    # state it came from. Dropping either arm strands one population as not-active
+    # forever.
+    if employee and employee.account_status in ("pending_verification", "registered"):
         employee.account_status = "active"
         employee.is_active = True
         needs_commit = True

@@ -2084,7 +2084,12 @@ def edit_owner(
     directly would lock a live tenant's admin out on a typo.
     """
     admin = _owner_or_404(db, company_id)
-    confirmed = admin.account_status != "pending_verification"
+    # ADR-468 D2. "Confirmed" means "has a Cognito account under this name",
+    # which is `username`, not the absence of one status value. The old test
+    # called a registered owner unconfirmed and let their name be rewritten --
+    # the exact history-rewriting this guard exists to prevent, since the name is
+    # already in their sign-in account and audit rows.
+    confirmed = admin.username is not None
 
     if confirmed and payload.name is not None and payload.name.strip() != admin.name:
         raise HTTPException(
@@ -2110,7 +2115,9 @@ def edit_owner(
     if payload.email is not None:
         admin.email = payload.email
 
-    invite_sent = admin.account_status != "pending_verification"
+    # ADR-468 D2. Same correction: a registered owner HAS accepted their invite,
+    # and reporting otherwise told the super admin an invite was still outstanding.
+    invite_sent = admin.username is not None
     token_str = None
     if not confirmed:
         # The old link points at an address that is no longer the admin.
@@ -2186,7 +2193,23 @@ def delete_owner(
     """
     admin = _owner_or_404(db, company_id)
 
-    if admin.account_status != "pending_verification":
+    # ADR-468 D2. This tested `!= "pending_verification"`, which did NOT mean
+    # "has completed registration": complete_registration stamps username and
+    # cognito_sub while LEAVING the status alone, so a fully registered owner --
+    # real Cognito account, temp password emailed, possibly mid-MFA-setup -- read
+    # 'pending_verification' and this guard let them through.
+    #
+    # The delete below removes the Employee row and its InviteToken and makes no
+    # Cognito call, so it orphaned a live account with a valid password in the
+    # pool: no DB row, so no company, no role resolution, nothing in the roster
+    # saying it exists. Exactly ADR-397's orphan, created by a guard that
+    # believed it was refusing.
+    #
+    # `username` is the registration marker (ADR-379 D1's choice, for the same
+    # reason: cognito_sub can be null on a genuinely registered employee). The
+    # status test is kept as a second term so a 'registered' row is refused even
+    # if some future path stamps a status without a username.
+    if admin.username is not None or admin.account_status not in ("pending_verification",):
         raise HTTPException(
             status_code=409,
             detail=(
