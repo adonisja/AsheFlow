@@ -27,7 +27,7 @@ from app.models.notification import Notification
 from app.schemas.employee import (
     _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse,
     EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse,
-    EmployeeMfaEnrolmentResponse,
+    EmployeeMfaEnrolmentResponse, EmployeeMfaDeadlineResponse,
     BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest,
 )
 from app.services.audit import write_audit
@@ -581,6 +581,86 @@ def get_escalation_contacts(
     db.commit()
 
     return [EmployeeEscalationResponse.model_validate(e) for e in contacts]
+
+
+@router.get("/mfa-deadline", response_model=List[EmployeeMfaDeadlineResponse])
+@limiter.limit("20/minute")
+def get_mfa_deadline(
+    request: Request,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Which field staff are about to be walled (ADR-470 D2).
+
+    ADR-377 gives field roles 14 days; ADR-465 makes the wall unskippable when
+    that window shuts. Nobody could see it coming: the countdown renders only
+    inside the app, and ADR-467's panel is scoped to privileged roles because
+    those are the accounts that can be locked OUT. So the first signal that six
+    walkers are blocked on Monday was routes not starting.
+
+    Gate is BROADER than ADR-467's admin-only enrolment view, on ADR-458 D2's
+    reasoning: dispatch is who is on shift at 04:00 when somebody cannot start,
+    and a list they cannot open is useless exactly when it is needed. Widening
+    costs nothing here because this endpoint makes NO Cognito call -- see below.
+
+    Not audited, unlike the escalation list (ADR-458 D3) and the enrolment panel
+    (ADR-467 D1). Both of those expose something about a person: a personal
+    mobile number, or whether their account is unprotected. This exposes a
+    deadline. Auditing it would add a write to a read that reveals nothing worth
+    recording, and bury the rows that do matter.
+
+    CHEAP BY CONSTRUCTION. `days_remaining` derives entirely from
+    `mfa_grace_started_at`, so the whole answer is one indexed query. A clock
+    that never started is excluded by the NOT NULL term rather than evaluated
+    and discarded -- and as of ADR-470 that is most of the roster, because the
+    clock only starts when someone first opens a client.
+    """
+    now = datetime.now(timezone.utc)
+    grace = mfa_status.DEFAULT_MFA_GRACE_DAYS
+    # Mirrors the task's bands (ADR-470 D1). Anything sooner than this is not
+    # yet actionable for dispatch; anything past it is already blocked.
+    horizon_days = 3
+
+    window_opens = now - timedelta(days=grace - horizon_days)
+    deadline_at = now - timedelta(days=grace)
+
+    rows = (
+        db.query(Employee)
+        .filter(
+            Employee.company_id == caller.company_id,
+            Employee.is_active == True,  # noqa: E712
+            Employee.mfa_grace_started_at.isnot(None),
+            Employee.mfa_grace_started_at <= window_opens,
+            # Already past it: blocked NOW, not "about to be". They belong on
+            # ADR-467's panel, and listing them here would read as a warning
+            # about something that has already happened.
+            Employee.mfa_grace_started_at > deadline_at,
+        )
+        .all()
+    )
+
+    out: list[EmployeeMfaDeadlineResponse] = []
+    for emp in rows:
+        # Role-tier, not the Cognito group: this is a DB row, not a token.
+        if mfa_status.tier_for(emp.role, {emp.role}) != "field":
+            continue
+        status_obj = mfa_status.evaluate(
+            role=emp.role, enrolled=False,
+            grace_started_at=emp.mfa_grace_started_at,
+            grace_days=grace, groups={emp.role},
+        )
+        if status_obj.days_remaining is None:
+            continue
+        out.append(EmployeeMfaDeadlineResponse(
+            id=emp.id, name=emp.name, role=emp.role,
+            days_remaining=status_obj.days_remaining,
+        ))
+
+    # Soonest first: this is a worklist, and the person with one day left is the
+    # one to call.
+    out.sort(key=lambda r: (r.days_remaining, r.name.lower()))
+    return out
 
 
 @router.get("/mfa-enrolment", response_model=List[EmployeeMfaEnrolmentResponse])

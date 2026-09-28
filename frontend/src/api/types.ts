@@ -35,6 +35,21 @@ export interface Employee {
  *  enrolment pass is gone and nothing was set up with it, so PreAuthentication
  *  refuses every later sign-in.
  */
+/** ADR-470 D2. GET /employees/mfa-deadline — dispatch/management/admin.
+ *
+ *  Mirrors EmployeeMfaDeadlineResponse. Deliberately NOT MfaEnrolmentRow: that
+ *  one is admin-only and costs one Cognito call per row, this one is free and
+ *  answers a different question ("who is about to be walled", not "who is
+ *  locked out"). No `enrolled` field — an enrolled employee is never listed.
+ */
+export interface MfaDeadlineRow {
+  id: string;
+  name: string;
+  role: string;
+  /** Whole days; 0 means the window closes today. Never negative. */
+  days_remaining: number;
+}
+
 export interface MfaEnrolmentRow {
   id: string;
   name: string;
