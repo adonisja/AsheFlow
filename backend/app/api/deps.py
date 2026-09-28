@@ -494,6 +494,93 @@ def require_configured(
         )
 
 
+def require_mfa_enrolled(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """Refuse a privileged caller who has not enrolled a factor (ADR-465 D3).
+
+    A client-side redirect protects a person using the UI. It does nothing about
+    a direct API call with a valid token -- and ADR-459 hands a blocked Owner
+    exactly such a token for one session, deliberately, so they can reach
+    enrolment. Without this gate that token is a full session.
+
+    FAILS OPEN on anything unexpected, and that is load-bearing. This runs on
+    every gated request: a bug here that fails closed locks the whole company
+    out, including the admin who would fix it. The one case it fails CLOSED on
+    is an explicit, confirmed "privileged and not enrolled".
+
+    In particular `is_enrolled` returns None when Cognito cannot be reached, and
+    None is treated as ENROLLED here -- an AWS hiccup must never block a shift.
+    That mirrors get_my_mfa_status, which made the same call for the same
+    reason.
+    """
+    from app.services import mfa_status
+
+    groups = set(current_user.get("cognito_groups", []))
+
+    try:
+        employee, _ = _resolve_employee_from_cognito(current_user, db)
+
+        if employee is None:
+            # A platform account (super_admin, platform_support) has no Employee
+            # row BY DESIGN. Its tier comes from the Cognito group -- and these
+            # are exactly the accounts this gate exists to protect, so they are
+            # checked rather than waved through.
+            if not (groups & mfa_status.MFA_PRIVILEGED_ROLES):
+                return
+            enrolled = mfa_status.is_enrolled(
+                current_user.get("id"), current_user.get("username"),
+            )
+            status_obj = mfa_status.evaluate(
+                role="", enrolled=True if enrolled is None else enrolled,
+                grace_started_at=None, groups=groups,
+            )
+        else:
+            # ADR-374: a MachineCaller has no role and never enrols. The question
+            # does not apply to it.
+            if getattr(employee, "role", None) is None:
+                return
+            enrolled = mfa_status.is_enrolled(
+                employee.cognito_sub, _cognito_username_for(employee),
+            )
+            status_obj = mfa_status.evaluate(
+                role=employee.role,
+                enrolled=True if enrolled is None else enrolled,
+                grace_started_at=getattr(employee, "mfa_grace_started_at", None),
+                groups=groups,
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("require_mfa_enrolled: allowing request after an unexpected error")
+        return
+
+    if status_obj.blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            # The CODE is what the client routes on. A human-readable detail
+            # alone would force the frontend to string-match an error message.
+            detail={
+                "code": "mfa_enrolment_required",
+                "message": (
+                    "Two-factor authentication must be set up before you can "
+                    "use AsheFlow."
+                ),
+            },
+        )
+
+
+def _cognito_username_for(employee) -> str | None:
+    """The Cognito Username for an Employee, or None.
+
+    ADR-380 F7: the sub is NOT a valid Username in this pool, and the Discord id
+    certainly is not -- passing either made is_enrolled return None for every
+    field employee. `username` is the column that holds it.
+    """
+    return getattr(employee, "username", None)
+
+
 def _company_config_for_request(db: Session, company_id):
     """CompanyConfig for this company, memoised on the request's Session.
 
