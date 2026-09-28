@@ -129,3 +129,94 @@ def test_the_interceptor_still_redirects_on_the_code():
     src = AXIOS.read_text()
     assert "mfa_enrolment_required" in src
     assert "window.location.assign('/mfa-setup')" in src
+
+
+# ── the blast radius: field staff must be untouched ─────────────────────────
+
+def test_the_setup_redirect_is_still_admin_only():
+    """The loop needed privileged + unconfigured company + admin, which is an
+    Owner's first login and almost nothing else.
+
+    Field staff never see /setup (it is allowedRoles={['admin']}) and are never
+    `blocked` during their 14-day grace, so this guard is unreachable for them.
+    Pinned because dropping the role test to 'simplify' the condition would put
+    every walker into a redirect they have no way out of.
+    """
+    src = APP.read_text()
+    guard = src.split("!isConfigured", 1)[0].rsplit("if (", 1)[1]
+    assert "groups.includes('admin')" in guard, (
+        "the setup redirect is no longer admin-scoped"
+    )
+
+
+def test_the_setup_route_is_admin_gated():
+    src = APP.read_text()
+    block = src.split('path="/setup"', 1)[1].split("/>", 1)[0]
+    assert "allowedRoles={['admin']}" in block
+
+
+def test_field_staff_are_not_blocked_during_grace():
+    """ADR-377's tiering, restated here because ADR-469's guard reads `blocked`.
+
+    If `blocked` ever became true for a field role inside the window, the wall
+    would start firing at 05:00 for people who are meant to be nudged, not
+    stopped.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.services import mfa_status as M
+
+    now = datetime.now(timezone.utc)
+    for role in ("walker", "driver", "trainer", "captain"):
+        fresh = M.evaluate(role=role, enrolled=False, grace_started_at=None,
+                           groups={role})
+        assert fresh.blocked is False, f"{role} walled before their clock starts"
+        mid = M.evaluate(role=role, enrolled=False,
+                         grace_started_at=now - timedelta(days=3), groups={role})
+        assert mid.blocked is False, f"{role} walled on day 3 of the window"
+
+
+def test_a_privileged_account_is_blocked_immediately():
+    """The other half: no grace for privileged, which is why the Owner met the
+    wall at all."""
+    from app.services import mfa_status as M
+
+    for role in ("admin", "management", "dispatch"):
+        s = M.evaluate(role=role, enrolled=False, grace_started_at=None,
+                       groups={role})
+        assert s.blocked is True, f"{role} is not blocked without a factor"
+        assert s.grace_days_total == 0
+
+
+# ── D4: the wall has two audiences, because `blocked` has two causes ────────
+
+MFA_WALL = ROOT / "frontend/src/pages/MfaRequired.tsx"
+
+
+def test_the_wall_does_not_tell_field_staff_they_run_the_company():
+    """`blocked` is true for a privileged account from its FIRST sign-in
+    (ADR-377: no grace), and for a FIELD account only once its 14-day window
+    closes. The wall's original copy addressed only the first: a walker on day
+    15 was told their role "can see and change things across the whole company",
+    which is untrue and reads as a bug on a page that offers no way past it.
+    """
+    src = MFA_WALL.read_text()
+    assert "mfaStatus?.tier === 'field'" in src, (
+        "the wall renders one message for both tiers"
+    )
+    assert "window to set this up" in src, "no field-specific explanation"
+
+
+def test_the_privileged_message_survives():
+    src = MFA_WALL.read_text()
+    assert "across the whole company" in src
+
+
+def test_the_sign_out_copy_stays_tier_neutral():
+    """"Signing out will not skip this" is true for both tiers and must not be
+    branched -- it is the sentence that stops someone hunting for a way around.
+    """
+    src = MFA_WALL.read_text()
+    tail = src.split("Sign out instead", 1)[1]
+    assert "will not skip this step" in tail
+    assert "tier" not in tail.split("</p>", 2)[0]
