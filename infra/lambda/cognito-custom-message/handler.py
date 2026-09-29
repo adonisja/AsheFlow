@@ -182,7 +182,10 @@ def _render(source: str, code: str, link: str) -> tuple[str, str] | None:
     return None
 
 
-def lambda_handler(event, _context):
+# Named `handler` to match cognito-pre-auth and cognito-pre-signup: the
+# Lambda Handler config reads `handler.handler`, and a second naming
+# convention across four functions is a deploy waiting to be misconfigured.
+def handler(event, _context):
     source = (event or {}).get("triggerSource", "")
 
     # ADR-456's suppression must survive. Rewriting this source would put the

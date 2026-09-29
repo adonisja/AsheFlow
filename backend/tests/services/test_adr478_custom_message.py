@@ -42,7 +42,7 @@ CODE_SOURCES = [
 
 @pytest.mark.parametrize("source", CODE_SOURCES)
 def test_every_source_is_rendered(source):
-    out = H.lambda_handler(_event(source), None)
+    out = H.handler(_event(source), None)
     assert out["response"]["emailSubject"], source
     assert out["response"]["emailMessage"], source
 
@@ -52,21 +52,21 @@ def test_every_rendered_email_carries_the_brand(source):
     """Navy as the FIELD, violet as the ACCENT. The gradient templates use the
     accent as the whole identity, which is why they read as somebody else's
     email (send_owner_invite_email's docstring)."""
-    body = H.lambda_handler(_event(source), None)["response"]["emailMessage"]
+    body = H.handler(_event(source), None)["response"]["emailMessage"]
     assert H.NAVY in body, "no navy header"
     assert "AsheFlow" in body
 
 
 @pytest.mark.parametrize("source", CODE_SOURCES)
 def test_no_gradient_header(source):
-    body = H.lambda_handler(_event(source), None)["response"]["emailMessage"]
+    body = H.handler(_event(source), None)["response"]["emailMessage"]
     assert "linear-gradient" not in body
 
 
 def test_the_code_placeholder_survives_rendering():
     """Cognito substitutes {####}. Escaping or dropping it sends an email with
     no code in it -- worse than the plain default, because it looks correct."""
-    body = H.lambda_handler(_event("CustomMessage_Authentication"), None)
+    body = H.handler(_event("CustomMessage_Authentication"), None)
     assert "{####}" in body["response"]["emailMessage"]
 
 
@@ -76,7 +76,7 @@ def test_each_source_says_something_different():
     """One shared message for signing in, recovering an account and confirming
     an address either says too little or claims the wrong thing."""
     subjects = {
-        s: H.lambda_handler(_event(s), None)["response"]["emailSubject"]
+        s: H.handler(_event(s), None)["response"]["emailSubject"]
         for s in CODE_SOURCES
     }
     assert subjects["CustomMessage_Authentication"] != subjects["CustomMessage_ForgotPassword"]
@@ -86,14 +86,14 @@ def test_each_source_says_something_different():
 
 def test_a_reset_says_nothing_has_changed_yet():
     """Someone who did not request it needs to know they can ignore it safely."""
-    body = H.lambda_handler(_event("CustomMessage_ForgotPassword"), None)["response"]["emailMessage"]
+    body = H.handler(_event("CustomMessage_ForgotPassword"), None)["response"]["emailMessage"]
     assert "nothing has changed yet" in body
 
 
 def test_a_sign_in_code_warns_about_an_unexpected_one():
     """An unexpected sign-in code means someone has the password. Saying so is
     the difference between a notification and a warning."""
-    body = H.lambda_handler(_event("CustomMessage_Authentication"), None)["response"]["emailMessage"]
+    body = H.handler(_event("CustomMessage_Authentication"), None)["response"]["emailMessage"]
     assert "did not try to sign in" in body
 
 
@@ -103,7 +103,7 @@ def test_admin_create_user_is_returned_untouched():
     """THE special case. ADR-456 suppresses this so send_credentials_email can
     send the branded version; rewriting it here reintroduces the double email
     that ADR removed."""
-    out = H.lambda_handler(_event("CustomMessage_AdminCreateUser"), None)
+    out = H.handler(_event("CustomMessage_AdminCreateUser"), None)
     assert out["response"] == {}, "the suppressed source was rewritten"
 
 
@@ -114,7 +114,7 @@ def test_the_suppressed_set_is_named_not_implied():
 def test_an_unknown_source_falls_through():
     """Cognito's default is plain, and plain beats a message written for a
     different situation."""
-    out = H.lambda_handler(_event("CustomMessage_SomethingNew"), None)
+    out = H.handler(_event("CustomMessage_SomethingNew"), None)
     assert out["response"] == {}
 
 
@@ -125,7 +125,7 @@ def test_a_malformed_event_does_not_raise():
     that cannot be reset. An ugly email is a bad day; a missing one is an
     incident."""
     for bad in ({}, {"triggerSource": "CustomMessage_Authentication"}, None):
-        H.lambda_handler(bad, None)      # must not raise
+        H.handler(bad, None)      # must not raise
 
 
 def test_a_rendering_failure_returns_the_event(monkeypatch):
@@ -133,7 +133,7 @@ def test_a_rendering_failure_returns_the_event(monkeypatch):
         raise RuntimeError("template exploded")
 
     monkeypatch.setattr(H, "_render", boom)
-    out = H.lambda_handler(_event("CustomMessage_Authentication"), None)
+    out = H.handler(_event("CustomMessage_Authentication"), None)
     assert out["response"] == {}, "a failure must leave Cognito's default"
 
 
@@ -142,7 +142,7 @@ def test_a_rendering_failure_returns_the_event(monkeypatch):
 def test_the_code_is_on_its_own_line_not_inline():
     """Cognito's default buries it in a sentence, which is why it is easy to
     misread over a phone."""
-    body = H.lambda_handler(_event("CustomMessage_Authentication"), None)["response"]["emailMessage"]
+    body = H.handler(_event("CustomMessage_Authentication"), None)["response"]["emailMessage"]
     assert "letter-spacing:7px" in body
     assert "font-size:30px" in body
 
@@ -162,3 +162,10 @@ def test_html_in_a_code_is_escaped():
     interpolate a link -- escaping is the habit, not the exception."""
     body = H._code_block("<script>x</script>")
     assert "<script>" not in body
+
+
+def test_the_entry_point_matches_the_other_lambdas():
+    """All four Cognito functions are configured as `handler.handler`. A second
+    naming convention across four hand-deployed functions is a deploy waiting to
+    be misconfigured -- and the failure is a 500 in the auth path."""
+    assert hasattr(H, "handler")
