@@ -38,6 +38,16 @@ MUTABLE_TYPES = (ARRAY, PG_ARRAY, JSONB, JSON)
 # assignment only, so mutation tracking would buy nothing but a deep copy on
 # every load. Format: "Model.column": why.
 REASSIGN_ONLY = {
+    # ADR-476. The parked scorecard row is written ONCE, at import, as a whole
+    # dict, and read back whole when an operator binds the Transporter ID. It is
+    # a snapshot of what Amazon sent, not a structure anyone edits: resolving a
+    # pending row writes a Scorecard and DELETES this row rather than mutating
+    # its payload.
+    #
+    # Verified before declaring, not assumed: no subscript assignment and no
+    # append/pop/update/setdefault against `.payload` exists anywhere in app/.
+    "ScorecardImportPending.payload": "a snapshot of Amazon's row; written whole, read whole, deleted on resolve",
+
     # ADR-418. The workload SET is restated as a unit every time: the collector
     # ticks boxes and the client sends the resulting list, and the one write
     # site (collection.py submit_profiles) assigns `workloads=p.workloads`

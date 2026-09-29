@@ -12,6 +12,7 @@ import type { MetricTarget } from '../api/types';
 import SectionHeader from '../components/ui/SectionHeader';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
+import SelectMenu from '../components/ui/SelectMenu';
 import { useAuth } from '../contexts/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -131,18 +132,6 @@ const EFFORT_SCORING: FieldMeta[] = [
 // Direction is deliberately spelled out in each description because the card
 // mixes floors and ceilings, and reading a DPMO row as higher-is-better is the
 // single most common scorecard misreading.
-const INGESTION: FieldMeta[] = [
-  {
-    key: 'ingestion_mode', label: 'Ingestion Mode', type: 'select',
-    description: 'How daily manifests are ingested.',
-    placeholder: 'file',
-    options: [
-      { value: 'file', label: 'File Upload (manual)' },
-      { value: 'api', label: 'API Integration (automatic)' },
-    ],
-  },
-];
-
 const DISCORD_CHANNELS: FieldMeta[] = [
   { key: 'discord_guild_id', label: 'Server ID (Guild ID)', type: 'bigint', description: 'Numeric ID of your Discord server.', placeholder: '1234567890123456789' },
   { key: 'discord_drivers_channel_id', label: 'Drivers Channel', type: 'bigint', description: 'Channel for driver dispatch notifications.', placeholder: '' },
@@ -168,17 +157,15 @@ const DISCORD_ROLES: FieldMeta[] = [
 // Field sets for serialisation
 // ---------------------------------------------------------------------------
 
+// ADR-473 removed the ten scorecard_*_target columns; ADR-477 removed
+// ingestion_mode from this form. Both were left listed here, which is
+// harmless on read and was NOT harmless on save.
 const CONFIG_KEYS: string[] = [
-  'shift_start', 'shift_end', 'checkin_open', 'checkin_close', 'dispatch_confirmation_cutoff',
-  'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
-  'phase4_pass_score', 'underperforming_trainer_threshold', 'max_training_phase',
-  'flag_threshold', 'driver_checkin_count',
-  'late_window_minutes', 'ncns_cutoff_minutes',
-  'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
-  'scorecard_dcr_target', 'scorecard_dnr_dpmo_target', 'scorecard_pod_target',
-  'scorecard_cc_target', 'scorecard_cdf_target', 'scorecard_dsb_dpmo_target',
-  'scorecard_fico_target', 'scorecard_speeding_rate_target',
-  'scorecard_signsignal_rate_target', 'scorecard_dvic_target',
+  'shift_start', 'shift_end', 'checkin_open', 'checkin_close',
+  'dispatch_confirmation_cutoff', 'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
+  'phase4_pass_score', 'underperforming_trainer_threshold', 'max_training_phase', 'flag_threshold',
+  'driver_checkin_count', 'late_window_minutes', 'ncns_cutoff_minutes', 'effort_time_factor',
+  'effort_physical_factor',
 ];
 
 const DISCORD_KEYS: string[] = [
@@ -203,7 +190,13 @@ const FLOAT_FIELDS = new Set([
   'scorecard_cdf_target', 'scorecard_speeding_rate_target',
   'scorecard_signsignal_rate_target', 'scorecard_dvic_target',
 ]);
-const STRING_FIELDS = new Set(['ingestion_mode']);
+// ADR-477. EMPTY, and deliberately so. `ingestion_mode` was the only entry,
+// and it is now super-admin-only: the backend 403s it at PATCH /my-config, so
+// leaving it here would have sent it on every save and BLOCKED THE WHOLE FORM
+// with a 403 about a field the operator cannot even see.
+//
+// Removing the input was not the fix; removing it from what the form SENDS is.
+const STRING_FIELDS = new Set<string>([]);
 
 const REQUIRED_KEYS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
@@ -307,16 +300,17 @@ function ConfigSection({ title, icon: Icon, fields, values, onChange, onHelp, is
             </label>
 
             {field.type === 'select' && field.options ? (
-              <select
-                className="input-field"
+              /* ADR-477. The house dropdown (ui/SelectMenu). A native select opens
+                 with the OS palette -- a white panel on our dark theme -- which is
+                 why SelectMenu exists. It had been applied to the timezone picker
+                 but not to the generic renderer every other select goes through. */
+              <SelectMenu
                 value={values[field.key] ?? ''}
-                onChange={e => onChange(field.key, e.target.value)}
-              >
-                <option value="">— select —</option>
-                {field.options.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+                options={field.options.map(o => ({ value: o.value, label: o.label }))}
+                placeholder="Select…"
+                ariaLabel={field.label}
+                onChange={v => onChange(field.key, v)}
+              />
             ) : (
               <input
                 className="input-field"
@@ -701,13 +695,20 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     { key: 'fleet_execution',         label: 'Fleet Execution',       hint: 'Defects per 100 vehicles.' },
   ];
 
+  /* ADR-477. Manifest Ingestion is gone from here. It decides whether manifests
+     arrive by file upload or by API integration, which depends on whether that
+     integration has been built and credentialed for the station -- a platform
+     provisioning fact, not a company preference. A company admin flipping it to
+     "API Integration" does not make an integration exist; it makes manifests
+     stop arriving.
+     It now lives on the super-admin company page, and the backend refuses it
+     here (_SUPER_ADMIN_ONLY_FIELDS) so hiding the field is not the whole fix. */
   const CONFIG_SECTIONS = [
     { title: 'Shift Timing', icon: Clock, fields: SHIFT_TIMING },
     { title: 'Training Rules', icon: BookOpen, fields: TRAINING_RULES },
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
     { title: 'Attendance', icon: CheckSquare, fields: ATTENDANCE },
     { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },
-    { title: 'Manifest Ingestion', icon: Settings, fields: INGESTION },
   ];
 
   const content = (

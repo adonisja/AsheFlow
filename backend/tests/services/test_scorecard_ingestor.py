@@ -24,13 +24,13 @@ def _canned_response():
         _word("w-l1a", "Packages"), _word("w-l1b", "Delivered"), _word("w-v1", "203"),
         _word("w-l2a", "Delivery"), _word("w-l2b", "Completion"), _word("w-l2c", "DPMO"),
         _word("w-v2", "14492.7"), _word("w-f2a", "Needs"), _word("w-f2b", "Focus"),
-        _word("w-l3a", "POD"), _word("w-l3b", "Score"), _word("w-v3", "100.0%"), _word("w-f3", "Excellent"),
+        _word("w-l3a", "POD"), _word("w-l3b", "Acceptance"), _word("w-l3c", "Rate"), _word("w-v3", "100.0%"), _word("w-f3", "Excellent"),
     ]
     cells = [
         _cell("c-1-1", 1, 1, ["w-l1a", "w-l1b"]), _cell("c-1-2", 1, 2, ["w-v1"]),
         _cell("c-2-1", 2, 1, ["w-l2a", "w-l2b", "w-l2c"]), _cell("c-2-2", 2, 2, ["w-v2"]),
         _cell("c-2-3", 2, 3, ["w-f2a", "w-f2b"]),
-        _cell("c-3-1", 3, 1, ["w-l3a", "w-l3b"]), _cell("c-3-2", 3, 2, ["w-v3"]), _cell("c-3-3", 3, 3, ["w-f3"]),
+        _cell("c-3-1", 3, 1, ["w-l3a", "w-l3b", "w-l3c"]), _cell("c-3-2", 3, 2, ["w-v3"]), _cell("c-3-3", 3, 3, ["w-f3"]),
     ]
     table = {"Id": "t-1", "BlockType": "TABLE",
              "Relationships": [{"Type": "CHILD", "Ids": [c["Id"] for c in cells]}]}
@@ -51,17 +51,28 @@ def test_parses_week_overall_and_metrics():
     assert by_key["packages_delivered"].value == "203"
     assert by_key["packages_delivered"].flag is None
 
-    assert by_key["delivery_completion_dpmo"].value == "14492.7"
-    assert by_key["delivery_completion_dpmo"].flag == "needs_focus"
+    assert by_key["dc_dpmo"].value == "14492.7"
+    assert by_key["dc_dpmo"].flag == "needs_focus"
 
-    assert by_key["pod_score"].value == "100.0%"
-    assert by_key["pod_score"].flag == "excellent"
+    assert by_key["pod"].value == "100.0%"
+    assert by_key["pod"].flag == "excellent"
 
 
-def test_unknown_rows_are_skipped():
-    # A row whose label doesn't map to a known metric is dropped (not guessed).
+def test_unknown_rows_are_surfaced_not_dropped():
+    """REVERSED by ADR-475 D3, deliberately.
+
+    This used to assert the junk row was dropped, with the comment "dropped (not
+    guessed)" -- which conflated two different things. Not guessing is right; the
+    row must not be silently assigned a key. Dropping is not: the reviewer then
+    sees a plausible card with no way to know it is short, which is invisible by
+    construction.
+
+    It matters most in the workflow this is used in -- management uploading many
+    cards one at a time, where nobody notices the fiftieth lost a row.
+
+    So: kept, with key=None, for a human to name or discard.
+    """
     resp = _canned_response()
-    # add a junk row
     resp["Blocks"].append(_cell("c-9-1", 9, 1, ["w-junk"]))
     resp["Blocks"].append(_word("w-junk", "Gibberish"))
     resp["Blocks"][0]["Relationships"][0]["Ids"].append("c-9-1")
@@ -69,7 +80,12 @@ def test_unknown_rows_are_skipped():
     class _S:
         def analyze_document(self, **_): return resp
     draft = ScorecardIngestor(b"x", _textract_client=_S()).parse()
-    keys = {m.key for m in draft.metrics}
-    assert "packages_delivered" in keys
-    # the junk row has no mapped key → not added
-    assert len(draft.metrics) == 3
+
+    unknown = [m for m in draft.metrics if m.key is None]
+    assert len(unknown) == 1, "the unrecognised row was dropped"
+    assert unknown[0].label == "Gibberish"
+    assert not unknown[0].recognised
+
+    # And it is NOT guessed into a real key.
+    assert all(m.key != "packages_delivered" or m.label != "Gibberish"
+               for m in draft.metrics)
