@@ -117,23 +117,99 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
 # commercially sensitive, and the DSP Program Agreement obliges the tenant to
 # protect them. Shapes are ours; numbers are the tenant's.
 
+# ---------------------------------------------------------------------------
+# Amazon's role model (ADR-474)
+# ---------------------------------------------------------------------------
+#
+# AMAZON ONLY ACKNOWLEDGES TWO ROLES: driver and walker. Our ten are a DSP's own
+# breakdown, so this is a PROJECTION from ours onto theirs -- done once, here,
+# rather than restated as an applies_to list on every metric.
+#
+# Two entries read as surprising and are not guesses:
+#
+#   captain -> walker   they run the ground operation on foot
+#   trainer -> walker   they train walkers, so they are not driving
+#
+# And the office roles are drivers. dispatch/management/admin receive no route
+# assignment from AsheFlow (they are not in ASSIGNABLE_ROLES), but an owner or
+# dispatcher covering a call-out is a DA to Amazon with their own card. This
+# mapping decides whose card is whose on ingest, not who we dispatch.
+#
+# trainee is always the WALKING track and driver_trainee always the DRIVING one
+# (ADR-264), so the pair needs no further qualification.
+AMAZON_TRACK: dict[str, str | None] = {
+    # Amazon sees a walker
+    "walker":           "walker",
+    "captain":          "walker",
+    "trainer":          "walker",
+    "trainee":          "walker",
+    # Amazon sees a driver
+    "driver":           "driver",
+    "driver_trainee":   "driver",
+    "dispatch":         "driver",
+    "management":       "driver",
+    "admin":            "driver",
+    # Confirmed by the operator: a field supervisor drives between routes, so
+    # Amazon scores them as a driver. Recorded as a DECISION rather than an
+    # inference -- it was briefly left unmapped precisely so it would be decided
+    # rather than guessed, and the None branch below stays for the next role
+    # whose track nobody has settled.
+    "field_supervisor": "driver",
+}
+
+
+def amazon_track(role: str) -> str:
+    """Which of Amazon's two roles this role is scored as.
+
+    Raises:
+        ValueError — the role has no track, or is unknown. Both refuse rather
+        than defaulting: a silent walker/driver guess is the defect this exists
+        to prevent.
+    """
+    if role not in AMAZON_TRACK:
+        raise ValueError(
+            f"role '{role}' has no Amazon track mapping. Add it to AMAZON_TRACK "
+            "-- a role Amazon scores must be a driver or a walker."
+        )
+    track = AMAZON_TRACK[role]
+    if track is None:
+        raise ValueError(
+            f"role '{role}' is deliberately unmapped: nobody has decided whether "
+            "Amazon scores them as a driver or a walker. Decide it rather than "
+            "letting the comparison guess."
+        )
+    return track
+
+
 METRIC_SHAPES: dict[str, dict[str, str]] = {
     # Quality
-    "pod":              {"direction": "higher", "unit": "percent"},
-    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo"},
-    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo"},
-    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo"},
-    # Safety. The three added here are roughly half the safety score between
-    # them, and had no field at all -- a tenant tuning only speeding and
-    # sign/signal was tuning the minority of it.
-    "fico":             {"direction": "higher", "unit": "score"},
-    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100"},
-    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100"},
-    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100"},
-    "distractions_rate": {"direction": "lower", "unit": "rate_per_100"},
-    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100"},
+    "pod":              {"direction": "higher", "unit": "percent",      "expected_for": ("walker", "driver")},
+    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    # On the DA card, confirmed from real walker and driver cards 2026-09-29.
+    "ces_dpmo":         {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    # A COUNT, not a rate: the card renders it as a bare number and links it
+    # to the underlying feedback. Lower is better, and the unit says count so
+    # nothing validates it as a percentage.
+    "cdf_negative":     {"direction": "lower",  "unit": "count",        "expected_for": ("walker", "driver")},
+    # Safety. EXPECTED for drivers, and rendered for BOTH (ADR-474 D3,
+    # corrected 2026-09-29). A real walker card carries all six of these reading
+    # "No Data" -- Amazon does not omit them, it reports that there is nothing
+    # to report. `expected_for` therefore predicts ABSENCE; it never decides
+    # whether a comparison may run. That is `meets_target`, on value presence.
+    #
+    # The three added by ADR-473 are roughly half the safety score between them,
+    # and had no field at all: a tenant tuning only speeding and sign/signal was
+    # tuning the minority of it.
+    "fico":             {"direction": "higher", "unit": "score",        "expected_for": ("driver",)},
+    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("driver",)},
+    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("driver",)},
+    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("driver",)},
+    "distractions_rate": {"direction": "lower", "unit": "rate_per_100", "expected_for": ("driver",)},
+    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100", "expected_for": ("driver",)},
     # Service reliability
-    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100"},
+    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("walker", "driver")},
 }
 
 # Retired by ADR-473, kept so a stale caller fails LOUDLY with a reason rather
@@ -151,8 +227,30 @@ RETIRED_METRICS: dict[str, str] = {
 }
 
 
-def meets_target(key: str, value: float, target: float,
-                 direction: str | None = None) -> bool:
+def expected_for_role(key: str, role: str) -> bool:
+    """Would we normally EXPECT this role to have data for this metric?
+
+    A hint, not a gate (ADR-474 D3, corrected). Real cards render every metric
+    for every track and mark the empty ones "No Data", so this answers "is an
+    empty tile here unremarkable?" -- never "may this comparison run?".
+
+    Use it to explain an absence, or to flag the anomaly of a value appearing
+    where none was expected (usually a card matched to the wrong person).
+
+    Raises the same way `amazon_track` does for an unmapped role.
+    """
+    track = amazon_track(role)
+    shape = METRIC_SHAPES.get(key)
+    if shape is None:
+        if key in RETIRED_METRICS:
+            raise ValueError(f"metric '{key}' is retired: {RETIRED_METRICS[key]}")
+        raise KeyError(key)
+    return track in shape["expected_for"]
+
+
+def meets_target(key: str, value: float | None, target: float,
+                 direction: str | None = None,
+                 role: str | None = None) -> bool:
     """True if `value` meets `target` for metric `key`.
 
     `direction` comes from the stored CompanyMetricTarget row. It is optional
@@ -162,10 +260,34 @@ def meets_target(key: str, value: float, target: float,
     default.
 
     Raises:
-        ValueError — a retired metric key, naming what replaced it.
+        ValueError — a retired metric key, naming what replaced it; or an absent
+        `value`, which is not a zero (ADR-474 D4).
         KeyError — an unknown key. Deliberate: a new metric cannot be compared
         until someone states which direction is good.
     """
+    # ADR-474 D4, corrected 2026-09-29. RAISES ON AN ABSENT VALUE, not on the
+    # person's track.
+    #
+    # The first version keyed on track, and real cards showed why that fails in
+    # BOTH directions: a walker card renders all six safety metrics as "No
+    # Data", so a driver whose tile is empty would have got a verdict computed
+    # from nothing, and a walker who somehow DID have a reading would have been
+    # refused one they earned.
+    #
+    # "No Data" also covers more than one reality -- not measured, measured with
+    # no tier yet, and not applicable to this programme (Pickup Success
+    # Behaviors renders on an AMZL card and never applies to AMZL). No table of
+    # ours can tell those apart, and none of them is a number to compare.
+    #
+    # Neither answer is honest on an absent value: a walker who "fails" a
+    # speeding target and one who "passes" it are equally wrong, and the pass is
+    # worse because nobody investigates a pass.
+    if value is None:
+        raise ValueError(
+            f"metric '{key}' has no measurement, so it cannot be compared "
+            "against a target. An absent value is not a zero."
+        )
+
     if direction is None:
         if key in RETIRED_METRICS:
             raise ValueError(f"metric '{key}' is retired: {RETIRED_METRICS[key]}")
