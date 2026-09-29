@@ -43,6 +43,9 @@ interface CompanyConfig {
   ingestion_mode: string | null;
   // Amazon scorecard tier targets (ADR-262). null = no target configured; the
   // scorecard shows the reported value with no pass/fail judgement.
+  /** ADR-482 D3. Platform settings that never arrived; empty means healthy.
+   *  A platform fault, not the tenant's -- they cannot set these from here. */
+  platform_settings_missing?: string[];
 }
 
 interface DiscordConfig {
@@ -631,6 +634,25 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
       if (isOnboarding && res.data.is_configured) {
         await refreshConfigured();
         navigate('/admin', { replace: true });
+        return;
+      }
+
+      /* ADR-482 D5. "Saved, but setup is still not complete" is a THIRD state,
+         and it had no branch: the PATCH returned 200, is_configured stayed
+         false, and control fell through to setSaved(true) -- a flag that
+         renders a tick. No error, no redirect, nothing. That silence is what
+         turned a config gap into an unreportable bug.
+
+         It happens when a field the gate requires is not one this form
+         collects, which is a PLATFORM fault: the Owner cannot fix it from
+         here, so the message says who can. */
+      if (isOnboarding && !res.data.is_configured) {
+        const gaps = res.data.platform_settings_missing ?? [];
+        setError(
+          gaps.length > 0
+            ? `Your changes were saved, but setup cannot complete: this company is missing platform settings (${gaps.join(', ')}). Contact your platform administrator.`
+            : 'Your changes were saved, but setup is not complete yet. Some required settings are still missing.',
+        );
         return;
       }
 
