@@ -52,6 +52,47 @@ export interface Employee {
  *  about the metric, and letting the client set them re-opens the defect where
  *  a target is stored with the wrong direction and compared backwards.
  */
+/** ADR-476. One row's fate in a bulk scorecard import.
+ *
+ *  Three outcomes, and only `imported` wrote a scorecard:
+ *    imported       the Transporter ID was bound to exactly one employee
+ *    queued         the ID is unknown; parked for a human to bind
+ *    name_mismatch  imported, but Amazon's name differs from ours
+ *    error          the row could not be filed at all
+ */
+export interface BulkRowResult {
+  transporter_id: string;
+  week: string;
+  outcome: 'imported' | 'queued' | 'name_mismatch' | 'error';
+  employee_id?: string | null;
+  employee_name?: string | null;
+  da_name?: string | null;
+  detail?: string | null;
+}
+
+export interface BulkImportResult {
+  imported: number;
+  queued: number;
+  name_mismatches: number;
+  errors: number;
+  skipped_no_id: number;
+  /** Headers the parser could not place. Reported, never ignored — this is how
+   *  a changed export announces itself. */
+  unknown_headers: string[];
+  rows: BulkRowResult[];
+}
+
+/** A Transporter ID waiting to be bound to one of our people (ADR-476 D2). */
+export interface PendingBinding {
+  transporter_id: string;
+  da_name?: string | null;
+  /** Every week parked for this ID. One binding releases all of them. */
+  weeks: string[];
+  /** Roster ranked by name similarity. A SUGGESTION: it orders the dropdown,
+   *  it never selects. */
+  suggestions: { employee_id: string; name: string; role: string; similarity: number }[];
+}
+
 export interface MetricTarget {
   metric_key: string;
   target_value: number;

@@ -8,7 +8,16 @@ DELETE /scorecards/{scorecard_id}  — mgmt removes one
 Amazon-computed values are stored/displayed as-is. The cross-check (Phase D) compares a subset
 against our DeliveryStop/RTS data. This router is public — no proprietary algorithm.
 """
+import re
 from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+from types import SimpleNamespace
+
+from app.models.scorecard_import import ScorecardImportPending
+# ADR-475 D4. The literal Amazon prints for an absent measurement. Stored as
+# text rather than NULL so a reader can tell 'not measured' from 'no row'.
+from app.services.scorecard_ingestor import NO_DATA as NO_DATA_VALUE
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -125,6 +134,400 @@ def upsert_scorecard(
     db.commit()
     db.refresh(sc)
     return _serialize(sc, emp_name)
+
+
+# ---------------------------------------------------------------------------
+# Bulk import from Amazon's DSP Overview Dashboard export (ADR-476)
+# ---------------------------------------------------------------------------
+
+MAX_BULK_ROWS = 500
+
+
+class BulkRowResult(BaseModel):
+    """What happened to one row. Per row, following ADR-045's shape: a file of
+    eighty where three ids are unknown imports seventy-seven and queues three,
+    rather than failing wholesale."""
+
+    transporter_id: str
+    week: str
+    outcome: str            # imported | queued | name_mismatch | error
+    employee_id: Optional[UUID] = None
+    employee_name: Optional[str] = None
+    da_name: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class BulkImportResult(BaseModel):
+    imported: int = 0
+    queued: int = 0
+    name_mismatches: int = 0
+    errors: int = 0
+    skipped_no_id: int = 0
+    # Headers the parser could not place. REPORTED rather than ignored: a
+    # silently unmapped column is ADR-475's dropped row in a new place, and this
+    # is how a changed export announces itself.
+    unknown_headers: List[str] = []
+    rows: List[BulkRowResult] = []
+
+
+def _norm_name(name: Optional[str]) -> str:
+    """For COMPARING two spellings of one person, never for matching.
+
+    Amazon writes "Doe, Jane" where we might hold "Jane Doe", so a raw string
+    comparison would flag every row. This makes the comparison fair; it does not
+    make it authoritative -- the Transporter ID is the match (D1).
+    """
+    if not name:
+        return ""
+    parts = re.split(r"[\s,]+", name.strip().lower())
+    return " ".join(sorted(p for p in parts if p))
+
+
+@router.post("/bulk-import", response_model=BulkImportResult)
+async def bulk_import_scorecards(
+    file: UploadFile = File(...),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """Import a week of individual scorecards from the DSP export (ADR-476).
+
+    One row per person per week -- exactly this table's grain -- so a week of
+    scorecards is one upload rather than fifty.
+
+    THREE OUTCOMES, and only the first writes a scorecard:
+
+      id bound to one employee          -> imported
+      id unknown                        -> queued for a human to bind
+      id bound, export name differs     -> imported AND flagged
+
+    The third is deliberate. A bound id is authoritative because Amazon issued
+    it, so the scorecard is not withheld; but a changed name usually means a
+    rehire or a reassigned id, and accepting it silently is how a card starts
+    landing on the wrong person permanently.
+    """
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(contents) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File exceeds the 8 MB limit.")
+
+    from app.services.scorecard_bulk import parse_export
+
+    parsed = parse_export(contents)
+    if len(parsed.rows) > MAX_BULK_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {MAX_BULK_ROWS} rows per import. Split the export.",
+        )
+
+    cid = caller.company_id
+    out = BulkImportResult(
+        skipped_no_id=parsed.skipped_no_id,
+        unknown_headers=parsed.unknown_headers,
+    )
+
+    # One lookup for the whole file rather than a query per row.
+    bound = {
+        e.transporter_id: e
+        for e in db.query(Employee).filter(
+            Employee.company_id == cid,
+            Employee.transporter_id.isnot(None),
+        ).all()
+    }
+
+    for row in parsed.rows:
+        if not row.week:
+            out.errors += 1
+            out.rows.append(BulkRowResult(
+                transporter_id=row.transporter_id, week="",
+                outcome="error", da_name=row.da_name,
+                detail="Row has no Week value, so it cannot be filed.",
+            ))
+            continue
+
+        emp = bound.get(row.transporter_id)
+        if emp is None:
+            # ADR-476 D2. Parked IN FULL so resolving it needs no re-upload, and
+            # upserted on (company, week, transporter) so a second upload of the
+            # same file corrects rather than duplicates.
+            pending = db.query(ScorecardImportPending).filter(
+                ScorecardImportPending.company_id == cid,
+                ScorecardImportPending.week == row.week,
+                ScorecardImportPending.transporter_id == row.transporter_id,
+            ).first()
+            payload = {"overall_standing": row.overall_standing, "metrics": row.metrics}
+            if pending:
+                pending.payload = payload
+                pending.da_name = row.da_name
+            else:
+                db.add(ScorecardImportPending(
+                    company_id=cid, week=row.week,
+                    transporter_id=row.transporter_id, da_name=row.da_name,
+                    payload=payload, reason="unknown_transporter_id",
+                ))
+            out.queued += 1
+            out.rows.append(BulkRowResult(
+                transporter_id=row.transporter_id, week=row.week,
+                outcome="queued", da_name=row.da_name,
+                detail="No employee is bound to this Transporter ID yet.",
+            ))
+            continue
+
+        mismatch = (
+            row.da_name
+            and _norm_name(row.da_name)
+            and _norm_name(row.da_name) != _norm_name(emp.name)
+        )
+
+        _write_individual_scorecard(db, cid, caller.id, emp, row)
+
+        out.imported += 1
+        if mismatch:
+            out.name_mismatches += 1
+        out.rows.append(BulkRowResult(
+            transporter_id=row.transporter_id, week=row.week,
+            outcome="name_mismatch" if mismatch else "imported",
+            employee_id=emp.id, employee_name=emp.name, da_name=row.da_name,
+            detail=(
+                f"Amazon calls this person {row.da_name!r}; we hold {emp.name!r}. "
+                "The scorecard was imported -- confirm the Transporter ID is still "
+                "bound to the right person."
+            ) if mismatch else None,
+        ))
+
+    write_audit(
+        db=db, company_id=cid, actor_id=caller.id,
+        action_type="scorecard.bulk_import", target_table="scorecards",
+        target_id=str(cid),
+        detail={"imported": out.imported, "queued": out.queued,
+                "name_mismatches": out.name_mismatches, "errors": out.errors,
+                "unknown_headers": out.unknown_headers},
+    )
+    db.commit()
+    return out
+
+
+class PendingBindingOut(BaseModel):
+    """One Transporter ID waiting to be bound (ADR-476 D2)."""
+
+    transporter_id: str
+    da_name: Optional[str] = None
+    # Every week we are holding for this id. Grouped so the operator binds the
+    # PERSON once and every parked week lands, rather than resolving the same
+    # id repeatedly.
+    weeks: List[str] = []
+    # Roster ordered by name similarity to `da_name`. A SUGGESTION: it orders
+    # the dropdown, it never selects. The binding stays a human decision,
+    # because a wrong one is silent and permanent.
+    suggestions: List[dict] = []
+
+
+class BindTransporterIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transporter_id: str = Field(..., max_length=32)
+    employee_id: UUID
+
+
+@router.get("/pending-bindings", response_model=List[PendingBindingOut])
+def list_pending_bindings(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """Transporter IDs we are holding scorecards for but cannot place.
+
+    Grouped by id, not by row: an id unseen for six weeks has six parked rows
+    and is still ONE decision.
+    """
+    rows = (
+        db.query(ScorecardImportPending)
+        .filter(ScorecardImportPending.company_id == caller.company_id)
+        .order_by(ScorecardImportPending.transporter_id,
+                  ScorecardImportPending.week)
+        .all()
+    )
+    if not rows:
+        return []
+
+    roster = (
+        db.query(Employee)
+        .filter(Employee.company_id == caller.company_id,
+                Employee.is_active == True,           # noqa: E712
+                Employee.transporter_id.is_(None))
+        .all()
+    )
+
+    grouped: dict[str, PendingBindingOut] = {}
+    for r in rows:
+        entry = grouped.get(r.transporter_id)
+        if entry is None:
+            entry = PendingBindingOut(
+                transporter_id=r.transporter_id, da_name=r.da_name, weeks=[],
+                suggestions=_rank_roster(r.da_name, roster),
+            )
+            grouped[r.transporter_id] = entry
+        entry.weeks.append(r.week)
+        # Keep the most recent name we were given: a rehire changes it, and the
+        # newer spelling is the one the operator will recognise.
+        if r.da_name:
+            entry.da_name = r.da_name
+
+    return list(grouped.values())
+
+
+def _rank_roster(da_name: Optional[str], roster: List[Employee]) -> List[dict]:
+    """Order the roster by similarity to Amazon's name. ORDERING ONLY.
+
+    Unbound employees only -- someone already carrying a Transporter ID is not a
+    candidate for a second one, and offering them invites exactly the
+    double-binding the unique constraint refuses.
+    """
+    import difflib
+
+    target = _norm_name(da_name)
+    scored = []
+    for e in roster:
+        ratio = (
+            difflib.SequenceMatcher(None, target, _norm_name(e.name)).ratio()
+            if target else 0.0
+        )
+        scored.append((ratio, e))
+    scored.sort(key=lambda t: (-t[0], (t[1].name or "").lower()))
+    return [
+        {"employee_id": str(e.id), "name": e.name, "role": e.role,
+         "similarity": round(ratio, 3)}
+        for ratio, e in scored
+    ]
+
+
+@router.post("/pending-bindings/bind", response_model=BulkImportResult)
+def bind_transporter_id(
+    payload: BindTransporterIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """Bind a Transporter ID to an employee and import everything parked for it.
+
+    ONE decision releases every parked week, which is what keeps week one
+    survivable: eighty bindings, not eighty times six.
+
+    Refuses to move a binding that already exists. Rebinding an id silently
+    would re-file somebody's history onto a different person, which is the exact
+    misroute this whole design refuses -- that is an offboarding/rehire question,
+    not a data-entry one.
+    """
+    cid = caller.company_id
+
+    emp = db.query(Employee).filter(
+        Employee.id == payload.employee_id, Employee.company_id == cid,
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    if emp.transporter_id and emp.transporter_id != payload.transporter_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{emp.name} is already bound to a different Transporter ID. "
+                "Unbind it deliberately before rebinding."
+            ),
+        )
+
+    clash = db.query(Employee).filter(
+        Employee.company_id == cid,
+        Employee.transporter_id == payload.transporter_id,
+        Employee.id != emp.id,
+    ).first()
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=f"That Transporter ID is already bound to {clash.name}.",
+        )
+
+    emp.transporter_id = payload.transporter_id
+    db.flush()
+
+    parked = (
+        db.query(ScorecardImportPending)
+        .filter(ScorecardImportPending.company_id == cid,
+                ScorecardImportPending.transporter_id == payload.transporter_id)
+        .all()
+    )
+
+    out = BulkImportResult()
+    for row in parked:
+        payload_data = row.payload or {}
+        stub = SimpleNamespace(
+            week=row.week,
+            overall_standing=payload_data.get("overall_standing"),
+            metrics=payload_data.get("metrics") or {},
+        )
+        _write_individual_scorecard(db, cid, caller.id, emp, stub)
+        out.imported += 1
+        out.rows.append(BulkRowResult(
+            transporter_id=row.transporter_id, week=row.week,
+            outcome="imported", employee_id=emp.id, employee_name=emp.name,
+            da_name=row.da_name,
+        ))
+        db.delete(row)
+
+    write_audit(
+        db=db, company_id=cid, actor_id=caller.id,
+        action_type="scorecard.transporter_bound", target_table="employees",
+        target_id=str(emp.id),
+        detail={"transporter_id": payload.transporter_id,
+                "weeks_released": out.imported},
+    )
+    db.commit()
+    return out
+
+
+def _write_individual_scorecard(db: Session, cid, actor_id, emp: Employee, row) -> None:
+    """Upsert one person's card for one week.
+
+    Shares the upsert semantics of POST /scorecards deliberately -- same unique
+    key, same wholesale metric replacement -- so re-uploading a corrected export
+    overwrites cleanly instead of accumulating.
+    """
+    from app.services.company_config import METRIC_SHAPES
+
+    sc = db.query(Scorecard).filter(
+        Scorecard.company_id == cid,
+        Scorecard.week == row.week,
+        Scorecard.scope == "individual",
+        Scorecard.employee_id == emp.id,
+    ).first()
+
+    if sc:
+        sc.overall_standing = row.overall_standing
+        sc.entered_by = actor_id
+        sc.metrics.clear()
+        db.flush()
+    else:
+        sc = Scorecard(
+            company_id=cid, week=row.week, scope="individual",
+            employee_id=emp.id, overall_standing=row.overall_standing,
+            entered_by=actor_id,
+        )
+        db.add(sc)
+        db.flush()
+
+    for order, (key, m) in enumerate(row.metrics.items()):
+        shape = METRIC_SHAPES.get(key)
+        # ADR-475 D4. An absent value is stored as the literal marker, never as
+        # 0: a zero seatbelt rate is perfect, and conflating them makes an
+        # unmeasured walker look flawless.
+        value = m["raw"] if m["raw"] is not None else NO_DATA_VALUE
+        sc.metrics.append(ScorecardMetric(
+            company_id=cid, key=key,
+            label=key.replace("_", " ").title(),
+            value=str(value),
+            unit=m["unit"] or (shape["unit"] if shape else None),
+            tier=m["tier"], flag=None, sort_order=order,
+        ))
 
 
 @router.post("/parse", response_model=ScorecardDraftOut)

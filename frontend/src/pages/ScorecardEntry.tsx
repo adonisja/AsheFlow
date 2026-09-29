@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
+import ScorecardBulkImport from '../components/ScorecardBulkImport';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { Award, Plus, Trash2, Save, Upload } from 'lucide-react';
@@ -202,6 +203,18 @@ export default function ScorecardEntry() {
 
   return (
     <div className="space-y-5 animate-slide-up">
+      {/* ADR-476. Bulk first: one export covers a whole week, so this is the
+          normal path and the form below is for a single correction. Putting the
+          form first would make the exception look like the workflow. */}
+      <ScorecardBulkImport />
+
+      <div className="border-t border-border pt-6">
+        <h3 className="text-sm font-semibold text-foreground">Enter one scorecard</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-4">
+          For a single card, or a correction to one person's week.
+        </p>
+      </div>
+
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
           <Award className="w-4 h-4 text-primary" />
