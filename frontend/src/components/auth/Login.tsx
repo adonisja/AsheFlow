@@ -42,6 +42,10 @@ export default function Login() {
   const [totpQr, setTotpQr] = useState('');
   const [showPassword,           setShowPassword]           = useState(false);
   const [showNewPassword,        setShowNewPassword]        = useState(false);
+  /* ADR-479. Covers the whole submit, INCLUDING the checkAuth that follows a
+     successful confirm -- that call makes five serialised network round-trips,
+     and it is the part the user was left staring at a stale form through. */
+  const [submitting, setSubmitting] = useState(false);
 
   const navigate = useNavigate();
   const { isAuthenticated, checkAuth, federatedError, clearFederatedError } = useAuth();
@@ -69,7 +73,18 @@ export default function Login() {
        so this runs after confirmSignIn too. */
     const advance = (response: { isSignedIn: boolean; nextStep?: { signInStep?: string; allowedMFATypes?: string[] } }) => {
       const step = response.nextStep?.signInStep;
-      if (response.isSignedIn) { setChallengeStep(null); return checkAuth(); }
+      /* ADR-479. Do NOT clear challengeStep here.
+         It used to be cleared before awaiting checkAuth, which left this
+         component mounted with challengeStep null for the whole of that call --
+         five serialised round-trips -- and null is what renders the logged-out
+         username/password form. A fully authenticated user was shown the
+         sign-in screen for over a second.
+         Nothing needs to clear it now: checkAuth sets isAuthenticated, the
+         effect above navigates to '/', and Login unmounts with its state. A
+         .finally here would be a setState on an unmounted component -- a no-op
+         that reads like it matters. The challenge UI stays up until the route
+         changes, which is exactly as long as the sign-in is still finishing. */
+      if (response.isSignedIn) { return checkAuth(); }
 
       switch (step) {
         case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED':
@@ -124,6 +139,7 @@ export default function Login() {
       }
     };
 
+    setSubmitting(true);
     try {
       if (challengeStep) {
         // One field serves every challenge: a new password, a 6-digit code, or
@@ -139,6 +155,8 @@ export default function Login() {
       }
     } catch (err: any) {
       setError(err.message || 'Sign in failed. Check your credentials.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -341,8 +359,22 @@ export default function Login() {
               </>
             )}
 
-            <button type="submit" className="btn-primary w-full mt-2">
-              {copy ? copy.submit : 'Sign in'}
+            {/* ADR-479 D2/D3. Disabled while in flight: without this the form is
+                re-submittable during every challenge, and a one-time code sent
+                twice fails with NotAuthorizedException -- surfacing "Sign in
+                failed" on a sign-in that actually succeeded.
+                The label names the wait rather than spinning anonymously; the
+                app knows exactly what it is doing here. */}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn-primary w-full mt-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {submitting
+                ? (challengeStep === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED'
+                    ? 'Saving your password...'
+                    : 'Signing you in...')
+                : copy ? copy.submit : 'Sign in'}
             </button>
           </form>
 
