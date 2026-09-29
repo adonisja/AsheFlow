@@ -227,8 +227,8 @@ export default function ScorecardBulkImport() {
           </h3>
           <p className="text-xs text-muted-foreground mt-1">
             Amazon identifies these people by Transporter ID. Match each to
-            someone on your roster once and every week we are holding for them
-            imports — and future weeks match on their own.
+            someone on your roster once, and every week we are holding for them
+            imports. Future weeks then match on their own.
           </p>
 
           <div className="mt-4 space-y-2">
