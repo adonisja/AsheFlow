@@ -7,7 +7,9 @@
 #   bash scripts/install_hooks.sh
 #
 # Hooks installed:
-#   pre-push — checks ADR documentation coverage, then syncs proprietary files
+#   pre-push — checks ADR documentation coverage, reports Parameter Store parity
+#              drift (ADR-480, advisory only -- never blocks), then syncs
+#              proprietary files
 #              to AsheFlow-private. Coverage runs first so a push that is about
 #              to be rejected does not publish docs the public repo lacks.
 #              Aborts the push if the sync fails so the two repos stay in lockstep.
@@ -61,6 +63,32 @@ if [ -f "$COVERAGE" ] && [ "${ALLOW_UNDOCUMENTED:-}" != "1" ]; then
     exit 1
   fi
 fi
+# Parameter Store parity (ADR-480). ADVISORY -- never blocks the push.
+#
+# The check itself (ADR-283) was always correct; nothing ran it, so a real
+# finding sat unread. It is here rather than in CI because CI deliberately has
+# no SSM credentials -- only the EC2 instance role reads the store -- and
+# widening that to catch a low-frequency problem is a worse trade.
+#
+# Exit 1 means drift, which is information about INFRASTRUCTURE, not a defect in
+# the commit being pushed. Blocking on it would get the hook --no-verify'd.
+# A missing credential reports "could not check" rather than passing silently.
+PARITY="$REPO_ROOT/scripts/check_param_store_parity.py"
+if [ -f "$PARITY" ] && [ "${SKIP_PARITY_CHECK:-}" != "1" ]; then
+  PARITY_OUT="$(python3 "$PARITY" </dev/null 2>&1)" || PARITY_RC=$?
+  if [ "${PARITY_RC:-0}" -ne 0 ]; then
+    echo ""
+    if printf '%s' "$PARITY_OUT" | grep -qi "credential\|AccessDenied\|ExpiredToken\|Unable to locate"; then
+      echo "pre-push: Parameter Store parity NOT CHECKED (no AWS credentials)."
+    else
+      echo "pre-push: Parameter Store parity DRIFT (advisory, not blocking):"
+      printf '%s\n' "$PARITY_OUT" | sed -n '/PARITY DRIFT/,/^$/p' | sed 's/^/  /'
+      echo "  See ADR-480. Set SKIP_PARITY_CHECK=1 to silence."
+    fi
+    echo ""
+  fi
+fi
+
 SYNC_SCRIPT="$REPO_ROOT/scripts/setup_private_repo.sh"
 
 if [ ! -f "$SYNC_SCRIPT" ]; then
