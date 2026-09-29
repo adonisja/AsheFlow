@@ -41,16 +41,6 @@ interface CompanyConfig {
   ingestion_mode: string | null;
   // Amazon scorecard tier targets (ADR-262). null = no target configured; the
   // scorecard shows the reported value with no pass/fail judgement.
-  scorecard_dcr_target: number | null;
-  scorecard_dnr_dpmo_target: number | null;
-  scorecard_pod_target: number | null;
-  scorecard_cc_target: number | null;
-  scorecard_cdf_target: number | null;
-  scorecard_dsb_dpmo_target: number | null;
-  scorecard_fico_target: number | null;
-  scorecard_speeding_rate_target: number | null;
-  scorecard_signsignal_rate_target: number | null;
-  scorecard_dvic_target: number | null;
 }
 
 interface DiscordConfig {
@@ -140,22 +130,6 @@ const EFFORT_SCORING: FieldMeta[] = [
 // Direction is deliberately spelled out in each description because the card
 // mixes floors and ceilings, and reading a DPMO row as higher-is-better is the
 // single most common scorecard misreading.
-const SCORECARD_QUALITY: FieldMeta[] = [
-  { key: 'scorecard_dcr_target', label: 'DCR Target (%)', type: 'float', description: 'Delivery Completion Rate. Higher is better. Pass at or above this.', placeholder: '99.0', min: 0, max: 100, step: 0.1 },
-  { key: 'scorecard_pod_target', label: 'POD Target (%)', type: 'float', description: 'Photo on Delivery usable-photo rate. Higher is better.', placeholder: '97.0', min: 0, max: 100, step: 0.1 },
-  { key: 'scorecard_cc_target', label: 'Contact Compliance Target (%)', type: 'float', description: 'Required in-app customer contacts made. Higher is better.', placeholder: '98.0', min: 0, max: 100, step: 0.1 },
-  { key: 'scorecard_cdf_target', label: 'CDF Target (%)', type: 'float', description: 'Customer Delivery Feedback positive rate. Higher is better.', placeholder: '84.9', min: 0, max: 100, step: 0.1 },
-  { key: 'scorecard_dnr_dpmo_target', label: 'DNR DPMO Ceiling', type: 'int', description: 'Delivered-Not-Received defects per million. LOWER is better — pass at or below this.', placeholder: '950', min: 0, max: 1000000 },
-  { key: 'scorecard_dsb_dpmo_target', label: 'DSB DPMO Ceiling', type: 'int', description: 'Delivery Success Behaviors defects per million. LOWER is better.', placeholder: '', min: 0, max: 1000000 },
-];
-
-const SCORECARD_SAFETY: FieldMeta[] = [
-  { key: 'scorecard_fico_target', label: 'FICO Target', type: 'int', description: 'Safe Driving Score, 100–850. Higher is better. Driver track only.', placeholder: '800', min: 100, max: 850 },
-  { key: 'scorecard_dvic_target', label: 'DVIC Compliance Target (%)', type: 'float', description: 'Pre/post-trip inspections completed. Higher is better.', placeholder: '95.0', min: 0, max: 100, step: 0.1 },
-  { key: 'scorecard_speeding_rate_target', label: 'Speeding Rate Ceiling (per 100 trips)', type: 'float', description: 'LOWER is better. Pass at or below this.', placeholder: '10.0', min: 0, max: 1000, step: 0.1 },
-  { key: 'scorecard_signsignal_rate_target', label: 'Sign/Signal Rate Ceiling (per 100 trips)', type: 'float', description: 'Stop-light violations weigh ~10x a stop sign. LOWER is better.', placeholder: '15.0', min: 0, max: 1000, step: 0.1 },
-];
-
 const INGESTION: FieldMeta[] = [
   {
     key: 'ingestion_mode', label: 'Ingestion Mode', type: 'select',
@@ -650,14 +624,18 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     }
   };
 
+  /* ADR-473. The two Scorecard Targets sections are gone from this fixed list.
+     Their ten fields asserted a direction and a unit in the form definition, and
+     five asserted them wrong against Amazon's own metric guides. Targets are now
+     rows in company_metric_targets, carrying their own direction and unit, and
+     get their own surface rather than a hardcoded field list that has to be
+     migrated every time Amazon reshapes a metric. */
   const CONFIG_SECTIONS = [
     { title: 'Shift Timing', icon: Clock, fields: SHIFT_TIMING },
     { title: 'Training Rules', icon: BookOpen, fields: TRAINING_RULES },
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
     { title: 'Attendance', icon: CheckSquare, fields: ATTENDANCE },
     { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },
-    { title: 'Scorecard Targets — Quality', icon: Star, fields: SCORECARD_QUALITY },
-    { title: 'Scorecard Targets — Safety', icon: Truck, fields: SCORECARD_SAFETY },
     { title: 'Manifest Ingestion', icon: Settings, fields: INGESTION },
   ];
 

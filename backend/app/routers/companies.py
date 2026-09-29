@@ -199,16 +199,6 @@ class CompanyConfigResponse(BaseModel):
     # absent; _GUARDED_FIELDS refuses it on both write paths.
     operating_mode:                   str = "workforce"
     # Scorecard tier targets (ADR-262). None = not configured.
-    scorecard_dcr_target:             Optional[float] = None
-    scorecard_dnr_dpmo_target:        Optional[int]   = None
-    scorecard_pod_target:             Optional[float] = None
-    scorecard_cc_target:              Optional[float] = None
-    scorecard_cdf_target:             Optional[float] = None
-    scorecard_dsb_dpmo_target:        Optional[int]   = None
-    scorecard_fico_target:            Optional[int]   = None
-    scorecard_speeding_rate_target:   Optional[float] = None
-    scorecard_signsignal_rate_target: Optional[float] = None
-    scorecard_dvic_target:            Optional[float] = None
     # Route-sort tuning (ADR-273). None = using the code default.
     sort_w_dense:                     Optional[float] = None
     sort_w_time:                      Optional[float] = None
@@ -271,16 +261,6 @@ class CompanyConfigResponse(BaseModel):
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
             operating_mode=obj.operating_mode,
-            scorecard_dcr_target=obj.scorecard_dcr_target,
-            scorecard_dnr_dpmo_target=obj.scorecard_dnr_dpmo_target,
-            scorecard_pod_target=obj.scorecard_pod_target,
-            scorecard_cc_target=obj.scorecard_cc_target,
-            scorecard_cdf_target=obj.scorecard_cdf_target,
-            scorecard_dsb_dpmo_target=obj.scorecard_dsb_dpmo_target,
-            scorecard_fico_target=obj.scorecard_fico_target,
-            scorecard_speeding_rate_target=obj.scorecard_speeding_rate_target,
-            scorecard_signsignal_rate_target=obj.scorecard_signsignal_rate_target,
-            scorecard_dvic_target=obj.scorecard_dvic_target,
             sort_w_dense=obj.sort_w_dense,
             sort_w_time=obj.sort_w_time,
             sort_w_diff=obj.sort_w_diff,
@@ -1054,16 +1034,6 @@ class CompanyConfigUpdate(BaseModel):
     # are attacker-controlled input. Percentages 0–100; DPMO 0–1,000,000 (a
     # defect rate cannot exceed one million per million); FICO on its real
     # 100–850 scale; event rates per 100 trips capped generously at 1000.
-    scorecard_dcr_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_pod_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_cc_target:              Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_cdf_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_dvic_target:            Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_dnr_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
-    scorecard_dsb_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
-    scorecard_fico_target:            Optional[int]   = Field(None, ge=100, le=850)
-    scorecard_speeding_rate_target:   Optional[float] = Field(None, ge=0.0, le=1000.0)
-    scorecard_signsignal_rate_target: Optional[float] = Field(None, ge=0.0, le=1000.0)
 
 
 def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, allow_super_admin_fields: bool = False) -> None:

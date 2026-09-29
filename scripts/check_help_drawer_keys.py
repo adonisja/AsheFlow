@@ -29,6 +29,35 @@ USE_RES = (
     re.compile(r'\bhelpKey="([^"]+)"'),
 )
 
+# ADR-473. The reverse direction, which this gate did not check.
+#
+# Field arrays forward their own `key` through `onHelp={setHelpKey}`, so the
+# key is never a literal and the checks above cannot see it. When ADR-473
+# removed ten `scorecard_*_target` fields, their ten drawer entries were
+# ORPHANED -- present, unreachable, and describing columns that no longer
+# existed. Every check passed.
+#
+# An orphan is not as loud as a missing entry (nobody opens an empty panel) but
+# it is how a drawer fills with help for a UI that has moved on, and it is
+# exactly the stale documentation this cluster keeps finding.
+FIELD_KEY_RE = re.compile(r"key:\s*'([a-z0-9_]+)'")
+
+# Entries written ahead of the surface that will use them. Listed BY NAME rather
+# than by prefix so staging one is a deliberate act that shows up in review, and
+# an entry that never gets its surface stays visible here instead of hiding
+# behind a wildcard.
+#
+# ADR-473 moved scorecard targets into company_metric_targets; these five carry
+# the metric explanations verified against Amazon's guides (ADR-472) and attach
+# to the targets surface when it ships.
+STAGED_ENTRIES = {
+    "metric_pod",
+    "metric_dsb_dpmo",
+    "metric_fico",
+    "metric_speeding_rate",
+    "metric_signsignal_rate",
+}
+
 
 def main() -> int:
     if not DRAWER.exists():
@@ -61,6 +90,23 @@ def main() -> int:
         print("FAIL: help drawer keys without content\n")
         print("\n".join(problems))
         print(f"\nAdd the entry to {DRAWER.relative_to(ROOT)}.")
+        return 1
+
+    # ── orphans: an entry no field or literal can reach ──────────────────
+    reachable = set()
+    for path in sorted(SRC.rglob("*.tsx")):
+        text = path.read_text()
+        if path != DRAWER:
+            for r in USE_RES:
+                reachable.update(m.group(1) for m in r.finditer(text))
+            reachable.update(FIELD_KEY_RE.findall(text))
+
+    orphans = sorted(entries - reachable - STAGED_ENTRIES)
+    if orphans:
+        print("FAIL: HELP_CONTENT entries nothing can reach\n")
+        for key in orphans:
+            print(f"  '{key}' has no field and no literal referencing it")
+        print("\nRemove the entry, or re-key it onto the field that replaced it.")
         return 1
 
     # Says "literal" deliberately: a key built at runtime
