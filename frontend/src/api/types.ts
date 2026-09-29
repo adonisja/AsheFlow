@@ -42,6 +42,24 @@ export interface Employee {
  *  answers a different question ("who is about to be walled", not "who is
  *  locked out"). No `enrolled` field — an enrolled employee is never listed.
  */
+/** ADR-473 D6. GET/PUT/DELETE /companies/my-config/metric-targets — admin only.
+ *
+ *  A COLLECTION, not a fixed form. The ten scorecard targets used to be columns
+ *  asserting their own direction and unit, and five asserted them wrong; a
+ *  metric Amazon adds is now a row rather than a migration.
+ *
+ *  `direction` and `unit` are returned but NEVER sent: they are domain truth
+ *  about the metric, and letting the client set them re-opens the defect where
+ *  a target is stored with the wrong direction and compared backwards.
+ */
+export interface MetricTarget {
+  metric_key: string;
+  target_value: number;
+  /** 'higher' = pass at or above; 'lower' = a ceiling, pass at or below. */
+  direction: 'higher' | 'lower';
+  unit: 'percent' | 'dpmo' | 'rate_per_100' | 'score';
+}
+
 export interface MfaDeadlineRow {
   id: string;
   name: string;

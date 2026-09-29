@@ -47,16 +47,23 @@ FIELD_KEY_RE = re.compile(r"key:\s*'([a-z0-9_]+)'")
 # an entry that never gets its surface stays visible here instead of hiding
 # behind a wildcard.
 #
-# ADR-473 moved scorecard targets into company_metric_targets; these five carry
-# the metric explanations verified against Amazon's guides (ADR-472) and attach
-# to the targets surface when it ships.
-STAGED_ENTRIES = {
-    "metric_pod",
-    "metric_dsb_dpmo",
-    "metric_fico",
-    "metric_speeding_rate",
-    "metric_signsignal_rate",
-}
+# EMPTY as of ADR-473 D6: the scorecard targets surface shipped, so the five
+# metric_* entries are reachable and their allowance was retired rather than
+# left as a permanent exemption. A stale entry here is the same orphan problem
+# one level up -- an allowance nobody revisits allows forever.
+STAGED_ENTRIES: set[str] = set()
+
+# Keys built at runtime from data, e.g. setHelpKey(`metric_${key}`) over a list
+# of metrics. The regexes above only see literals, so without this the reachable
+# set misses them and every such entry reads as an orphan.
+#
+# A PREFIX is right here and wrong for STAGED_ENTRIES, and the difference is
+# worth stating: this says "a surface builds these keys from data", which is a
+# structural fact about the code. That said "trust me, it is coming", which
+# needed a name so it could expire.
+TEMPLATE_KEY_RES = (
+    re.compile(r"setHelpKey\(\s*`([a-z_]+)\$\{"),
+)
 
 
 def main() -> int:
@@ -101,7 +108,20 @@ def main() -> int:
                 reachable.update(m.group(1) for m in r.finditer(text))
             reachable.update(FIELD_KEY_RE.findall(text))
 
-    orphans = sorted(entries - reachable - STAGED_ENTRIES)
+    # Prefixes that a surface builds keys from at runtime.
+    template_prefixes = set()
+    for path in sorted(SRC.rglob("*.tsx")):
+        if path == DRAWER:
+            continue
+        text = path.read_text()
+        for r in TEMPLATE_KEY_RES:
+            template_prefixes.update(m.group(1) for m in r.finditer(text))
+
+    built_at_runtime = {
+        e for e in entries if any(e.startswith(p) for p in template_prefixes)
+    }
+
+    orphans = sorted(entries - reachable - STAGED_ENTRIES - built_at_runtime)
     if orphans:
         print("FAIL: HELP_CONTENT entries nothing can reach\n")
         for key in orphans:
