@@ -21,6 +21,12 @@ import type { ScorecardTrendResponse, MetricTrend } from '../api/types';
 import { Award, TrendingDown, TrendingUp, Minus } from 'lucide-react';
 
 const DASH = '—';
+/* ADR-475 D4. Amazon writes "No Data" on the card when a metric was not
+   measured, and it is NOT a zero: a zero seatbelt rate is perfect, so rendering
+   both the same way makes an unmeasured walker look flawless.
+   Distinct from DASH, which means "we have nothing loaded here" -- a different
+   claim, and one the reader can act on differently. */
+const NO_DATA_LABEL = 'No Data';
 
 /** Amazon's ladder, best first. */
 function standingTone(s?: string | null): string {
@@ -135,7 +141,11 @@ export default function MyScorecardPanel() {
             <div className="min-w-0 flex-1">
               <p className="text-sm text-foreground truncate">{m.label}</p>
               <p className="text-[11px] text-muted-foreground">
-                {m.latest != null ? `${m.latest}${m.unit ?? ''}` : DASH}
+                {m.latest != null
+                  ? `${m.latest}${m.unit ?? ''}`
+                  : m.measured === false
+                    ? NO_DATA_LABEL
+                    : DASH}
                 {m.previous != null && (
                   <span className="ml-1">
                     (prev {m.previous}{m.unit ?? ''})

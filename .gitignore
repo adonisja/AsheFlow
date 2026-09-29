@@ -102,6 +102,16 @@ docs/
 # Will move to private repo (AsheFlow-private)
 CLAUDE.md
 
+# Amazon Confidential exports and scorecards (ADR-476/478).
+#
+# The DSP Overview Dashboard export carries Transporter IDs and DA names, and
+# the DSP Program Agreement §7(a) obliges the tenant to protect it. A sample
+# file sitting untracked in the working tree is one `git add -A` from being
+# published -- which is also why CLAUDE.md says to stage by name.
+DSP_Overview_Dashboard*.csv
+*_Scorecard*.csv
+*_Scorecard*.xlsx
+
 # Personal records and scratch files
 .claude/
 discussion.md

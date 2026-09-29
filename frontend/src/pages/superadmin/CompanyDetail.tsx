@@ -32,6 +32,8 @@ interface CompanyConfig {
   checkin_close: string | null;
   rating_window_hours: number | null;
   invite_expiry_days: number | null;
+  /** ADR-477. Platform-only: file upload vs API integration. */
+  ingestion_mode: string | null;
   graduation_assignments: number | null;
   debt_escalation_threshold: number | null;
   phase4_pass_score: number | null;
@@ -158,6 +160,25 @@ const CONFIG_SECTIONS: { heading: string; description?: string; fields: ConfigFi
       { key: 'rating_window_hours',  label: 'Rating Window (hours)', type: 'int',   required: true, min: 1,  max: 48 },
       { key: 'invite_expiry_days',   label: 'Invite Expiry (days)',  type: 'int',   required: true, min: 1,  max: 90 },
       { key: 'driver_checkin_count', label: 'Driver Check-ins',      type: 'int',   min: 0, max: 10 },
+    ],
+  },
+  {
+    heading: 'Manifest Ingestion',
+    description:
+      'How this station receives daily manifests. Platform-only: switching to '
+      + 'API Integration requires the integration to be built and credentialed '
+      + 'for this station first, and setting it before then stops manifests '
+      + 'arriving (ADR-477).',
+    fields: [
+      {
+        key: 'ingestion_mode', label: 'Ingestion Mode', type: 'select',
+        placeholder: 'file',
+        options: [
+          { value: 'file', label: 'File Upload (manual)' },
+          { value: 'api',  label: 'API Integration (automatic)' },
+        ],
+        hint: 'Leave on File Upload unless the API integration is live for this station.',
+      },
     ],
   },
   {
