@@ -199,16 +199,6 @@ class CompanyConfigResponse(BaseModel):
     # absent; _GUARDED_FIELDS refuses it on both write paths.
     operating_mode:                   str = "workforce"
     # Scorecard tier targets (ADR-262). None = not configured.
-    scorecard_dcr_target:             Optional[float] = None
-    scorecard_dnr_dpmo_target:        Optional[int]   = None
-    scorecard_pod_target:             Optional[float] = None
-    scorecard_cc_target:              Optional[float] = None
-    scorecard_cdf_target:             Optional[float] = None
-    scorecard_dsb_dpmo_target:        Optional[int]   = None
-    scorecard_fico_target:            Optional[int]   = None
-    scorecard_speeding_rate_target:   Optional[float] = None
-    scorecard_signsignal_rate_target: Optional[float] = None
-    scorecard_dvic_target:            Optional[float] = None
     # Route-sort tuning (ADR-273). None = using the code default.
     sort_w_dense:                     Optional[float] = None
     sort_w_time:                      Optional[float] = None
@@ -271,16 +261,6 @@ class CompanyConfigResponse(BaseModel):
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
             operating_mode=obj.operating_mode,
-            scorecard_dcr_target=obj.scorecard_dcr_target,
-            scorecard_dnr_dpmo_target=obj.scorecard_dnr_dpmo_target,
-            scorecard_pod_target=obj.scorecard_pod_target,
-            scorecard_cc_target=obj.scorecard_cc_target,
-            scorecard_cdf_target=obj.scorecard_cdf_target,
-            scorecard_dsb_dpmo_target=obj.scorecard_dsb_dpmo_target,
-            scorecard_fico_target=obj.scorecard_fico_target,
-            scorecard_speeding_rate_target=obj.scorecard_speeding_rate_target,
-            scorecard_signsignal_rate_target=obj.scorecard_signsignal_rate_target,
-            scorecard_dvic_target=obj.scorecard_dvic_target,
             sort_w_dense=obj.sort_w_dense,
             sort_w_time=obj.sort_w_time,
             sort_w_diff=obj.sort_w_diff,
@@ -1054,16 +1034,6 @@ class CompanyConfigUpdate(BaseModel):
     # are attacker-controlled input. Percentages 0–100; DPMO 0–1,000,000 (a
     # defect rate cannot exceed one million per million); FICO on its real
     # 100–850 scale; event rates per 100 trips capped generously at 1000.
-    scorecard_dcr_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_pod_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_cc_target:              Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_cdf_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_dvic_target:            Optional[float] = Field(None, ge=0.0, le=100.0)
-    scorecard_dnr_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
-    scorecard_dsb_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
-    scorecard_fico_target:            Optional[int]   = Field(None, ge=100, le=850)
-    scorecard_speeding_rate_target:   Optional[float] = Field(None, ge=0.0, le=1000.0)
-    scorecard_signsignal_rate_target: Optional[float] = Field(None, ge=0.0, le=1000.0)
 
 
 def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, allow_super_admin_fields: bool = False) -> None:
@@ -1618,6 +1588,196 @@ def _list_deadlines(db: Session, company_id: UUID) -> list[CheckInDeadline]:
         .order_by(CheckInDeadline.sequence.asc())
         .all()
     )
+
+
+from app.models.metric_target import CompanyMetricTarget
+
+# ---------------------------------------------------------------------------
+# Scorecard metric targets (ADR-473 D6)
+# ---------------------------------------------------------------------------
+#
+# ADR-473 moved these out of ten CompanyConfig columns and left them with no
+# surface at all -- named in that ADR as a known gap rather than left silent.
+# This is the surface.
+#
+# A COLLECTION, not a fixed form. The whole point of the move is that a metric
+# Amazon adds is a row; an endpoint with ten named fields would re-create the
+# schema churn the table exists to end.
+
+
+class MetricTargetOut(BaseModel):
+    metric_key: str
+    target_value: float
+    direction: str
+    unit: str
+
+    model_config = {"from_attributes": True}
+
+
+class MetricTargetUpsert(BaseModel):
+    """One target. `extra="forbid"` so a misspelled key is a 422, not a silent
+    no-op that looks saved (ADR-380 D4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric_key: str = Field(..., max_length=50)
+    target_value: float = Field(..., ge=0)
+    # Direction and unit are NOT accepted from the client. They are domain truth
+    # about the metric, and letting a caller set them would re-open exactly the
+    # defect ADR-473 closed: a target stored with the wrong direction, compared
+    # backwards, with nothing to catch it.
+
+
+def _shape_for(metric_key: str) -> dict[str, str]:
+    """The registry's shape, or a 422 naming why the key is not usable."""
+    from app.services.company_config import METRIC_SHAPES, RETIRED_METRICS
+
+    if metric_key in RETIRED_METRICS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"'{metric_key}' is no longer scored: {RETIRED_METRICS[metric_key]}",
+        )
+    shape = METRIC_SHAPES.get(metric_key)
+    if shape is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"'{metric_key}' is not a metric AsheFlow knows how to compare. "
+                "A metric needs a stated direction before a target means anything."
+            ),
+        )
+    return shape
+
+
+@company_admin_router.get("/my-config/metric-targets",
+                          response_model=list[MetricTargetOut])
+def list_metric_targets(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """This company's scorecard targets (ADR-473 D6).
+
+    Returns only what is SET. An unset metric is not a failing one -- ADR-262's
+    rule, carried across the move -- so the client renders the reported value
+    with no pass/fail judgement rather than showing a zero.
+    """
+    rows = (
+        db.query(CompanyMetricTarget)
+        .filter(CompanyMetricTarget.company_id == caller.company_id)
+        .order_by(CompanyMetricTarget.metric_key)
+        .all()
+    )
+    return [MetricTargetOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@company_admin_router.put("/my-config/metric-targets",
+                          response_model=MetricTargetOut)
+def upsert_metric_target(
+    payload: MetricTargetUpsert,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Set or replace one target.
+
+    PUT rather than POST: a company has at most one target per metric, so this
+    is idempotent by nature and a second call is a correction, not a duplicate.
+
+    Direction and unit come from the registry, never from the caller.
+    """
+    shape = _shape_for(payload.metric_key)
+
+    # Percent bounds follow the UNIT, which is the distinction the old
+    # `le=100.0` on every field got wrong: a DPMO is not a percentage.
+    if shape["unit"] == "percent" and payload.target_value > 100:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"'{payload.metric_key}' is a percentage, so its target cannot exceed 100.",
+        )
+
+    row = (
+        db.query(CompanyMetricTarget)
+        .filter(
+            CompanyMetricTarget.company_id == caller.company_id,
+            CompanyMetricTarget.metric_key == payload.metric_key,
+        )
+        .first()
+    )
+    before = {"target_value": row.target_value} if row else None
+
+    if row is None:
+        row = CompanyMetricTarget(
+            company_id=caller.company_id,
+            metric_key=payload.metric_key,
+            target_value=payload.target_value,
+            direction=shape["direction"],
+            unit=shape["unit"],
+        )
+        db.add(row)
+    else:
+        row.target_value = payload.target_value
+        # Re-stamped so a row stored before a shape correction is repaired on
+        # the next write rather than staying wrong until someone notices.
+        row.direction = shape["direction"]
+        row.unit = shape["unit"]
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="metric_target.upsert",
+        target_table="company_metric_targets",
+        target_id=str(row.id),
+        before=before,
+        after={"metric_key": row.metric_key, "target_value": row.target_value,
+               "direction": row.direction, "unit": row.unit},
+    )
+    db.commit()
+    db.refresh(row)
+    return MetricTargetOut.model_validate(row, from_attributes=True)
+
+
+@company_admin_router.delete("/my-config/metric-targets/{metric_key}",
+                             status_code=status.HTTP_200_OK)
+def delete_metric_target(
+    metric_key: str,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Clear a target. The metric is then reported without a verdict.
+
+    Returns a count rather than 204: a silent success after a destructive action
+    is how someone runs it twice (ADR-435 D11's reasoning, at a smaller scale).
+    """
+    row = (
+        db.query(CompanyMetricTarget)
+        .filter(
+            CompanyMetricTarget.company_id == caller.company_id,
+            CompanyMetricTarget.metric_key == metric_key,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No target set for '{metric_key}'.",
+        )
+
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="metric_target.delete",
+        target_table="company_metric_targets",
+        target_id=str(row.id),
+        before={"metric_key": row.metric_key, "target_value": row.target_value},
+    )
+    db.delete(row)
+    db.commit()
+    return {"deleted": 1, "metric_key": metric_key}
 
 
 @company_admin_router.get("/my-config/check-in-deadlines", response_model=list[CheckInDeadlineOut])
