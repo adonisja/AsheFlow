@@ -183,25 +183,33 @@ def amazon_track(role: str) -> str:
 
 METRIC_SHAPES: dict[str, dict[str, str]] = {
     # Quality
-    "pod":              {"direction": "higher", "unit": "percent",      "applies_to": ("walker", "driver")},
-    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo",         "applies_to": ("walker", "driver")},
-    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo",         "applies_to": ("walker", "driver")},
-    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo",         "applies_to": ("walker", "driver")},
-    # Safety, DRIVER ONLY (ADR-474 D3). A walker has no vehicle to generate
-    # telematics, so scoring one on these is a verdict about nothing. FICO
-    # narrows further still -- it covers rental vans rather than every driver.
+    "pod":              {"direction": "higher", "unit": "percent",      "expected_for": ("walker", "driver")},
+    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    # On the DA card, confirmed from real walker and driver cards 2026-09-29.
+    "ces_dpmo":         {"direction": "lower",  "unit": "dpmo",         "expected_for": ("walker", "driver")},
+    # A COUNT, not a rate: the card renders it as a bare number and links it
+    # to the underlying feedback. Lower is better, and the unit says count so
+    # nothing validates it as a percentage.
+    "cdf_negative":     {"direction": "lower",  "unit": "count",        "expected_for": ("walker", "driver")},
+    # Safety. EXPECTED for drivers, and rendered for BOTH (ADR-474 D3,
+    # corrected 2026-09-29). A real walker card carries all six of these reading
+    # "No Data" -- Amazon does not omit them, it reports that there is nothing
+    # to report. `expected_for` therefore predicts ABSENCE; it never decides
+    # whether a comparison may run. That is `meets_target`, on value presence.
     #
     # The three added by ADR-473 are roughly half the safety score between them,
     # and had no field at all: a tenant tuning only speeding and sign/signal was
     # tuning the minority of it.
-    "fico":             {"direction": "higher", "unit": "score",        "applies_to": ("driver",)},
-    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("driver",)},
-    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("driver",)},
-    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("driver",)},
-    "distractions_rate": {"direction": "lower", "unit": "rate_per_100", "applies_to": ("driver",)},
-    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100", "applies_to": ("driver",)},
+    "fico":             {"direction": "higher", "unit": "score",        "expected_for": ("driver",)},
+    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("driver",)},
+    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("driver",)},
+    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("driver",)},
+    "distractions_rate": {"direction": "lower", "unit": "rate_per_100", "expected_for": ("driver",)},
+    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100", "expected_for": ("driver",)},
     # Service reliability
-    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("walker", "driver")},
+    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100", "expected_for": ("walker", "driver")},
 }
 
 # Retired by ADR-473, kept so a stale caller fails LOUDLY with a reason rather
@@ -219,11 +227,17 @@ RETIRED_METRICS: dict[str, str] = {
 }
 
 
-def applies_to_role(key: str, role: str) -> bool:
-    """Is metric `key` one this role is scored on (ADR-474 D3)?
+def expected_for_role(key: str, role: str) -> bool:
+    """Would we normally EXPECT this role to have data for this metric?
 
-    Raises the same way `amazon_track` does for an unmapped role: a metric
-    question about someone whose track nobody decided has no honest answer.
+    A hint, not a gate (ADR-474 D3, corrected). Real cards render every metric
+    for every track and mark the empty ones "No Data", so this answers "is an
+    empty tile here unremarkable?" -- never "may this comparison run?".
+
+    Use it to explain an absence, or to flag the anomaly of a value appearing
+    where none was expected (usually a card matched to the wrong person).
+
+    Raises the same way `amazon_track` does for an unmapped role.
     """
     track = amazon_track(role)
     shape = METRIC_SHAPES.get(key)
@@ -231,10 +245,10 @@ def applies_to_role(key: str, role: str) -> bool:
         if key in RETIRED_METRICS:
             raise ValueError(f"metric '{key}' is retired: {RETIRED_METRICS[key]}")
         raise KeyError(key)
-    return track in shape["applies_to"]
+    return track in shape["expected_for"]
 
 
-def meets_target(key: str, value: float, target: float,
+def meets_target(key: str, value: float | None, target: float,
                  direction: str | None = None,
                  role: str | None = None) -> bool:
     """True if `value` meets `target` for metric `key`.
@@ -246,22 +260,32 @@ def meets_target(key: str, value: float, target: float,
     default.
 
     Raises:
-        ValueError — a retired metric key, naming what replaced it; or a metric
-        outside `role`'s Amazon track (ADR-474 D4).
+        ValueError — a retired metric key, naming what replaced it; or an absent
+        `value`, which is not a zero (ADR-474 D4).
         KeyError — an unknown key. Deliberate: a new metric cannot be compared
         until someone states which direction is good.
     """
-    # ADR-474 D4. A metric outside this person's track RAISES rather than
-    # returning a verdict. Neither answer is honest: a walker who "fails" a
+    # ADR-474 D4, corrected 2026-09-29. RAISES ON AN ABSENT VALUE, not on the
+    # person's track.
+    #
+    # The first version keyed on track, and real cards showed why that fails in
+    # BOTH directions: a walker card renders all six safety metrics as "No
+    # Data", so a driver whose tile is empty would have got a verdict computed
+    # from nothing, and a walker who somehow DID have a reading would have been
+    # refused one they earned.
+    #
+    # "No Data" also covers more than one reality -- not measured, measured with
+    # no tier yet, and not applicable to this programme (Pickup Success
+    # Behaviors renders on an AMZL card and never applies to AMZL). No table of
+    # ours can tell those apart, and none of them is a number to compare.
+    #
+    # Neither answer is honest on an absent value: a walker who "fails" a
     # speeding target and one who "passes" it are equally wrong, and the pass is
     # worse because nobody investigates a pass.
-    #
-    # `role` is optional so a caller comparing a COMPANY figure -- where there is
-    # no person -- still works.
-    if role is not None and not applies_to_role(key, role):
+    if value is None:
         raise ValueError(
-            f"metric '{key}' does not apply to a {amazon_track(role)}; "
-            f"'{role}' is not scored on it."
+            f"metric '{key}' has no measurement, so it cannot be compared "
+            "against a target. An absent value is not a zero."
         )
 
     if direction is None:
