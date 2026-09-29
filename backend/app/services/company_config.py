@@ -117,23 +117,91 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
 # commercially sensitive, and the DSP Program Agreement obliges the tenant to
 # protect them. Shapes are ours; numbers are the tenant's.
 
+# ---------------------------------------------------------------------------
+# Amazon's role model (ADR-474)
+# ---------------------------------------------------------------------------
+#
+# AMAZON ONLY ACKNOWLEDGES TWO ROLES: driver and walker. Our ten are a DSP's own
+# breakdown, so this is a PROJECTION from ours onto theirs -- done once, here,
+# rather than restated as an applies_to list on every metric.
+#
+# Two entries read as surprising and are not guesses:
+#
+#   captain -> walker   they run the ground operation on foot
+#   trainer -> walker   they train walkers, so they are not driving
+#
+# And the office roles are drivers. dispatch/management/admin receive no route
+# assignment from AsheFlow (they are not in ASSIGNABLE_ROLES), but an owner or
+# dispatcher covering a call-out is a DA to Amazon with their own card. This
+# mapping decides whose card is whose on ingest, not who we dispatch.
+#
+# trainee is always the WALKING track and driver_trainee always the DRIVING one
+# (ADR-264), so the pair needs no further qualification.
+AMAZON_TRACK: dict[str, str | None] = {
+    # Amazon sees a walker
+    "walker":           "walker",
+    "captain":          "walker",
+    "trainer":          "walker",
+    "trainee":          "walker",
+    # Amazon sees a driver
+    "driver":           "driver",
+    "driver_trainee":   "driver",
+    "dispatch":         "driver",
+    "management":       "driver",
+    "admin":            "driver",
+    # Confirmed by the operator: a field supervisor drives between routes, so
+    # Amazon scores them as a driver. Recorded as a DECISION rather than an
+    # inference -- it was briefly left unmapped precisely so it would be decided
+    # rather than guessed, and the None branch below stays for the next role
+    # whose track nobody has settled.
+    "field_supervisor": "driver",
+}
+
+
+def amazon_track(role: str) -> str:
+    """Which of Amazon's two roles this role is scored as.
+
+    Raises:
+        ValueError — the role has no track, or is unknown. Both refuse rather
+        than defaulting: a silent walker/driver guess is the defect this exists
+        to prevent.
+    """
+    if role not in AMAZON_TRACK:
+        raise ValueError(
+            f"role '{role}' has no Amazon track mapping. Add it to AMAZON_TRACK "
+            "-- a role Amazon scores must be a driver or a walker."
+        )
+    track = AMAZON_TRACK[role]
+    if track is None:
+        raise ValueError(
+            f"role '{role}' is deliberately unmapped: nobody has decided whether "
+            "Amazon scores them as a driver or a walker. Decide it rather than "
+            "letting the comparison guess."
+        )
+    return track
+
+
 METRIC_SHAPES: dict[str, dict[str, str]] = {
     # Quality
-    "pod":              {"direction": "higher", "unit": "percent"},
-    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo"},
-    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo"},
-    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo"},
-    # Safety. The three added here are roughly half the safety score between
-    # them, and had no field at all -- a tenant tuning only speeding and
-    # sign/signal was tuning the minority of it.
-    "fico":             {"direction": "higher", "unit": "score"},
-    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100"},
-    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100"},
-    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100"},
-    "distractions_rate": {"direction": "lower", "unit": "rate_per_100"},
-    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100"},
+    "pod":              {"direction": "higher", "unit": "percent",      "applies_to": ("walker", "driver")},
+    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo",         "applies_to": ("walker", "driver")},
+    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo",         "applies_to": ("walker", "driver")},
+    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo",         "applies_to": ("walker", "driver")},
+    # Safety, DRIVER ONLY (ADR-474 D3). A walker has no vehicle to generate
+    # telematics, so scoring one on these is a verdict about nothing. FICO
+    # narrows further still -- it covers rental vans rather than every driver.
+    #
+    # The three added by ADR-473 are roughly half the safety score between them,
+    # and had no field at all: a tenant tuning only speeding and sign/signal was
+    # tuning the minority of it.
+    "fico":             {"direction": "higher", "unit": "score",        "applies_to": ("driver",)},
+    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("driver",)},
+    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("driver",)},
+    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("driver",)},
+    "distractions_rate": {"direction": "lower", "unit": "rate_per_100", "applies_to": ("driver",)},
+    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100", "applies_to": ("driver",)},
     # Service reliability
-    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100"},
+    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100", "applies_to": ("walker", "driver")},
 }
 
 # Retired by ADR-473, kept so a stale caller fails LOUDLY with a reason rather
@@ -151,8 +219,24 @@ RETIRED_METRICS: dict[str, str] = {
 }
 
 
+def applies_to_role(key: str, role: str) -> bool:
+    """Is metric `key` one this role is scored on (ADR-474 D3)?
+
+    Raises the same way `amazon_track` does for an unmapped role: a metric
+    question about someone whose track nobody decided has no honest answer.
+    """
+    track = amazon_track(role)
+    shape = METRIC_SHAPES.get(key)
+    if shape is None:
+        if key in RETIRED_METRICS:
+            raise ValueError(f"metric '{key}' is retired: {RETIRED_METRICS[key]}")
+        raise KeyError(key)
+    return track in shape["applies_to"]
+
+
 def meets_target(key: str, value: float, target: float,
-                 direction: str | None = None) -> bool:
+                 direction: str | None = None,
+                 role: str | None = None) -> bool:
     """True if `value` meets `target` for metric `key`.
 
     `direction` comes from the stored CompanyMetricTarget row. It is optional
@@ -162,10 +246,24 @@ def meets_target(key: str, value: float, target: float,
     default.
 
     Raises:
-        ValueError — a retired metric key, naming what replaced it.
+        ValueError — a retired metric key, naming what replaced it; or a metric
+        outside `role`'s Amazon track (ADR-474 D4).
         KeyError — an unknown key. Deliberate: a new metric cannot be compared
         until someone states which direction is good.
     """
+    # ADR-474 D4. A metric outside this person's track RAISES rather than
+    # returning a verdict. Neither answer is honest: a walker who "fails" a
+    # speeding target and one who "passes" it are equally wrong, and the pass is
+    # worse because nobody investigates a pass.
+    #
+    # `role` is optional so a caller comparing a COMPANY figure -- where there is
+    # no person -- still works.
+    if role is not None and not applies_to_role(key, role):
+        raise ValueError(
+            f"metric '{key}' does not apply to a {amazon_track(role)}; "
+            f"'{role}' is not scored on it."
+        )
+
     if direction is None:
         if key in RETIRED_METRICS:
             raise ValueError(f"metric '{key}' is retired: {RETIRED_METRICS[key]}")
