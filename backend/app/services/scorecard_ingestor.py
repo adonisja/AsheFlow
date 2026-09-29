@@ -14,19 +14,65 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-# Map the scorecard's human labels → stable machine keys (mirrors the entry
-# template). Matching is case-insensitive substring on the label Textract reads.
+# Map the card's human labels -> the registry's machine keys (ADR-475 D1/D2).
+#
+# TAKEN FROM REAL CARDS, not from what we expect Amazon to call things. The
+# previous list was nine labels from one station's layout as it looked when
+# ADR-204 was written; it had never heard of a safety metric, so a driver's card
+# lost its entire safety half.
+#
+# ORDER MATTERS. Matching is a case-insensitive substring, so a longer label must
+# come before a shorter one it contains -- "customer delivery feedback -
+# negative" before "customer delivery feedback", or the negative count is read
+# as the DPMO.
+#
+# `fico` is the entry that proves the map has to come from cards: Amazon labels
+# it "Safe Driving Metric", with "FICO" only as a sub-label. Nothing that
+# searches for the word would ever find it.
 _LABEL_KEYS = [
-    ("packages delivered",          "packages_delivered"),
-    ("dsb dpmo tier",               "dsb_dpmo_tier"),
-    ("delivery success behavior",   "delivery_success_behavior"),
-    ("delivery completion dpmo",    "delivery_completion_dpmo"),
-    ("cdf",                         "cdf"),
-    ("pod tier",                    "pod_tier"),
-    ("pod score",                   "pod_score"),
-    ("pod success",                 "pod_success"),
-    ("pod rejects",                 "pod_rejects"),
+    # Safety (six on both walker and driver cards; walkers read "No Data")
+    ("safe driving metric",                   "fico"),
+    ("seatbelt-off rate",                     "seatbelt_rate"),
+    ("seatbelt off rate",                     "seatbelt_rate"),
+    ("speeding event rate",                   "speeding_rate"),
+    ("distractions rate",                     "distractions_rate"),
+    ("following distance rate",               "following_distance_rate"),
+    ("sign/signal violations",                "signsignal_rate"),
+    ("sign signal violations",                "signsignal_rate"),
+    # Quality -- longest first where one label contains another
+    ("customer delivery feedback - negative", "cdf_negative"),
+    ("customer delivery feedback (cdf dpmo)", "cdf_dpmo"),
+    ("customer delivery feedback",            "cdf_dpmo"),
+    ("customer escalations defect",           "ces_dpmo"),
+    ("delivery completion dpmo",              "dc_dpmo"),
+    ("delivery success behaviors",            "dsb_dpmo"),
+    ("delivery success behavior",             "dsb_dpmo"),
+    ("pod acceptance rate",                   "pod"),
+    # Context rows Amazon prints that are not scored metrics. Kept so they are
+    # RECOGNISED rather than reported as unknown -- a reviewer should not have to
+    # dismiss the same benign row on every card.
+    ("packages delivered",                    "packages_delivered"),
 ]
+
+# Recognised, but not a scored metric: no target, no direction, no verdict.
+# Named so D3's unknown-row flag means "we could not read this", never "this is
+# not a metric".
+CONTEXT_KEYS = frozenset({"packages_delivered"})
+
+# Amazon's literal words for an absent measurement (ADR-475 D4). Kept AS TEXT,
+# never coerced to 0 -- a zero seatbelt rate is perfect and "No Data" means not
+# measured, so conflating them makes an unmeasured walker look flawless.
+NO_DATA = "No Data"
+_NO_DATA_WORDS = ("no data", "n/a", "not available")
+
+
+def is_no_data(text: Optional[str]) -> bool:
+    """True when Amazon printed an absence rather than a number."""
+    if text is None:
+        return True
+    low = text.strip().lower()
+    return low == "" or low in _NO_DATA_WORDS
+
 
 _FLAG_WORDS = {
     "excellent": "excellent",
@@ -37,11 +83,29 @@ _FLAG_WORDS = {
 
 @dataclass
 class ScorecardDraftMetric:
-    key: str
+    """One parsed row, on its way to a human reviewer.
+
+    `key` is OPTIONAL (ADR-475 D3): a row whose label matched nothing is kept
+    with key=None rather than dropped, so the reviewer can name it or discard it
+    deliberately. Typed `str` before, while the parser could already produce
+    None -- the annotation said the drop could not happen and the code did it
+    anyway.
+    """
+
+    key: Optional[str]
     label: str
     value: str
     flag: Optional[str] = None
     sort_order: int = 0
+
+    @property
+    def recognised(self) -> bool:
+        return self.key is not None
+
+    @property
+    def is_context(self) -> bool:
+        """Recognised, but not a scored metric (e.g. packages delivered)."""
+        return self.key in CONTEXT_KEYS
 
 
 @dataclass
@@ -163,7 +227,17 @@ class ScorecardIngestor:
                 continue
             label = row[0].strip()
             key = _key_for_label(label)
-            if key is None:
+            # ADR-475 D3. An unrecognised row is KEPT, flagged, and shown to the
+            # reviewer. It used to `continue`, so a card with rows we did not
+            # know ingested "successfully" having quietly lost them -- invisible
+            # by construction, because the reviewer sees a plausible card and has
+            # no way to tell it is short.
+            #
+            # That matters most in the workflow this is actually used in:
+            # management uploading many cards one at a time, where nobody
+            # notices the fiftieth is missing a row.
+            if key is None and not label:
+                # A genuinely empty first cell is layout, not a metric.
                 continue
             # The value is the numeric/tier cell; the flag is any Excellent/Needs-Focus cell.
             value = ""
