@@ -70,6 +70,10 @@ class Employee(Base):
         # Partial unique index — only enforced when discord_id is not null,
         # allowing multiple pending employees without a Discord ID yet.
         UniqueConstraint("company_id", "email", name="uq_employees_company_email"),
+        # ADR-476 D1. Two employees cannot hold one Transporter ID: that would
+        # make the match ambiguous in exactly the way the id exists to prevent.
+        UniqueConstraint("company_id", "transporter_id",
+                         name="uq_employees_company_transporter"),
     )
 
     id                   = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -142,6 +146,24 @@ class Employee(Base):
     # submitted without it. Nullable: populated by adp_sync, absent until the
     # employee's first roster sync (ADR-233).
     hr_system_work_assignment_id_adp = Column(String(64), nullable=True)
+
+    # ── Amazon delivery identity (ADR-476) ────────────────────────────────────
+    # DELIBERATELY NOT hr_system_id_<source>. That convention is for HR
+    # PLATFORMS -- systems that are the source of truth for employment, where an
+    # unmatched id can create an employee (adp_sync does exactly that). Amazon is
+    # a customer, not an HR system: a Transporter ID we do not recognise cannot
+    # create anyone, so it waits for a human to bind it.
+    #
+    # THE MATCH KEY for bulk scorecard import. Amazon issues it, it survives a
+    # name change and a rehire, and it is in every export row -- so matching is a
+    # dictionary lookup rather than a fuzzy-name guess that misroutes one row in
+    # fifty, silently, every week.
+    #
+    # Nullable: nobody has one until it is bound, and a walker or office role may
+    # never appear in an export at all. Unique per COMPANY rather than globally --
+    # the id is Amazon's, and two tenants at different stations colliding is not
+    # ours to police.
+    transporter_id       = Column(String(32), nullable=True, index=True)
 
     # ── Modified duty / injury status ─────────────────────────────────────────
     # null = no restriction; "injured" = temporary light duty; "disabled" = permanent light duty.
