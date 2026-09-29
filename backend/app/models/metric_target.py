@@ -37,7 +37,11 @@ VALID_DIRECTIONS = ("higher", "lower")
 # What the number means. Drives validation, not just display: a percent is
 # bounded 0-100 and a DPMO is not, which is exactly the distinction the old
 # request schema got wrong.
-VALID_UNITS = ("percent", "dpmo", "rate_per_100", "score")
+# `count` added by ADR-474's correction: CDF-Negative is a bare count on the
+# card, not a rate or a percentage. Without its own unit it would borrow one,
+# and borrowing `percent` would cap a count at 100 -- the same defect ADR-473
+# fixed on CDF.
+VALID_UNITS = ("percent", "dpmo", "rate_per_100", "score", "count")
 
 
 class CompanyMetricTarget(Base):
