@@ -1,6 +1,6 @@
 """ADR-473: scorecard targets become rows, not columns.
 
-Ten `companies.scorecard_*_target` columns asserted a direction and a unit at
+Ten `company_configs.scorecard_*_target` columns asserted a direction and a unit at
 schema level. Checked against Amazon's own metric resource guides, FIVE asserted
 them wrong: two defect rates modelled as percentages where higher passes, a
 completion rate measuring something else entirely, a metric that is not scored at
@@ -37,6 +37,12 @@ revision = "aeaead4ebc1e"
 down_revision = "a0ac4a1bc433"
 branch_labels = None
 depends_on = None
+
+# The columns live on COMPANY_CONFIGS, not `companies`. Two models in one module
+# (Company / CompanyConfig) and the config table is the one holding operational
+# settings -- the exact D3 trap CLAUDE.md names, and caught here by the
+# fresh-database CI job rather than by a scratch test that seeded its own table.
+_TABLE = "company_configs"
 
 # column -> (metric_key, direction, unit). Shapes only; no thresholds (D5).
 _CARRIED = {
@@ -91,7 +97,8 @@ def upgrade() -> None:
     moved = 0
     for column, (key, direction, unit) in _CARRIED.items():
         rows = conn.execute(sa.text(
-            f"SELECT id, {column} FROM companies WHERE {column} IS NOT NULL"
+            f"SELECT company_id, {column} FROM company_configs "
+            f"WHERE {column} IS NOT NULL"
         )).fetchall()
         for company_id, value in rows:
             conn.execute(
@@ -108,11 +115,11 @@ def upgrade() -> None:
     cleared = 0
     for column in _CLEARED:
         cleared += conn.execute(sa.text(
-            f"SELECT count(*) FROM companies WHERE {column} IS NOT NULL"
+            f"SELECT count(*) FROM company_configs WHERE {column} IS NOT NULL"
         )).scalar() or 0
 
     for column in _ALL:
-        op.drop_column("companies", column)
+        op.drop_column("company_configs", column)
 
     print(f"ADR-473: carried {moved} target(s) across, "
           f"cleared {cleared} that did not match a real Amazon metric")
@@ -128,17 +135,17 @@ def downgrade() -> None:
     """
     for column, (_key, _d, unit) in _CARRIED.items():
         kind = sa.Integer() if unit in ("score", "dpmo") else sa.Float()
-        op.add_column("companies", sa.Column(column, kind, nullable=True))
+        op.add_column("company_configs", sa.Column(column, kind, nullable=True))
     for column in _CLEARED:
         kind = sa.Integer() if "dpmo" in column else sa.Float()
-        op.add_column("companies", sa.Column(column, kind, nullable=True))
+        op.add_column("company_configs", sa.Column(column, kind, nullable=True))
 
     conn = op.get_bind()
     for column, (key, _d, _u) in _CARRIED.items():
         conn.execute(sa.text(
-            f"UPDATE companies c SET {column} = t.target_value "
+            f"UPDATE company_configs c SET {column} = t.target_value "
             "FROM company_metric_targets t "
-            "WHERE t.company_id = c.id AND t.metric_key = :k"
+            "WHERE t.company_id = c.company_id AND t.metric_key = :k"
         ), {"k": key})
 
     op.drop_table("company_metric_targets")

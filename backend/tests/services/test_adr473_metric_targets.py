@@ -349,3 +349,36 @@ def test_the_ts_type_mirrors_the_response():
     block = ts.split("export interface MetricTarget {", 1)[1].split("}", 1)[0]
     for field in MetricTargetOut.model_fields:
         assert field in block, f"{field} missing from the TS type"
+
+
+def test_the_migration_reads_the_table_the_columns_live_on():
+    """CAUGHT BY CI, not by me.
+
+    The ten columns live on `company_configs`, not `companies` -- two models in
+    one module, which is the exact D3 trap CLAUDE.md names. My scratch test
+    seeded a hand-made `companies` table, so it reproduced my mistake instead of
+    catching it: a harness that builds its own schema tests the schema it built.
+
+    The fresh-database CI job found it because it runs every migration from
+    empty against the real schema.
+    """
+    mig = next((ROOT / "backend/alembic/versions").glob("*adr473*.py"))
+    src = mig.read_text()
+    body = "\n".join(
+        l for l in src.splitlines()
+        if not l.strip().startswith("#") and '"""' not in l
+    )
+    assert "FROM company_configs" in body
+    assert "FROM companies " not in body, "reading the wrong table again"
+    assert 'op.drop_column("company_configs"' in body
+    assert 'op.drop_column("companies"' not in body
+
+
+def test_the_columns_are_actually_gone_from_the_orm():
+    """The complement: the migration and the model must agree about which class
+    lost the columns."""
+    from app.models.company import Company, CompanyConfig
+
+    for cls in (Company, CompanyConfig):
+        leftover = [c for c in cls.__table__.columns.keys() if "scorecard_" in c]
+        assert not leftover, f"{cls.__name__} still has {leftover}"
