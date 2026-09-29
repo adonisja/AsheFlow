@@ -88,16 +88,22 @@ def test_the_weights_satisfy_the_adr186_ordering():
 
 def test_the_response_reports_platform_health():
     """D2 removed these from the gate, and that gate -- by deadlocking the
-    tenant -- was the only thing checking them at all."""
+    tenant -- was the only thing checking them at all.
+
+    SHAPE REVISED BY ADR-483 D4: the tenant gets a boolean, because naming the
+    absent fields leaks the parameter names ADR-483 withholds. The named list
+    moved to PlatformConfigResponse."""
     src = (ROOT / "backend/app/routers/companies.py").read_text()
-    assert "platform_settings_missing:        list[str]" in src
+    assert "platform_settings_ok=platform_settings_ok(obj)" in src
     assert "platform_settings_missing=platform_settings_missing(obj)" in src
 
 
 def test_the_frontend_type_carries_it():
-    """types.ts / the local interface are hand-maintained -- no codegen."""
+    """types.ts / the local interface are hand-maintained -- no codegen.
+
+    ADR-483 D4 changed this from a string[] of field names to a boolean."""
     src = (ROOT / "frontend/src/pages/CompanySettings.tsx").read_text()
-    assert "platform_settings_missing?: string[]" in src
+    assert "platform_settings_ok?: boolean" in src
 
 
 # ── D4: the backfill ────────────────────────────────────────────────────────

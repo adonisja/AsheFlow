@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_platform_staff, get_caller_employee, RoleChecker
 from app.services.company_config import (
-    _REQUIRED_FIELDS, PLATFORM_SEEDED_DEFAULTS, platform_settings_missing,
+    _REQUIRED_FIELDS, PLATFORM_ONLY_FIELDS, PLATFORM_SEEDED_DEFAULTS,
+    platform_settings_missing, platform_settings_ok,
 )
 from app.services.constants import OVERSIGHT_ROLES
 from app.core.config import settings
@@ -157,6 +158,15 @@ class EmployeeSummaryResponse(BaseModel):
 
 
 class CompanyConfigResponse(BaseModel):
+    """TENANT-FACING (ADR-483 D1). Operational settings only.
+
+    The 22 proprietary fields in PLATFORM_ONLY_FIELDS are DELIBERATELY absent --
+    this schema was returning all of them, with values, to any company admin.
+    Use PlatformConfigResponse for the super-admin surface.
+
+    Adding a platform field here is caught by
+    tests/services/test_adr483_platform_partition.py, which enumerates the
+    model's columns rather than trusting this list."""
     id: UUID
     company_id: UUID
     shift_start:                      Optional[str]
@@ -167,32 +177,14 @@ class CompanyConfigResponse(BaseModel):
     rating_window_hours:              Optional[int]
     invite_expiry_days:               Optional[int]
     is_configured:                    bool
-    # ADR-482 D3. Platform settings that never arrived. Empty means healthy.
-    # A PLATFORM fault, never the tenant's -- they cannot set these and are no
-    # longer blocked by them, so this is what makes the gap visible at all.
-    platform_settings_missing:        list[str] = []
+    # ADR-483 D4. A BOOLEAN, not the named list: naming the absent fields
+    # would leak the parameter names this schema exists to withhold.
+    platform_settings_ok:             bool = True
     graduation_assignments:           Optional[int]
     debt_escalation_threshold:        Optional[int]
     phase4_pass_score:                Optional[float]
     underperforming_trainer_threshold: Optional[int]
     max_training_phase:               Optional[int]
-    dispatch_weight_driver:           Optional[float]
-    dispatch_weight_trainer:          Optional[float]
-    dispatch_weight_walker:           Optional[float]
-    dispatch_mutual_bonus:            Optional[float]
-    dispatch_tridirectional_bonus:    Optional[float]
-    dispatch_consecutive_penalty:     Optional[float]
-    dispatch_weight_cap:              Optional[float]
-    dispatch_target_oneway_weak:                   Optional[float]
-    dispatch_target_oneway_trainer:                Optional[float]
-    dispatch_target_oneway_captain:                Optional[float]
-    dispatch_target_oneway_driver:                 Optional[float]
-    dispatch_target_mutual_weak:                   Optional[float]
-    dispatch_target_mutual_lead_crew:              Optional[float]
-    dispatch_target_mutual_driver_trainer:         Optional[float]
-    dispatch_target_mutual_driver_captain:         Optional[float]
-    dispatch_target_tridirectional:                Optional[float]
-    dispatch_target_trio_plus:                     Optional[float]
     flag_threshold:                   Optional[float]
     driver_checkin_count:             Optional[int]
     late_window_minutes:              Optional[int]
@@ -206,10 +198,6 @@ class CompanyConfigResponse(BaseModel):
     operating_mode:                   str = "workforce"
     # Scorecard tier targets (ADR-262). None = not configured.
     # Route-sort tuning (ADR-273). None = using the code default.
-    sort_w_dense:                     Optional[float] = None
-    sort_w_time:                      Optional[float] = None
-    sort_w_diff:                      Optional[float] = None
-    sort_w_doorman:                   Optional[float] = None
     sort_walk_budget_m:               Optional[float] = None
     sort_span_cap_m:                  Optional[float] = None
     sort_max_consecutive_no_fit:      Optional[int]   = None
@@ -237,29 +225,12 @@ class CompanyConfigResponse(BaseModel):
             rating_window_hours=obj.rating_window_hours,
             invite_expiry_days=obj.invite_expiry_days,
             is_configured=obj.is_configured,
-            platform_settings_missing=platform_settings_missing(obj),
+            platform_settings_ok=platform_settings_ok(obj),
             graduation_assignments=obj.graduation_assignments,
             debt_escalation_threshold=obj.debt_escalation_threshold,
             phase4_pass_score=obj.phase4_pass_score,
             underperforming_trainer_threshold=obj.underperforming_trainer_threshold,
             max_training_phase=obj.max_training_phase,
-            dispatch_weight_driver=obj.dispatch_weight_driver,
-            dispatch_weight_trainer=obj.dispatch_weight_trainer,
-            dispatch_weight_walker=obj.dispatch_weight_walker,
-            dispatch_mutual_bonus=obj.dispatch_mutual_bonus,
-            dispatch_tridirectional_bonus=obj.dispatch_tridirectional_bonus,
-            dispatch_consecutive_penalty=obj.dispatch_consecutive_penalty,
-            dispatch_weight_cap=obj.dispatch_weight_cap,
-            dispatch_target_oneway_weak=obj.dispatch_target_oneway_weak,
-            dispatch_target_oneway_trainer=obj.dispatch_target_oneway_trainer,
-            dispatch_target_oneway_captain=obj.dispatch_target_oneway_captain,
-            dispatch_target_oneway_driver=obj.dispatch_target_oneway_driver,
-            dispatch_target_mutual_weak=obj.dispatch_target_mutual_weak,
-            dispatch_target_mutual_lead_crew=obj.dispatch_target_mutual_lead_crew,
-            dispatch_target_mutual_driver_trainer=obj.dispatch_target_mutual_driver_trainer,
-            dispatch_target_mutual_driver_captain=obj.dispatch_target_mutual_driver_captain,
-            dispatch_target_tridirectional=obj.dispatch_target_tridirectional,
-            dispatch_target_trio_plus=obj.dispatch_target_trio_plus,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
             late_window_minutes=obj.late_window_minutes,
@@ -268,10 +239,6 @@ class CompanyConfigResponse(BaseModel):
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
             operating_mode=obj.operating_mode,
-            sort_w_dense=obj.sort_w_dense,
-            sort_w_time=obj.sort_w_time,
-            sort_w_diff=obj.sort_w_diff,
-            sort_w_doorman=obj.sort_w_doorman,
             sort_walk_budget_m=obj.sort_walk_budget_m,
             sort_span_cap_m=obj.sort_span_cap_m,
             sort_max_consecutive_no_fit=obj.sort_max_consecutive_no_fit,
@@ -280,6 +247,75 @@ class CompanyConfigResponse(BaseModel):
             sort_f5_walk_radius_km=obj.sort_f5_walk_radius_km,
             route_assembly_mode=obj.route_assembly_mode,
         )
+class PlatformConfigResponse(CompanyConfigResponse):
+    """SUPER-ADMIN ONLY (ADR-483 D1). The tenant schema plus the platform's own
+    numbers.
+
+    Extends rather than duplicates: a super admin needs everything a tenant sees
+    AND the coefficients, so inheritance keeps the two from drifting apart the
+    way the 21 leaked fields did.
+
+    Returned ONLY by endpoints behind `get_super_admin`. If this ever becomes
+    the response_model of a `company_admin_router` route, the leak is back --
+    tests/services/test_adr483_platform_partition.py asserts which routers may
+    return it.
+    """
+    dispatch_consecutive_penalty: Optional[float] = None
+    dispatch_mutual_bonus: Optional[float] = None
+    dispatch_target_mutual_driver_captain: Optional[float] = None
+    dispatch_target_mutual_driver_trainer: Optional[float] = None
+    dispatch_target_mutual_lead_crew: Optional[float] = None
+    dispatch_target_mutual_weak: Optional[float] = None
+    dispatch_target_oneway_captain: Optional[float] = None
+    dispatch_target_oneway_driver: Optional[float] = None
+    dispatch_target_oneway_trainer: Optional[float] = None
+    dispatch_target_oneway_weak: Optional[float] = None
+    dispatch_target_tridirectional: Optional[float] = None
+    dispatch_target_trio_plus: Optional[float] = None
+    dispatch_tridirectional_bonus: Optional[float] = None
+    dispatch_weight_cap: Optional[float] = None
+    dispatch_weight_captain: Optional[float] = None
+    dispatch_weight_driver: Optional[float] = None
+    dispatch_weight_trainer: Optional[float] = None
+    dispatch_weight_walker: Optional[float] = None
+    sort_w_dense: Optional[float] = None
+    sort_w_diff: Optional[float] = None
+    sort_w_doorman: Optional[float] = None
+    sort_w_time: Optional[float] = None
+    # The NAMED list (ADR-483 D4). The tenant gets a bare boolean; the person
+    # who can actually seed a missing weight gets to know which one.
+    platform_settings_missing: list[str] = []
+
+    @classmethod
+    def from_orm_obj(cls, obj: CompanyConfig) -> "PlatformConfigResponse":
+        base = CompanyConfigResponse.from_orm_obj(obj)
+        return cls(
+            **base.model_dump(),
+            dispatch_consecutive_penalty=obj.dispatch_consecutive_penalty,
+            dispatch_mutual_bonus=obj.dispatch_mutual_bonus,
+            dispatch_target_mutual_driver_captain=obj.dispatch_target_mutual_driver_captain,
+            dispatch_target_mutual_driver_trainer=obj.dispatch_target_mutual_driver_trainer,
+            dispatch_target_mutual_lead_crew=obj.dispatch_target_mutual_lead_crew,
+            dispatch_target_mutual_weak=obj.dispatch_target_mutual_weak,
+            dispatch_target_oneway_captain=obj.dispatch_target_oneway_captain,
+            dispatch_target_oneway_driver=obj.dispatch_target_oneway_driver,
+            dispatch_target_oneway_trainer=obj.dispatch_target_oneway_trainer,
+            dispatch_target_oneway_weak=obj.dispatch_target_oneway_weak,
+            dispatch_target_tridirectional=obj.dispatch_target_tridirectional,
+            dispatch_target_trio_plus=obj.dispatch_target_trio_plus,
+            dispatch_tridirectional_bonus=obj.dispatch_tridirectional_bonus,
+            dispatch_weight_cap=obj.dispatch_weight_cap,
+            dispatch_weight_captain=obj.dispatch_weight_captain,
+            dispatch_weight_driver=obj.dispatch_weight_driver,
+            dispatch_weight_trainer=obj.dispatch_weight_trainer,
+            dispatch_weight_walker=obj.dispatch_weight_walker,
+            sort_w_dense=obj.sort_w_dense,
+            sort_w_diff=obj.sort_w_diff,
+            sort_w_doorman=obj.sort_w_doorman,
+            sort_w_time=obj.sort_w_time,
+            platform_settings_missing=platform_settings_missing(obj),
+        )
+
 
 
 CompanyDetailResponse.model_rebuild()
@@ -919,6 +955,11 @@ _DISPATCH_TARGET_FIELDS = frozenset({
 _SUPER_ADMIN_ONLY_FIELDS = (
     frozenset({"invite_expiry_days", "ingestion_mode"})
     | _SORT_TUNING_FIELDS | _DISPATCH_TARGET_FIELDS
+    # ADR-483 D3. Every proprietary field, so PATCH /my-config 403s rather than
+    # silently accepting a tenant's retune of the algorithm. The two sets above
+    # already covered part of this; PLATFORM_ONLY_FIELDS is the canonical list
+    # and the union makes the overlap harmless.
+    | PLATFORM_ONLY_FIELDS
 )
 
 # ADR-289: fields that carry guards a generic field-setter cannot express — for
@@ -1122,7 +1163,7 @@ def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, al
 # Super admin: PATCH any company's config
 # ---------------------------------------------------------------------------
 
-@router.patch("/{company_id}/config", response_model=CompanyConfigResponse)
+@router.patch("/{company_id}/config", response_model=PlatformConfigResponse)
 def update_company_config_super_admin(
     company_id: UUID,
     payload: CompanyConfigUpdate,
@@ -1148,7 +1189,7 @@ def update_company_config_super_admin(
     )
     db.commit()
     db.refresh(config)
-    return CompanyConfigResponse.from_orm_obj(config)
+    return PlatformConfigResponse.from_orm_obj(config)
 
 
 # ---------------------------------------------------------------------------
