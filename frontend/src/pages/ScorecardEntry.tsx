@@ -11,17 +11,38 @@ import { Link } from 'react-router-dom';
 
 type MetricRow = Omit<ScorecardMetric, 'id'>;
 
-// The canonical NYCD metric rows (from the scorecard layout) as a starting template.
+/* The rows on a real DA card, in card order (ADR-475 D1/D2).
+ *
+ * KEYS MATCH THE BACKEND REGISTRY. The previous template used a parallel
+ * vocabulary -- pod_score, cdf, delivery_completion_dpmo -- that existed
+ * nowhere else, so a stored target could never match an ingested metric and
+ * ADR-473's targets were wired to nothing.
+ *
+ * ONE LIST FOR BOTH TRACKS, deliberately. Management enters cards for walkers
+ * and drivers alike, and a real walker card carries all six safety rows reading
+ * "No Data" (ADR-474). Filtering the form would hide fields the reviewer needs
+ * and make our card harder to reconcile against Amazon's.
+ */
+const NO_DATA = 'No Data';
+
 const TEMPLATE: MetricRow[] = [
-  { key: 'packages_delivered', label: 'Packages Delivered', value: '', unit: null, tier: null, flag: null, sort_order: 0 },
-  { key: 'dsb_dpmo_tier', label: 'DSB DPMO Tier', value: '', unit: null, tier: null, flag: null, sort_order: 1 },
-  { key: 'delivery_success_behavior', label: 'Delivery Success Behavior', value: '', unit: null, tier: null, flag: null, sort_order: 2 },
-  { key: 'delivery_completion_dpmo', label: 'Delivery Completion DPMO', value: '', unit: 'DPMO', tier: null, flag: null, sort_order: 3 },
-  { key: 'cdf', label: 'CDF', value: '', unit: null, tier: null, flag: null, sort_order: 4 },
-  { key: 'pod_tier', label: 'POD Tier', value: '', unit: null, tier: null, flag: null, sort_order: 5 },
-  { key: 'pod_score', label: 'POD Score', value: '', unit: '%', tier: null, flag: null, sort_order: 6 },
-  { key: 'pod_success', label: 'POD Success', value: '', unit: null, tier: null, flag: null, sort_order: 7 },
-  { key: 'pod_rejects', label: 'POD Rejects', value: '', unit: null, tier: null, flag: null, sort_order: 8 },
+  // Quality
+  { key: 'dc_dpmo', label: 'Delivery Completion DPMO', value: '', unit: 'DPMO', tier: null, flag: null, sort_order: 0 },
+  { key: 'dsb_dpmo', label: 'Delivery Success Behaviors', value: '', unit: 'DPMO', tier: null, flag: null, sort_order: 1 },
+  { key: 'ces_dpmo', label: 'Customer Escalations Defect', value: '', unit: 'DPMO', tier: null, flag: null, sort_order: 2 },
+  { key: 'cdf_dpmo', label: 'Customer Delivery Feedback (CDF DPMO)', value: '', unit: 'DPMO', tier: null, flag: null, sort_order: 3 },
+  { key: 'cdf_negative', label: 'Customer Delivery Feedback - Negative', value: '', unit: null, tier: null, flag: null, sort_order: 4 },
+  { key: 'pod', label: 'POD Acceptance Rate', value: '', unit: '%', tier: null, flag: null, sort_order: 5 },
+  // Safety. Present for BOTH tracks -- a walker card shows these as "No Data"
+  // rather than omitting them.
+  { key: 'fico', label: 'Safe Driving Metric', value: '', unit: null, tier: null, flag: null, sort_order: 6 },
+  { key: 'seatbelt_rate', label: 'Seatbelt-Off Rate', value: '', unit: null, tier: null, flag: null, sort_order: 7 },
+  { key: 'speeding_rate', label: 'Speeding Event Rate', value: '', unit: null, tier: null, flag: null, sort_order: 8 },
+  { key: 'distractions_rate', label: 'Distractions Rate', value: '', unit: null, tier: null, flag: null, sort_order: 9 },
+  { key: 'following_distance_rate', label: 'Following Distance Rate', value: '', unit: null, tier: null, flag: null, sort_order: 10 },
+  { key: 'signsignal_rate', label: 'Sign/Signal Violations', value: '', unit: null, tier: null, flag: null, sort_order: 11 },
+  // Context, not a scored metric.
+  { key: 'packages_delivered', label: 'Packages Delivered', value: '', unit: null, tier: null, flag: null, sort_order: 12 },
 ];
 
 function isoWeekNow(): string {

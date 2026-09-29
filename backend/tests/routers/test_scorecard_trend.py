@@ -6,7 +6,7 @@ for DPMO and driver-behaviour rates a HIGHER number is WORSE. Getting that
 backwards would paint a worsening week as an improvement — the most dangerous
 possible bug in a page whose whole job is telling you which way things moved.
 """
-from app.routers.scorecards import _numeric, _iter_weeks, _LOWER_IS_BETTER
+from app.routers.scorecards import _numeric, _iter_weeks, _is_lower_better
 
 
 class TestValueParsing:
@@ -34,18 +34,48 @@ class TestValueParsing:
 
 
 class TestDirectionSemantics:
+    """Re-pointed by ADR-475 D1. The intent below is unchanged and is the reason
+    this file exists; what changed is where the answer comes from.
+
+    It used to assert membership of `_LOWER_IS_BETTER`, a hand-maintained set
+    whose keys -- `dnr_dpmo`, `seatbelt_off_rate`, `speeding_event_rate` --
+    matched NOTHING: not the registry, not the ingestor, not the entry template.
+    A FOURTH vocabulary. So the set was internally consistent, passed these
+    tests, and could not classify a single metric the app actually stored: every
+    real key fell through to higher-is-better, including every DPMO.
+
+    Direction is now derived from METRIC_SHAPES, so these assert the behaviour
+    against the keys the system really uses.
+    """
+
     def test_dpmo_is_lower_is_better(self):
-        """DNR DPMO rising is a REGRESSION, not an improvement."""
-        assert "dnr_dpmo" in _LOWER_IS_BETTER
+        """A DPMO rising is a REGRESSION, not an improvement."""
+        for k in ("dsb_dpmo", "cdf_dpmo", "dc_dpmo", "ces_dpmo"):
+            assert _is_lower_better(k), k
 
     def test_driver_behaviour_rates_invert(self):
-        for k in ("seatbelt_off_rate", "speeding_event_rate", "distractions_rate"):
-            assert k in _LOWER_IS_BETTER
+        for k in ("seatbelt_rate", "speeding_rate", "distractions_rate",
+                  "signsignal_rate", "following_distance_rate"):
+            assert _is_lower_better(k), k
 
     def test_delivery_rates_are_higher_is_better(self):
-        """DCR/POD/packages: more is better, so they must NOT be in the set."""
-        for k in ("dcr", "pod", "packages_delivered", "cc"):
-            assert k not in _LOWER_IS_BETTER
+        """POD and FICO: more is better, so a rise is an improvement."""
+        for k in ("pod", "fico"):
+            assert not _is_lower_better(k), k
+
+    def test_an_unknown_key_does_not_claim_to_know(self):
+        """Falls back to higher-is-better rather than raising, because a trend
+        arrow is decoration: refusing to draw the page over an unrecognised row
+        is worse than drawing one arrow conservatively."""
+        assert not _is_lower_better("a_metric_nobody_registered")
+
+    def test_every_registered_metric_is_classified(self):
+        """The old set's real failure: it silently did not cover the keys in
+        use. This makes that impossible to repeat."""
+        from app.services.company_config import METRIC_SHAPES
+
+        for key, shape in METRIC_SHAPES.items():
+            assert _is_lower_better(key) == (shape["direction"] == "lower"), key
 
 
 class TestWeekEnumeration:

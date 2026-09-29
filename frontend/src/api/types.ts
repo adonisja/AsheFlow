@@ -2182,6 +2182,10 @@ export interface MetricTrend {
   // number moved. Do not re-derive this from delta on the client.
   direction?: string | null;
   weeks_flagged?: number;
+  /** ADR-475 D4. true = measured; false = Amazon printed "No Data";
+   *  null = we hold nothing for this metric. A dash for the last two
+   *  alike hides which one it is. */
+  measured?: boolean | null;
 }
 
 export interface StandingPoint {

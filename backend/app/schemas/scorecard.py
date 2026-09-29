@@ -30,12 +30,37 @@ class ScorecardCreate(BaseModel):
     metrics: List[ScorecardMetricIn] = []
 
 
+class ScorecardDraftMetricOut(BaseModel):
+    """One parsed row on its way to a reviewer (ADR-475 D3).
+
+    `key` is NULLABLE here and required on save. That asymmetry is the decision:
+    a row we could not recognise must reach the reviewer so they can name it or
+    discard it, and must not reach the database unnamed.
+
+    Reusing ScorecardMetricIn for the draft is what made the drop invisible --
+    its `key` is required, so a row without one could not be represented and the
+    parser dropped it rather than failing.
+    """
+
+    key: Optional[str] = Field(None, max_length=50)
+    label: str = Field(..., max_length=100)
+    value: str = Field(..., max_length=50)
+    unit: Optional[str] = Field(None, max_length=20)
+    tier: Optional[str] = Field(None, max_length=30)
+    flag: Optional[Literal["excellent", "needs_focus"]] = None
+    sort_order: int = 0
+
+
 class ScorecardDraftOut(BaseModel):
     """Parsed-but-unsaved scorecard (ADR-204 Phase C). The manager reviews/edits
     this in the entry form, then saves via POST /scorecards."""
     week: Optional[str] = None
     overall_standing: Optional[str] = None
-    metrics: List[ScorecardMetricIn] = []
+    metrics: List[ScorecardDraftMetricOut] = []
+    # How many rows were read but not recognised. Surfaced as a COUNT so the
+    # reviewer sees "we read 3 rows we could not name" rather than having to
+    # notice their absence (ADR-475 D3).
+    unrecognised_count: int = 0
 
 
 class ScorecardOut(BaseModel):
@@ -121,6 +146,15 @@ class MetricTrend(BaseModel):
     delta: Optional[float] = None       # latest - previous
     direction: Optional[str] = None     # up | down | flat | None when unknown
     weeks_flagged: int = 0              # how many weeks carried needs_focus
+    # ADR-475 D4. THREE states, not two. `latest is None` alone cannot say which:
+    #
+    #   measured=True,  latest=0.0   measured, and the result was zero (perfect)
+    #   measured=False, latest=None  Amazon printed "No Data" -- not measured
+    #   measured=None,  latest=None  we have nothing for this metric at all
+    #
+    # Without it the client renders a dash for the second and third alike, and a
+    # reader cannot tell "Amazon did not measure you" from "our page is empty".
+    measured: Optional[bool] = None
 
 
 class StandingPoint(BaseModel):

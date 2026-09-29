@@ -18,8 +18,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
+from app.services.company_config import METRIC_SHAPES
 from app.models.scorecard import Scorecard, ScorecardMetric
 from app.schemas.scorecard import (
+    ScorecardDraftMetricOut,
     CompanyStandingCard, IndividualTrendResponse, IndividualMetricTrend,
     IndividualMetricPoint, IndividualRosterResponse, IndividualRosterRow,
     ScorecardTrendResponse, MetricTrend, MetricTrendPoint, StandingPoint,
@@ -155,10 +157,13 @@ async def parse_scorecard(
         week=draft.week,
         overall_standing=draft.overall_standing,
         metrics=[
-            ScorecardMetricIn(
+            ScorecardDraftMetricOut(
                 key=m.key, label=m.label, value=m.value, flag=m.flag, sort_order=m.sort_order,
             ) for m in draft.metrics
         ],
+        # ADR-475 D3. Counted here rather than left for the client to derive:
+        # a reviewer needs to be TOLD, not to notice.
+        unrecognised_count=sum(1 for m in draft.metrics if m.key is None),
     )
 
 
@@ -412,12 +417,23 @@ def delete_scorecard(
 # Metrics where a HIGHER number is worse, so an increase is a regression.
 # DPMO (defects per million opportunities) and driver-behaviour counts all
 # invert. Getting this wrong would paint a worsening week as an improvement.
-_LOWER_IS_BETTER = {
-    "dnr_dpmo", "dpmo", "seatbelt_off_rate", "speeding_event_rate",
-    "distractions_rate", "following_distance_rate", "sign_signal_violations_rate",
-    "harsh_braking", "harsh_acceleration", "harsh_cornering",
-    "customer_escalation_dpmo", "cdf_dpmo", "ced",
-}
+def _is_lower_better(key: str) -> bool:
+    """Does a FALLING value mean improvement for this metric?
+
+    DERIVED from the registry (ADR-475 D1), not a fourth hand-maintained set.
+    The literal it replaced listed keys from yet another vocabulary --
+    `seatbelt_off_rate`, `sign_signal_violations_rate`, `dnr_dpmo` -- none of
+    which matched the registry, the ingestor, or the entry template. A trend
+    arrow computed from a set that does not contain the metric's key silently
+    points the wrong way, which is ADR-473's inverted-direction defect wearing a
+    sparkline.
+
+    Unknown keys fall back to higher-is-better, matching the previous behaviour
+    for anything the old set missed -- which was most of it.
+    """
+    shape = METRIC_SHAPES.get(key)
+    return bool(shape and shape["direction"] == "lower")
+
 
 
 # Amazon's standing ladder, best first. Index order matters: a LOWER index is a
@@ -558,8 +574,8 @@ def get_company_trend(
 
         direction = None
         if delta is not None and previous:
-            improved = delta < 0 if key in _LOWER_IS_BETTER else delta > 0
-            worsened = delta > 0 if key in _LOWER_IS_BETTER else delta < 0
+            improved = delta < 0 if _is_lower_better(key) else delta > 0
+            worsened = delta > 0 if _is_lower_better(key) else delta < 0
             # 0.5% band: Amazon's numbers jitter, and calling that a trend is noise.
             if abs(delta) / abs(previous) < 0.005:
                 direction = "flat"
@@ -572,6 +588,10 @@ def get_company_trend(
             key=key, label=s["label"], unit=s["unit"], points=points,
             latest=latest, previous=previous, delta=delta, direction=direction,
             weeks_flagged=sum(1 for p in points if p.flag == "needs_focus"),
+            # ADR-475 D4. False means Amazon printed "No Data" for every week we
+            # hold -- measured and absent, not missing. None means we have no
+            # rows at all. The client renders those differently.
+            measured=(bool(numeric_seen) or None) if points else None,
         ))
 
     trends.sort(key=lambda t: series[t.key]["sort_order"])
@@ -664,9 +684,12 @@ def _individual_trend(db: Session, company_id, employee_id, name: Optional[str],
                       weeks: int) -> IndividualTrendResponse:
     """Shared trend builder for one person.
 
-    Reuses _numeric, _LOWER_IS_BETTER and the same 0.5% dead band as the company
+    Reuses _numeric, _is_lower_better and the same 0.5% dead band as the company
     trend, so self-serve and management views cannot drift from each other or
     from the company page.
+
+    ADR-475: direction now derives from METRIC_SHAPES rather than a local set,
+    so all three views share one definition of "improving" instead of three.
     """
     cards = (
         db.query(Scorecard)
@@ -724,7 +747,7 @@ def _individual_trend(db: Session, company_id, employee_id, name: Optional[str],
 
         direction = None
         if delta is not None and prev:
-            improved = delta < 0 if key in _LOWER_IS_BETTER else delta > 0
+            improved = delta < 0 if _is_lower_better(key) else delta > 0
             if abs(delta) / abs(prev) < 0.005:
                 direction = "flat"
             else:
