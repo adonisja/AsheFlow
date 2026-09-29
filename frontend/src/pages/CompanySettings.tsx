@@ -43,9 +43,10 @@ interface CompanyConfig {
   ingestion_mode: string | null;
   // Amazon scorecard tier targets (ADR-262). null = no target configured; the
   // scorecard shows the reported value with no pass/fail judgement.
-  /** ADR-482 D3. Platform settings that never arrived; empty means healthy.
-   *  A platform fault, not the tenant's -- they cannot set these from here. */
-  platform_settings_missing?: string[];
+  /** ADR-483 D4. TRUE when the platform's own configuration is present.
+   *  A boolean, never the field names: the tenant must not learn the
+   *  parameter names, only that the platform must act. */
+  platform_settings_ok?: boolean;
 }
 
 interface DiscordConfig {
@@ -647,10 +648,12 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
          collects, which is a PLATFORM fault: the Owner cannot fix it from
          here, so the message says who can. */
       if (isOnboarding && !res.data.is_configured) {
-        const gaps = res.data.platform_settings_missing ?? [];
+        /* ADR-483 D4. The tenant response carries a BOOLEAN, never the field
+           names -- naming them would leak the parameter names the split exists
+           to withhold. The named list goes to the super-admin surface. */
         setError(
-          gaps.length > 0
-            ? `Your changes were saved, but setup cannot complete: this company is missing platform settings (${gaps.join(', ')}). Contact your platform administrator.`
+          res.data.platform_settings_ok === false
+            ? 'Your changes were saved, but setup cannot complete because this company is missing configuration only your platform administrator can apply. Please contact them.'
             : 'Your changes were saved, but setup is not complete yet. Some required settings are still missing.',
         );
         return;
