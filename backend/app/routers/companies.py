@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_platform_staff, get_caller_employee, RoleChecker
-from app.services.company_config import _REQUIRED_FIELDS
+from app.services.company_config import (
+    _REQUIRED_FIELDS, PLATFORM_SEEDED_DEFAULTS, platform_settings_missing,
+)
 from app.services.constants import OVERSIGHT_ROLES
 from app.core.config import settings
 from app.database import get_db
@@ -165,6 +167,10 @@ class CompanyConfigResponse(BaseModel):
     rating_window_hours:              Optional[int]
     invite_expiry_days:               Optional[int]
     is_configured:                    bool
+    # ADR-482 D3. Platform settings that never arrived. Empty means healthy.
+    # A PLATFORM fault, never the tenant's -- they cannot set these and are no
+    # longer blocked by them, so this is what makes the gap visible at all.
+    platform_settings_missing:        list[str] = []
     graduation_assignments:           Optional[int]
     debt_escalation_threshold:        Optional[int]
     phase4_pass_score:                Optional[float]
@@ -231,6 +237,7 @@ class CompanyConfigResponse(BaseModel):
             rating_window_hours=obj.rating_window_hours,
             invite_expiry_days=obj.invite_expiry_days,
             is_configured=obj.is_configured,
+            platform_settings_missing=platform_settings_missing(obj),
             graduation_assignments=obj.graduation_assignments,
             debt_escalation_threshold=obj.debt_escalation_threshold,
             phase4_pass_score=obj.phase4_pass_score,
@@ -369,7 +376,10 @@ def create_company(
     db.add(company)
     db.flush()  # populate company.id before creating config
 
-    db.add(CompanyConfig(company_id=company.id))
+    # ADR-482 D1. Explicit, not bare: the platform settings had their values in
+    # column COMMENTS ("# default 0.70") and no default= anywhere, so this line
+    # used to write eight NULLs and every company was born unconfigurable.
+    db.add(CompanyConfig(company_id=company.id, **PLATFORM_SEEDED_DEFAULTS))
 
     write_audit(
         db=db,
