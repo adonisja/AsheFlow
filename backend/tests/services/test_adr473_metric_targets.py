@@ -134,6 +134,13 @@ def test_no_threshold_figures_are_stored_in_code():
         ROOT / "backend/app/models/metric_target.py",
     ]
     targets += list((ROOT / "backend/alembic/versions").glob("*adr473*.py"))
+    # The DOCS too. Two thresholds reached this ADR and its journal while they
+    # were being written -- a verification step quoting a real figure reads as
+    # harmless and is the same leak. docs/ is gitignored from the public repo
+    # but syncs to AsheFlow-private, which is still a durable store.
+    for d in ("docs/decisions", "docs/journals"):
+        targets += list((ROOT / d).glob("*473*")) + list((ROOT / d).glob("*Targets-Become-Rows*"))
+    targets = [t for t in targets if t.exists()]
     for path in targets:
         src = path.read_text()
         for figure in ("233", "429", "980", "1115", "3900", "3,900"):
