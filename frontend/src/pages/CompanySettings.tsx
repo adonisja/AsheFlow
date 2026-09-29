@@ -1,5 +1,5 @@
 import { errorText } from '../utils/errorText';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -8,6 +8,7 @@ import {
   MessageSquare, MapPin, HelpCircle, Plus, Trash2,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import type { MetricTarget } from '../api/types';
 import SectionHeader from '../components/ui/SectionHeader';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
@@ -531,6 +532,51 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
   const [discordError, setDiscordError] = useState<string | null>(null);
   const [discordSaved, setDiscordSaved] = useState(false);
 
+  /* ADR-473 D6. Scorecard targets, as a collection.
+
+     Hidden during onboarding on purpose: a DSP setting the platform up has not
+     read their first Amazon card yet, and a page that asks for numbers they
+     cannot have is a page they abandon. ADR-262 made the same call about these
+     never being required fields. */
+  const [targets, setTargets] = useState<MetricTarget[] | null>(null);
+  const [targetsError, setTargetsError] = useState<string | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  const loadTargets = useCallback(async () => {
+    try {
+      const r = await axiosClient.get<MetricTarget[]>('/companies/my-config/metric-targets');
+      setTargets(r.data);
+      setTargetsError(null);
+    } catch {
+      setTargets([]);
+      setTargetsError('Could not load scorecard targets.');
+    }
+  }, []);
+
+  useEffect(() => { if (!isOnboarding) void loadTargets(); }, [isOnboarding, loadTargets]);
+
+  const saveTarget = async (metricKey: string, raw: string) => {
+    setSavingKey(metricKey);
+    setTargetsError(null);
+    try {
+      if (raw.trim() === '') {
+        // Clearing is a real action, not an empty save: an unset target means
+        // "report the value with no verdict" rather than "the target is zero".
+        await axiosClient.delete(`/companies/my-config/metric-targets/${metricKey}`);
+      } else {
+        await axiosClient.put('/companies/my-config/metric-targets', {
+          metric_key: metricKey,
+          target_value: Number(raw),
+        });
+      }
+      await loadTargets();
+    } catch (err: unknown) {
+      setTargetsError(errorText(err, 'Could not save that target.'));
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
   const [helpKey, setHelpKey] = useState<string | null>(null);
 
   const load = async () => {
@@ -630,6 +676,31 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
      rows in company_metric_targets, carrying their own direction and unit, and
      get their own surface rather than a hardcoded field list that has to be
      migrated every time Amazon reshapes a metric. */
+  /* ADR-473 D6. The metrics offered in the UI, with labels.
+
+     DELIBERATELY NOT the source of direction or unit -- those come back on the
+     row from the server. A hardcoded direction here that disagreed with the
+     stored one would be the exact defect ADR-473 closed, moved from the backend
+     to the frontend.
+
+     A curated list rather than everything the registry knows: an Owner wants the
+     metrics on their card, in card order, not an alphabetical dump. A metric
+     added server-side is simply not offered here until someone adds the label,
+     which is a smaller failure than showing a key nobody recognises. */
+  const KNOWN_METRICS: { key: string; label: string; hint: string }[] = [
+    { key: 'pod',                     label: 'POD Acceptance',        hint: 'Photos accepted, as a percentage.' },
+    { key: 'dsb_dpmo',                label: 'DSB',                   hint: 'Concessions per million packages.' },
+    { key: 'cdf_dpmo',                label: 'Customer Feedback',     hint: 'Negative feedback per million deliveries.' },
+    { key: 'dc_dpmo',                 label: 'Delivery Completion',   hint: 'Returned packages per million dispatched.' },
+    { key: 'fico',                    label: 'FICO',                  hint: 'Driving score, 100 to 850.' },
+    { key: 'speeding_rate',           label: 'Speeding',              hint: 'Events per 100 trips.' },
+    { key: 'signsignal_rate',         label: 'Sign / Signal',         hint: 'Events per 100 trips.' },
+    { key: 'seatbelt_rate',           label: 'Seatbelt',              hint: 'Events per 100 trips.' },
+    { key: 'distractions_rate',       label: 'Distractions',          hint: 'Events per 100 trips.' },
+    { key: 'following_distance_rate', label: 'Following Distance',    hint: 'Events per 100 trips.' },
+    { key: 'fleet_execution',         label: 'Fleet Execution',       hint: 'Defects per 100 vehicles.' },
+  ];
+
   const CONFIG_SECTIONS = [
     { title: 'Shift Timing', icon: Clock, fields: SHIFT_TIMING },
     { title: 'Training Rules', icon: BookOpen, fields: TRAINING_RULES },
@@ -759,6 +830,83 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
               </div>
             </div>
           </form>
+
+          {/* ---- Scorecard targets (ADR-473 D6, hidden in onboarding) ---- */}
+          {!isOnboarding && (
+            <div className="card">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                    <Star className="w-4 h-4 text-primary" />
+                    Scorecard Targets
+                  </h2>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    The figures your team is measured against. Take each one from
+                    your own weekly Amazon scorecard. Leave a target empty and that
+                    metric is reported without a pass or fail.
+                  </p>
+                </div>
+              </div>
+
+              {targetsError && <ErrorBanner message={targetsError} />}
+
+              {targets === null ? (
+                <div className="h-24 animate-pulse rounded-lg bg-accent/40" />
+              ) : (
+                <div className="space-y-2">
+                  {KNOWN_METRICS.map(({ key, label, hint }) => {
+                    const row = targets.find(t => t.metric_key === key);
+                    /* The direction comes from the SERVER, never from this list.
+                       A label here that disagreed with the stored row would be
+                       the ADR-473 defect wearing a different hat. */
+                    const dir = row?.direction;
+                    return (
+                      <div key={key} className="flex items-center gap-3 py-2 border-b border-border last:border-0">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium text-foreground">{label}</span>
+                            <button
+                              type="button"
+                              onClick={() => setHelpKey(`metric_${key}`)}
+                              tabIndex={-1}
+                              className="text-muted-foreground hover:text-primary transition-colors"
+                              aria-label={`Help for ${label}`}
+                            >
+                              <HelpCircle className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {dir === 'lower'
+                              ? 'A ceiling: pass at or below this.'
+                              : dir === 'higher'
+                                ? 'Pass at or above this.'
+                                : hint}
+                          </p>
+                        </div>
+                        <input
+                          type="number"
+                          step="any"
+                          min={0}
+                          defaultValue={row?.target_value ?? ''}
+                          placeholder="Not set"
+                          disabled={savingKey === key}
+                          onBlur={e => {
+                            const next = e.target.value;
+                            const current = row?.target_value;
+                            const unchanged = next.trim() === ''
+                              ? current === undefined
+                              : Number(next) === current;
+                            if (!unchanged) void saveTarget(key, next);
+                          }}
+                          className="input w-32 text-right disabled:opacity-50"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ---- Discord config form (hidden in onboarding) ---- */}
           {!isOnboarding && (

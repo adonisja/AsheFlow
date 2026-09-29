@@ -172,3 +172,180 @@ def test_the_migration_is_self_contained():
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             name = getattr(node, "module", None) or node.names[0].name
             assert not str(name).startswith("app."), f"imports {name}"
+
+
+# ── D6: the surface (endpoints + client) ────────────────────────────────────
+
+def _router_src() -> str:
+    from app.routers import companies
+    return inspect.getsource(companies)
+
+
+def test_the_endpoints_exist_and_are_admin_only():
+    """Targets decide whether a person's week passes. That is not a dispatch
+    setting."""
+    from app.routers import companies
+
+    for fn in ("list_metric_targets", "upsert_metric_target", "delete_metric_target"):
+        src = inspect.getsource(getattr(companies, fn))
+        assert "allow_admin" in src, f"{fn} is not admin-gated"
+
+
+def test_every_target_query_is_company_scoped():
+    """Dimension 1. Three queries, three filters."""
+    from app.routers import companies
+
+    for fn in ("list_metric_targets", "upsert_metric_target", "delete_metric_target"):
+        src = inspect.getsource(getattr(companies, fn))
+        assert "CompanyMetricTarget.company_id == caller.company_id" in src, fn
+
+
+def test_direction_and_unit_are_never_accepted_from_the_client():
+    """THE defect ADR-473 closed, restated at the trust boundary: a caller who
+    can set the direction can have their metric compared backwards."""
+    from app.routers.companies import MetricTargetUpsert
+
+    fields = set(MetricTargetUpsert.model_fields)
+    assert "direction" not in fields
+    assert "unit" not in fields
+    assert fields == {"metric_key", "target_value"}
+
+
+def test_the_upsert_schema_forbids_extra_keys():
+    """A misspelled field would otherwise be a silent no-op that looks saved."""
+    from app.routers.companies import MetricTargetUpsert
+
+    assert MetricTargetUpsert.model_config.get("extra") == "forbid"
+
+
+def test_the_shape_comes_from_the_registry():
+    src = inspect.getsource(
+        __import__("app.routers.companies", fromlist=["x"])._shape_for
+    )
+    assert "METRIC_SHAPES" in src and "RETIRED_METRICS" in src
+
+
+def test_a_retired_metric_is_refused_with_its_reason():
+    """Not a bare 422. An Owner reading 'dcr is not valid' re-enters it; one
+    reading what replaced it sets the right field."""
+    from app.routers.companies import _shape_for
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        _shape_for("dcr")
+    assert exc.value.status_code == 422
+    assert "dc_dpmo" in str(exc.value.detail)
+
+
+def test_an_unknown_metric_is_refused():
+    from app.routers.companies import _shape_for
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        _shape_for("invented_metric")
+    assert exc.value.status_code == 422
+
+
+def test_percent_bounds_follow_the_unit_not_every_field():
+    """The old schema put le=100.0 on all ten, which is why a real DPMO could
+    not be stored. The bound now applies only where the unit is a percentage."""
+    src = inspect.getsource(
+        __import__("app.routers.companies", fromlist=["x"]).upsert_metric_target
+    )
+    # Strip comments: the explanation NAMES the old `le=100.0`, and matching on
+    # prose rather than code failed the first version of this test against
+    # correct code. Third time this session, hence the note.
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert 'shape["unit"] == "percent"' in code
+    assert "le=100" not in code
+
+
+def test_writes_are_audited():
+    from app.routers import companies
+
+    for fn, action in (("upsert_metric_target", "metric_target.upsert"),
+                       ("delete_metric_target", "metric_target.delete")):
+        src = inspect.getsource(getattr(companies, fn))
+        assert f'action_type="{action}"' in src, fn
+
+
+def test_the_upsert_follows_flush_audit_commit():
+    src = inspect.getsource(
+        __import__("app.routers.companies", fromlist=["x"]).upsert_metric_target
+    )
+    assert src.index("db.flush()") < src.index("write_audit") < src.index("db.commit()")
+
+
+def test_delete_returns_a_count_not_a_silent_204():
+    """A silent success after a destructive action is how someone runs it
+    twice."""
+    src = inspect.getsource(
+        __import__("app.routers.companies", fromlist=["x"]).delete_metric_target
+    )
+    assert '"deleted"' in src
+
+
+def test_the_routes_are_registered():
+    from app.main import app
+
+    paths = set(app.openapi()["paths"])
+    assert "/api/v1/companies/my-config/metric-targets" in paths
+    assert "/api/v1/companies/my-config/metric-targets/{metric_key}" in paths
+
+
+# ── D6: the client ──────────────────────────────────────────────────────────
+
+SETTINGS = ROOT / "frontend/src/pages/CompanySettings.tsx"
+TYPES = ROOT / "frontend/src/api/types.ts"
+
+
+def test_the_endpoint_has_a_caller():
+    """ADR-381. The gap this ADR named was a table with no surface; shipping one
+    with no caller would be the same gap one layer up."""
+    src = SETTINGS.read_text()
+    assert "'/companies/my-config/metric-targets'" in src
+
+
+def test_the_client_never_sends_direction_or_unit():
+    src = SETTINGS.read_text()
+    body = src.split("axiosClient.put('/companies/my-config/metric-targets'", 1)[1]
+    body = body.split("}", 2)[0] + "}"
+    assert "direction" not in body and "unit" not in body
+
+
+def test_the_ui_reads_direction_from_the_server_row():
+    """A hardcoded direction in the client would be the ADR-473 defect moved to
+    the frontend."""
+    src = SETTINGS.read_text()
+    assert "const dir = row?.direction" in src
+    block = src.split("const KNOWN_METRICS", 1)[1].split("];", 1)[0]
+    assert "direction" not in block, "KNOWN_METRICS hardcodes a direction"
+
+
+def test_clearing_a_target_deletes_rather_than_saving_zero():
+    """An unset target means 'report without a verdict', not 'the target is
+    zero' -- ADR-262's rule, and a zero ceiling fails everyone."""
+    src = SETTINGS.read_text()
+    block = src.split("const saveTarget", 1)[1].split("};", 1)[0]
+    assert "axiosClient.delete" in block
+    assert "raw.trim() === ''" in block
+
+
+def test_the_section_is_hidden_during_onboarding():
+    """A DSP setting the platform up has not read their first Amazon card, and
+    a page asking for numbers they cannot have is a page they abandon."""
+    # Anchor on the SECTION, not the first place the words appear -- an ADR
+    # comment above mentions them and made the first version of this test pass
+    # on unrelated text.
+    src = SETTINGS.read_text()
+    i = src.index("{/* ---- Scorecard targets (ADR-473 D6")
+    assert "!isOnboarding && (" in src[i:i + 200]
+
+
+def test_the_ts_type_mirrors_the_response():
+    from app.routers.companies import MetricTargetOut
+
+    ts = TYPES.read_text()
+    block = ts.split("export interface MetricTarget {", 1)[1].split("}", 1)[0]
+    for field in MetricTargetOut.model_fields:
+        assert field in block, f"{field} missing from the TS type"
