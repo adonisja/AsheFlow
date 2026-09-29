@@ -17,21 +17,23 @@ DRAWER = ROOT / "frontend/src/components/ui/SettingsHelpDrawer.tsx"
 SETTINGS = ROOT / "frontend/src/pages/CompanySettings.tsx"
 
 # Correct shape, verified against Amazon's guides.
+#
+# RE-KEYED BY ADR-473: these described `scorecard_*_target` form fields, which
+# are gone -- targets are rows in company_metric_targets now. The explanations
+# survived the move because they are about the METRIC, not about the column, so
+# they attach to the metric key instead.
 VERIFIED = [
-    "scorecard_pod_target",
-    "scorecard_dsb_dpmo_target",
-    "scorecard_fico_target",
-    "scorecard_speeding_rate_target",
-    "scorecard_signsignal_rate_target",
+    "metric_pod",
+    "metric_dsb_dpmo",
+    "metric_fico",
+    "metric_speeding_rate",
+    "metric_signsignal_rate",
 ]
-# Shape does not match the real metric. ADR-473.
-PROVISIONAL = [
-    "scorecard_dcr_target",
-    "scorecard_cdf_target",
-    "scorecard_cc_target",
-    "scorecard_dnr_dpmo_target",
-    "scorecard_dvic_target",
-]
+# ADR-472 D3 carried five provisional entries for fields whose shape was wrong.
+# ADR-473 removed those fields, so the entries went with them: there is no field
+# left to warn about, and an entry for a field that does not exist is the orphan
+# the help gate now fails on.
+PROVISIONAL: list[str] = []
 
 
 def _entry(key: str) -> str:
@@ -69,7 +71,7 @@ def test_no_amazon_threshold_figures_appear():
     The guides' actual Fantastic figures are checked for by value.
     """
     src = DRAWER.read_text()
-    block = src[src.index("Amazon scorecard targets (ADR-472)"):
+    block = src[src.index("Amazon scorecard metrics (ADR-472"):
                 src.index("ncns_cutoff_minutes:")]
     # Strip the `example:` lines -- an illustrative value is the point of those,
     # and they are explicitly labelled as examples in the UI.
@@ -92,36 +94,42 @@ def test_every_verified_entry_points_at_the_tenants_own_scorecard():
 def test_the_facts_that_only_the_guides_could_give():
     """These distinguish guide-sourced help from research-sourced help. If an
     edit loses them, the entry has drifted back to generic advice."""
-    pod = _entry("scorecard_pod_target")
+    pod = _entry("metric_pod")
     assert "RETAKING" in pod and "SKIPPING" in pod, (
         "the retake-vs-skip rule is the single most coachable POD fact"
     )
 
-    sign = _entry("scorecard_signsignal_rate_target")
+    sign = _entry("metric_signsignal_rate")
     assert "U-turn" in sign, "illegal U-turns are in this metric and easily missed"
     assert "ALREADY red" in sign, "the already-red vs entered-on-yellow distinction"
 
-    fico = _entry("scorecard_fico_target")
+    fico = _entry("metric_fico")
     assert "SMALLEST" in fico, (
         "FICO reads as the headline safety number and is the smallest input"
     )
 
-    speed = _entry("scorecard_speeding_rate_target")
+    speed = _entry("metric_speeding_rate")
     assert "a DAY on which they delivered" in speed, (
         "a trip is a day, not a route -- two routes in one day count once"
     )
 
 
 def test_dsb_explains_that_dnr_sits_inside_it():
-    dsb = _entry("scorecard_dsb_dpmo_target")
+    dsb = _entry("metric_dsb_dpmo")
     assert "INSIDE" in dsb and "DNR" in dsb.upper()
 
 
 # ── D3: provisional entries stay honest and short ───────────────────────────
 
+def test_no_provisional_entries_survive_the_realignment():
+    """ADR-473 removed the five fields these warned about. If one comes back,
+    either the field returned or the entry was never cleaned up."""
+    assert PROVISIONAL == []
+
+
 def test_each_provisional_field_tells_the_owner_to_leave_it_blank():
-    """They do not match the metric they are named after, and nothing compares
-    against them yet, so blank is correct and costs nothing."""
+    """Retained for the case where a future ADR stages provisional entries
+    again: the shape they must take is a warning note and no example."""
     for key in PROVISIONAL:
         e = _entry(key)
         assert "Leave this blank" in e, f"{key} does not say to leave it blank"

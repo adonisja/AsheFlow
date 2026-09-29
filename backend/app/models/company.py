@@ -165,29 +165,23 @@ class CompanyConfig(Base):
     effort_time_factor     = Column(Float, nullable=True)   # default 0.5
     effort_physical_factor = Column(Float, nullable=True)   # default 0.5
 
-    # ── Amazon scorecard tier targets (ADR-262) ───────────────────────────────
-    # Per-DSP because Amazon sets several of these per station (DCR and DNR DPMO
-    # explicitly), and our researched values come from third-party/UK guides that
-    # are not authoritative for any given station. NULL means "no target
-    # configured" — the UI shows Amazon's reported value with no pass/fail
-    # judgement. Deliberately NOT in _REQUIRED_FIELDS: a DSP that has not yet read
-    # its first Amazon card cannot supply these, and gating setup on them would
-    # 503 the whole tenant. A missing threshold must never render as a failing one.
+    # ── Amazon scorecard targets: MOVED (ADR-473) ─────────────────────────────
+    # Ten `scorecard target` columns lived here. They asserted a comparison
+    # direction and a unit in COMMENTS -- and five asserted them wrong when
+    # checked against Amazon's own metric guides: two defect rates modelled as
+    # percentages where higher passes, a completion rate measuring something
+    # else, a metric Amazon does not score, and one folded inside another.
     #
-    # Comparison DIRECTION is not stored here — it is domain truth, not tenant
-    # configuration. See METRIC_DIRECTION in services/company_config.py.
-    scorecard_dcr_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 99.0)
-    scorecard_dnr_dpmo_target  = Column(Integer, nullable=True)  # DPMO, LOWER better (e.g. 950)
-    scorecard_pod_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 97.0)
-    scorecard_cc_target        = Column(Float,   nullable=True)  # %, higher better  (e.g. 98.0)
-    scorecard_cdf_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 84.9)
-    scorecard_dsb_dpmo_target  = Column(Integer, nullable=True)  # DPMO, LOWER better
-
-    # Safety & Compliance — driver-only metrics (no walker analogue).
-    scorecard_fico_target            = Column(Integer, nullable=True)  # 100–850, higher better (e.g. 800)
-    scorecard_speeding_rate_target   = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 10.0)
-    scorecard_signsignal_rate_target = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 15.0)
-    scorecard_dvic_target            = Column(Float,   nullable=True)  # %, higher better (e.g. 95.0)
+    # They are now rows in `company_metric_targets`, carrying their own
+    # direction and unit, mirroring `ScorecardMetric` -- the ingestion side that
+    # was already key/value and therefore absorbed Amazon's changes while these
+    # columns silently diverged.
+    #
+    # The ADR-262 reasoning that put them here still holds and moved with them:
+    # targets are per-DSP because Amazon sets several per station, NULL means
+    # "no target configured" rather than a failing one, and they are deliberately
+    # NOT in _REQUIRED_FIELDS -- a DSP that has not yet read its first Amazon
+    # card cannot supply them, and gating setup on them would 503 the tenant.
 
     # ── Route-sort tuning (ADR-273) ───────────────────────────────────────────
     # These were hardcoded module constants in route_sort.py. Telemetry

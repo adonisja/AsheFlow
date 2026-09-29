@@ -208,7 +208,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
       'Attendance is measured against max(shift start, when the AP was established). A station-caused late start (a late AP) therefore shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
     example: '"20" — arrivals up to 20 min past the reference are on-time; later is late.',
   },
-  // ── Amazon scorecard targets (ADR-472) ──────────────────────────────────
+  // ── Amazon scorecard metrics (ADR-472, re-keyed by ADR-473) ──────────────────────────────────
   //
   // Written against Amazon's own metric resource guides, not from research.
   // Definitions are in OUR words: the guides are Amazon Confidential and the
@@ -225,7 +225,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
   // explanation of a field that is about to change shape -- documenting a defect
   // authoritatively is worse than documenting nothing.
 
-  scorecard_pod_target: {
+  metric_pod: {
     title: 'POD Target',
     summary: 'Photo on Delivery acceptance rate: photos taken that Amazon accepts.',
     detail:
@@ -234,7 +234,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     note: 'Take the figure from your own weekly scorecard. It differs by programme, and Amazon revises it.',
   },
 
-  scorecard_dsb_dpmo_target: {
+  metric_dsb_dpmo: {
     title: 'DSB DPMO Ceiling',
     summary: 'Delivery Success Behaviors: customer concessions per million packages.',
     detail: (
@@ -261,7 +261,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     note: 'Take the figure from your own weekly scorecard; it differs by programme.',
   },
 
-  scorecard_fico_target: {
+  metric_fico: {
     title: 'FICO Target',
     summary: 'A driving score between 100 and 850. HIGHER is better.',
     detail:
@@ -270,7 +270,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     note: 'Take the figure from your own weekly scorecard. Walkers have no driving score and are not measured on it.',
   },
 
-  scorecard_speeding_rate_target: {
+  metric_speeding_rate: {
     title: 'Speeding Rate Ceiling',
     summary: 'Speeding events per 100 trips. LOWER is better.',
     detail:
@@ -279,7 +279,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     note: 'Take the figure from your own weekly scorecard. Amazon also needs a minimum number of trips in a week before this counts at all, so a light week may show events without a rate.',
   },
 
-  scorecard_signsignal_rate_target: {
+  metric_signsignal_rate: {
     title: 'Sign/Signal Rate Ceiling',
     summary: 'Stop-sign, red-light and illegal U-turn events per 100 trips. LOWER is better.',
     detail: (
@@ -304,54 +304,6 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     ),
     example: '"8.0" — no more than 8 sign or signal events per 100 trips.',
     note: 'Take the figure from your own weekly scorecard. Amazon’s own safety dashboard is the authority on which events counted â a camera vendor’s portal can show a different number.',
-  },
-
-  // ── Fields awaiting realignment (ADR-473) ───────────────────────────────
-  //
-  // Each of these five is stored and saveable, but does not currently match the
-  // shape of the Amazon metric it is named after: wrong direction, wrong unit,
-  // or no corresponding scorecard metric at all. Nothing compares them yet, so
-  // an out-of-shape value does no harm today.
-
-  scorecard_dcr_target: {
-    title: 'DCR Target',
-    summary: 'Delivery completion. This field is being realigned. See the note below.',
-    detail:
-      'Amazon measures delivery completion as a DEFECT RATE where lower is better, counting packages returned to station against packages dispatched, with a long list of exemptions (weather, business closed, customer unavailable, locker, damaged, reschedules). This field is currently shaped as a percentage where higher is better, which does not match.',
-    note: 'Leave this blank for now. Nothing in AsheFlow compares against it yet, and the field is being reshaped to match the real metric.',
-    noteTone: 'warning',
-  },
-  scorecard_cdf_target: {
-    title: 'CDF Target',
-    summary: 'Customer feedback. This field is being realigned. See the note below.',
-    detail:
-      'Amazon measures customer delivery feedback as negative feedback per million deliveries, where LOWER is better. This field is currently shaped as a percentage where higher is better, and caps at 100, so a real figure cannot be entered.',
-    note: 'Leave this blank for now. The field is being reshaped to match the real metric.',
-    noteTone: 'warning',
-  },
-  scorecard_cc_target: {
-    title: 'Contact Compliance Target',
-    summary: 'Customer contact. This field is being realigned. See the note below.',
-    detail:
-      'Contacting the customer matters, but Amazon treats it as a way to EXEMPT a returned package from counting against delivery completion rather than as a metric with its own target. A compliant attempt means calling and letting it ring, then following up by text if there is no answer; outside daytime hours it means contacting driver support instead. There is no separate percentage to hit.',
-    note: 'Leave this blank for now. There is no matching scorecard metric to compare it against.',
-    noteTone: 'warning',
-  },
-  scorecard_dnr_dpmo_target: {
-    title: 'DNR DPMO Ceiling',
-    summary: 'Delivered not received. Covered by DSB. See the note below.',
-    detail:
-      'A package reported as delivered but never received is counted INSIDE Delivery Success Behaviors rather than as its own scorecard line, so there is nothing separate for this target to be measured against.',
-    note: 'Leave this blank and set the DSB ceiling instead.',
-    noteTone: 'warning',
-  },
-  scorecard_dvic_target: {
-    title: 'DVIC Compliance Target',
-    summary: 'Vehicle inspections. This field is being realigned. See the note below.',
-    detail:
-      'Amazon does not score inspection COMPLETION. Completing the pre-trip is already required before the app will start a route. What is scored is inspection QUALITY â a driver reporting no defects when a later audit finds a serious one, confirmed by photo â and it forms part of a fleet composite alongside vehicle rotation and repair turnaround, as a defect rate where lower is better. A driver’s first instance is treated as a coaching opportunity and excluded.',
-    note: 'Leave this blank for now. The field is being reshaped to match the real metric. Worth knowing separately: an incomplete POST-trip inspection leaves safety events attributed to that driver even after they change vehicles.',
-    noteTone: 'warning',
   },
 
   ncns_cutoff_minutes: {
@@ -418,55 +370,6 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     detail:
       'Training phases are numbered starting at 1. This setting tells the system how many phases exist so it can correctly determine when a trainee has completed the full curriculum.',
     example: '"4" — training has 4 phases (1 through 4).',
-  },
-  dispatch_weight_driver: {
-    title: 'Driver Preference Weight',
-    summary: 'How strongly a driver\'s preference history influences their dispatch pairing.',
-    detail:
-      'The dispatch algorithm scores potential crew assignments based on mutual preference history. This weight controls how much a driver\'s historical preference (who they\'ve been paired with and liked) influences the final score for driver-role employees.',
-    example: '"0.70" — driver preferences account for up to 70% of the preference score component.',
-  },
-  dispatch_weight_trainer: {
-    title: 'Trainer Preference Weight',
-    summary: 'Same preference weight applied to trainer-role employees.',
-    detail:
-      'Trainers are often paired with trainees, so their preference history may matter differently from a driver\'s. Set lower if you want the algorithm to rotate trainers more freely.',
-    example: '"0.50"',
-  },
-  dispatch_weight_walker: {
-    title: 'Walker Preference Weight',
-    summary: 'Preference weight for walker-role employees.',
-    detail:
-      'Walkers typically rotate between trucks more frequently. A lower weight here reduces preference "stickiness" for walkers and keeps assignments more diverse.',
-    example: '"0.30"',
-  },
-  dispatch_mutual_bonus: {
-    title: 'Mutual Preference Bonus',
-    summary: 'Score bonus when two crew members have mutually listed each other.',
-    detail:
-      'If employee A has listed employee B as a preference AND employee B has listed employee A, the algorithm adds this bonus to their combined score. This rewards reciprocal pairings.',
-    example: '"0.10" — mutual pairs receive +0.10 added to their score.',
-  },
-  dispatch_tridirectional_bonus: {
-    title: 'Three-Way Preference Bonus',
-    summary: 'Score bonus when all three crew members mutually prefer each other.',
-    detail:
-      'An extension of the mutual bonus: if driver, walker, and trainer all have each other in their preference lists, this larger bonus is applied. Encourages stable, harmonious crews.',
-    example: '"0.20" — a fully mutual three-way crew gets +0.20.',
-  },
-  dispatch_consecutive_penalty: {
-    title: 'Consecutive Truck Penalty',
-    summary: 'Score deduction when an employee is assigned the same truck as the previous day.',
-    detail:
-      'Variety in truck assignment can improve employee experience and reduce territorial disputes. This penalty slightly discourages re-assigning the exact same people to the same truck on back-to-back days.',
-    example: '"0.05" — consecutive same-truck pairings receive −0.05.',
-  },
-  dispatch_weight_cap: {
-    title: 'Maximum Preference Score Cap',
-    summary: 'The ceiling on any individual preference score contribution.',
-    detail:
-      'Without a cap, extremely well-matched employees with long preference histories could dominate assignments. This cap ensures the algorithm still considers new pairings fairly.',
-    example: '"0.85" — no preference component can exceed 0.85.',
   },
   driver_checkin_count: {
     title: 'Driver Mid-Shift Check-ins',
