@@ -896,8 +896,19 @@ _DISPATCH_TARGET_FIELDS = frozenset({
     "dispatch_target_tridirectional", "dispatch_target_trio_plus",
 })
 
+# ADR-477. `ingestion_mode` decides whether a tenant's manifests arrive by file
+# upload or by API integration. That is a PLATFORM provisioning decision -- it
+# depends on whether the integration has been built and credentialed for that
+# station -- and a company admin flipping it to "API Integration" does not make
+# an integration exist; it makes manifests stop arriving.
+#
+# It was reachable at PATCH /companies/my-config, which is gated to company
+# admin, AND rendered as a dropdown on the Owner's setup page. Hiding the
+# dropdown alone would have left the API writable, which is why this is a
+# backend fix with a UI consequence rather than the reverse.
 _SUPER_ADMIN_ONLY_FIELDS = (
-    frozenset({"invite_expiry_days"}) | _SORT_TUNING_FIELDS | _DISPATCH_TARGET_FIELDS
+    frozenset({"invite_expiry_days", "ingestion_mode"})
+    | _SORT_TUNING_FIELDS | _DISPATCH_TARGET_FIELDS
 )
 
 # ADR-289: fields that carry guards a generic field-setter cannot express — for
