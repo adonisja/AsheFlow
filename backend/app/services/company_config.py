@@ -98,47 +98,85 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
 # Keys are the metric keys used by ScorecardMetric.key (ADR-204).
 # ---------------------------------------------------------------------------
 
-METRIC_DIRECTION: dict[str, str] = {
-    # Quality — walker + driver
-    "dcr":              "higher",
-    "pod":              "higher",
-    "cc":               "higher",
-    "cdf":              "higher",
-    "dnr_dpmo":         "lower",
-    "dsb_dpmo":         "lower",
-    # Safety & Compliance — driver only
-    "fico":             "higher",
-    "speeding_rate":    "lower",
-    "signsignal_rate":  "lower",
-    "dvic":             "higher",
+# ---------------------------------------------------------------------------
+# Metric registry (ADR-473)
+# ---------------------------------------------------------------------------
+#
+# REPLACES METRIC_DIRECTION + METRIC_TARGET_FIELD, two hand-maintained dicts
+# that had to agree with each other AND with ten column definitions. Five of the
+# ten disagreed with Amazon's own metric guides -- two defect rates modelled as
+# percentages where higher passes, a completion rate measuring something else, a
+# metric that is not scored at all, and one folded inside another.
+#
+# Direction and unit now travel with the metric instead of being asserted in a
+# column comment. A stored target (CompanyMetricTarget) carries its own copy, so
+# this registry is the DEFAULT shape for a known key, not the authority at
+# comparison time -- `meets_target` reads the row.
+#
+# NO THRESHOLD VALUES LIVE HERE (ADR-473 D5). Amazon revises them, they are
+# commercially sensitive, and the DSP Program Agreement obliges the tenant to
+# protect them. Shapes are ours; numbers are the tenant's.
+
+METRIC_SHAPES: dict[str, dict[str, str]] = {
+    # Quality
+    "pod":              {"direction": "higher", "unit": "percent"},
+    "dsb_dpmo":         {"direction": "lower",  "unit": "dpmo"},
+    "cdf_dpmo":         {"direction": "lower",  "unit": "dpmo"},
+    "dc_dpmo":          {"direction": "lower",  "unit": "dpmo"},
+    # Safety. The three added here are roughly half the safety score between
+    # them, and had no field at all -- a tenant tuning only speeding and
+    # sign/signal was tuning the minority of it.
+    "fico":             {"direction": "higher", "unit": "score"},
+    "speeding_rate":    {"direction": "lower",  "unit": "rate_per_100"},
+    "signsignal_rate":  {"direction": "lower",  "unit": "rate_per_100"},
+    "seatbelt_rate":    {"direction": "lower",  "unit": "rate_per_100"},
+    "distractions_rate": {"direction": "lower", "unit": "rate_per_100"},
+    "following_distance_rate": {"direction": "lower", "unit": "rate_per_100"},
+    # Service reliability
+    "fleet_execution":  {"direction": "lower",  "unit": "rate_per_100"},
 }
 
-# Maps a metric key to the CompanyConfig column holding its target.
-METRIC_TARGET_FIELD: dict[str, str] = {
-    "dcr":             "scorecard_dcr_target",
-    "pod":             "scorecard_pod_target",
-    "cc":              "scorecard_cc_target",
-    "cdf":             "scorecard_cdf_target",
-    "dnr_dpmo":        "scorecard_dnr_dpmo_target",
-    "dsb_dpmo":        "scorecard_dsb_dpmo_target",
-    "fico":            "scorecard_fico_target",
-    "speeding_rate":   "scorecard_speeding_rate_target",
-    "signsignal_rate": "scorecard_signsignal_rate_target",
-    "dvic":            "scorecard_dvic_target",
+# Retired by ADR-473, kept so a stale caller fails LOUDLY with a reason rather
+# than a bare KeyError that reads like a typo.
+RETIRED_METRICS: dict[str, str] = {
+    "dcr": "replaced by 'dc_dpmo' — Amazon scores delivery completion as a "
+           "defect rate where lower is better, not a percentage",
+    "cdf": "replaced by 'cdf_dpmo' — customer feedback is a DPMO where lower "
+           "is better, not a percentage",
+    "dvic": "replaced by 'fleet_execution' — inspection QUALITY is a defect "
+            "signal inside a fleet composite, not a completion percentage",
+    "cc": "removed — contact compliance is an exemption mechanism inside "
+          "delivery completion, not a scored metric with its own target",
+    "dnr_dpmo": "removed — delivered-not-received is counted inside 'dsb_dpmo'",
 }
 
 
-def meets_target(key: str, value: float, target: float) -> bool:
+def meets_target(key: str, value: float, target: float,
+                 direction: str | None = None) -> bool:
     """True if `value` meets `target` for metric `key`.
 
-    Takes the metric KEY rather than a direction argument on purpose: a caller
-    that can pass the direction is a caller that can pass the wrong one.
+    `direction` comes from the stored CompanyMetricTarget row. It is optional
+    only so a caller holding just a key can still compare against the registry
+    default; when a row exists, PASS ITS DIRECTION -- that is the row's purpose,
+    and a company that has overridden the shape must not be judged by the
+    default.
 
     Raises:
-        KeyError — unknown metric key. Deliberate: a new metric cannot be
-        compared until someone states which direction is good.
+        ValueError — a retired metric key, naming what replaced it.
+        KeyError — an unknown key. Deliberate: a new metric cannot be compared
+        until someone states which direction is good.
     """
-    if METRIC_DIRECTION[key] == "lower":
+    if direction is None:
+        if key in RETIRED_METRICS:
+            raise ValueError(f"metric '{key}' is retired: {RETIRED_METRICS[key]}")
+        direction = METRIC_SHAPES[key]["direction"]
+
+    if direction not in ("higher", "lower"):
+        # Never guess. A target whose direction is unreadable is exactly the
+        # backwards comparison this ADR exists to stop.
+        raise ValueError(f"metric '{key}' has an invalid direction {direction!r}")
+
+    if direction == "lower":
         return value <= target
     return value >= target
 
@@ -203,16 +241,6 @@ class ResolvedConfig:
     # Scorecard tier targets (ADR-262) — all optional. None means the DSP has not
     # configured a target for that metric; callers must render the reported value
     # with no pass/fail judgement rather than treating None as a failure.
-    scorecard_dcr_target:             float | None = None
-    scorecard_dnr_dpmo_target:        int   | None = None
-    scorecard_pod_target:             float | None = None
-    scorecard_cc_target:              float | None = None
-    scorecard_cdf_target:             float | None = None
-    scorecard_dsb_dpmo_target:        int   | None = None
-    scorecard_fico_target:            int   | None = None
-    scorecard_speeding_rate_target:   float | None = None
-    scorecard_signsignal_rate_target: float | None = None
-    scorecard_dvic_target:            float | None = None
 
     def target_for(self, key: str) -> float | None:
         """Configured target for a metric key, or None if unset."""
@@ -348,16 +376,6 @@ def get_company_config(db: Session, company_id: UUID) -> ResolvedConfig:
         dispatch_weight_captain           = row.dispatch_weight_captain or PLATFORM_DEFAULTS["dispatch_weight_captain"],
         captain_truck_rotation_days       = row.captain_truck_rotation_days or PLATFORM_DEFAULTS["captain_truck_rotation_days"],
         early_confirmation_deadline       = row.early_confirmation_deadline,
-        scorecard_dcr_target              = row.scorecard_dcr_target,
-        scorecard_dnr_dpmo_target         = row.scorecard_dnr_dpmo_target,
-        scorecard_pod_target              = row.scorecard_pod_target,
-        scorecard_cc_target               = row.scorecard_cc_target,
-        scorecard_cdf_target              = row.scorecard_cdf_target,
-        scorecard_dsb_dpmo_target         = row.scorecard_dsb_dpmo_target,
-        scorecard_fico_target             = row.scorecard_fico_target,
-        scorecard_speeding_rate_target    = row.scorecard_speeding_rate_target,
-        scorecard_signsignal_rate_target  = row.scorecard_signsignal_rate_target,
-        scorecard_dvic_target             = row.scorecard_dvic_target,
     )
 
 # ── Operating mode helpers (ADR-289) ─────────────────────────────────────────

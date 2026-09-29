@@ -208,6 +208,104 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
       'Attendance is measured against max(shift start, when the AP was established). A station-caused late start (a late AP) therefore shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
     example: '"20" — arrivals up to 20 min past the reference are on-time; later is late.',
   },
+  // ── Amazon scorecard metrics (ADR-472, re-keyed by ADR-473) ──────────────────────────────────
+  //
+  // Written against Amazon's own metric resource guides, not from research.
+  // Definitions are in OUR words: the guides are Amazon Confidential and the
+  // DSP Program Agreement §7(a) obliges the tenant to protect them, so nothing
+  // here reproduces their text.
+  //
+  // THRESHOLDS ARE DELIBERATELY NOT STATED. Amazon revises them, and a number
+  // frozen into a help drawer would be read as authoritative while quietly
+  // going stale. Every entry points at the tenant's own weekly scorecard, which
+  // is also where Amazon says the truth lives.
+  //
+  // Five of the ten target columns do NOT match a real Amazon metric (ADR-473
+  // realigns them). Those carry a short entry saying so rather than a confident
+  // explanation of a field that is about to change shape -- documenting a defect
+  // authoritatively is worse than documenting nothing.
+
+  metric_pod: {
+    title: 'POD Target',
+    summary: 'Photo on Delivery acceptance rate: photos taken that Amazon accepts.',
+    detail:
+      'Measured as accepted photos divided by photos taken. A photo is rejected when the package cannot be made out -- too dark, blurred, too close, a person or pet in frame, a generic scene with no package. HIGHER is better. Two things worth telling a driver: RETAKING a photo never counts against you, so a second attempt is always better than a bad first one; but SKIPPING the photo is recorded as a defect. An attended handoff with no package visible still passes if the location is recognisable.',
+    example: '"98.0" — at least 98% of photos taken were accepted.',
+    note: 'Take the figure from your own weekly scorecard. It differs by programme, and Amazon revises it.',
+  },
+
+  metric_dsb_dpmo: {
+    title: 'DSB DPMO Ceiling',
+    summary: 'Delivery Success Behaviors: customer concessions per million packages.',
+    detail: (
+      <>
+        <p>
+          Counts concessions Amazon attributes to the driver, per million packages
+          delivered: a package reported as never received, or recorded as lost.
+        </p>
+        <p className="font-semibold text-foreground">LOWER is better</p>
+        <p>
+          A CEILING, not a target: a person passes at or BELOW your figure. The
+          behaviours behind it are coachable and specific: simultaneous
+          deliveries, finishing a stop far from the map pin, using the wrong scan
+          for attended or unattended, no photo, and scanning a package as
+          delivered that was neither delivered nor returned.
+        </p>
+        <p>
+          Delivered-not-received sits INSIDE this metric rather than beside it,
+          which is why a separate DNR target has nothing to compare against.
+        </p>
+      </>
+    ),
+    example: '"233" — no more than 233 concessions per million packages.',
+    note: 'Take the figure from your own weekly scorecard; it differs by programme.',
+  },
+
+  metric_fico: {
+    title: 'FICO Target',
+    summary: 'A driving score between 100 and 850. HIGHER is better.',
+    detail:
+      'One input to Amazon’s safety score, and the SMALLEST one â the event rates below carry far more weight between them. It also does not cover every vehicle: it applies to rented branded vans rather than the whole fleet, so a tenant may see it for some drivers and not others. Useful as a trend; not the number to coach against when a specific behaviour is the problem.',
+    example: '"800" — drivers pass at 800 or above.',
+    note: 'Take the figure from your own weekly scorecard. Walkers have no driving score and are not measured on it.',
+  },
+
+  metric_speeding_rate: {
+    title: 'Speeding Rate Ceiling',
+    summary: 'Speeding events per 100 trips. LOWER is better.',
+    detail:
+      'A CEILING: a person passes at or below your figure. It is a RATE, not a count, so a driver who works more days is not penalised for it. A "trip" is a DAY on which they delivered, so two routes or two vehicles in one day still count once. One of the heaviest inputs to the safety score. Worth reading alongside route pressure: a driver chasing a late dispatch speeds on roads they drove fine last week.',
+    example: '"8.0" — no more than 8 speeding events per 100 trips.',
+    note: 'Take the figure from your own weekly scorecard. Amazon also needs a minimum number of trips in a week before this counts at all, so a light week may show events without a rate.',
+  },
+
+  metric_signsignal_rate: {
+    title: 'Sign/Signal Rate Ceiling',
+    summary: 'Stop-sign, red-light and illegal U-turn events per 100 trips. LOWER is better.',
+    detail: (
+      <>
+        <p>
+          A CEILING: pass at or below your figure. Covers three things, not two:
+          rolling or missed stop signs, running a red light, and illegal U-turns.
+        </p>
+        <p className="font-semibold text-foreground">Not all events weigh the same</p>
+        <p>
+          Entering on a light that was ALREADY red counts many times over;
+          entering on yellow and still being in the junction when it turns does
+          not count at all. A full failure to stop counts several times a rolling
+          one. So a single serious event can move this rate more than a week of
+          minor ones. Check what the events were before treating a spike as a
+          pattern.
+        </p>
+        <p>
+          Adverse weather is not accepted as a reason for missing a stop sign.
+        </p>
+      </>
+    ),
+    example: '"8.0" — no more than 8 sign or signal events per 100 trips.',
+    note: 'Take the figure from your own weekly scorecard. Amazon’s own safety dashboard is the authority on which events counted â a camera vendor’s portal can show a different number.',
+  },
+
   ncns_cutoff_minutes: {
     title: 'NCNS Cutoff',
     summary: 'Minutes past shift start before an unaccounted crew member is a no-call-no-show.',
@@ -272,55 +370,6 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     detail:
       'Training phases are numbered starting at 1. This setting tells the system how many phases exist so it can correctly determine when a trainee has completed the full curriculum.',
     example: '"4" — training has 4 phases (1 through 4).',
-  },
-  dispatch_weight_driver: {
-    title: 'Driver Preference Weight',
-    summary: 'How strongly a driver\'s preference history influences their dispatch pairing.',
-    detail:
-      'The dispatch algorithm scores potential crew assignments based on mutual preference history. This weight controls how much a driver\'s historical preference (who they\'ve been paired with and liked) influences the final score for driver-role employees.',
-    example: '"0.70" — driver preferences account for up to 70% of the preference score component.',
-  },
-  dispatch_weight_trainer: {
-    title: 'Trainer Preference Weight',
-    summary: 'Same preference weight applied to trainer-role employees.',
-    detail:
-      'Trainers are often paired with trainees, so their preference history may matter differently from a driver\'s. Set lower if you want the algorithm to rotate trainers more freely.',
-    example: '"0.50"',
-  },
-  dispatch_weight_walker: {
-    title: 'Walker Preference Weight',
-    summary: 'Preference weight for walker-role employees.',
-    detail:
-      'Walkers typically rotate between trucks more frequently. A lower weight here reduces preference "stickiness" for walkers and keeps assignments more diverse.',
-    example: '"0.30"',
-  },
-  dispatch_mutual_bonus: {
-    title: 'Mutual Preference Bonus',
-    summary: 'Score bonus when two crew members have mutually listed each other.',
-    detail:
-      'If employee A has listed employee B as a preference AND employee B has listed employee A, the algorithm adds this bonus to their combined score. This rewards reciprocal pairings.',
-    example: '"0.10" — mutual pairs receive +0.10 added to their score.',
-  },
-  dispatch_tridirectional_bonus: {
-    title: 'Three-Way Preference Bonus',
-    summary: 'Score bonus when all three crew members mutually prefer each other.',
-    detail:
-      'An extension of the mutual bonus: if driver, walker, and trainer all have each other in their preference lists, this larger bonus is applied. Encourages stable, harmonious crews.',
-    example: '"0.20" — a fully mutual three-way crew gets +0.20.',
-  },
-  dispatch_consecutive_penalty: {
-    title: 'Consecutive Truck Penalty',
-    summary: 'Score deduction when an employee is assigned the same truck as the previous day.',
-    detail:
-      'Variety in truck assignment can improve employee experience and reduce territorial disputes. This penalty slightly discourages re-assigning the exact same people to the same truck on back-to-back days.',
-    example: '"0.05" — consecutive same-truck pairings receive −0.05.',
-  },
-  dispatch_weight_cap: {
-    title: 'Maximum Preference Score Cap',
-    summary: 'The ceiling on any individual preference score contribution.',
-    detail:
-      'Without a cap, extremely well-matched employees with long preference histories could dominate assignments. This cap ensures the algorithm still considers new pairings fairly.',
-    example: '"0.85" — no preference component can exceed 0.85.',
   },
   driver_checkin_count: {
     title: 'Driver Mid-Shift Check-ins',

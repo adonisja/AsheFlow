@@ -1,17 +1,25 @@
-"""ADR-262 — scorecard target direction.
+"""Scorecard target direction (ADR-262, re-pointed by ADR-473).
 
 The bug this file exists to prevent: a generic `value >= target` helper silently
-inverts every DPMO metric. It does not raise and does not fail typing — it just
-reports an excellent DNR DPMO of 400 as failing a <=950 target.
+inverts every DPMO metric. It does not raise and does not fail typing -- it just
+reports an excellent DPMO of 400 as failing a 950 ceiling.
 
 A test that only exercises higher-is-better metrics passes identically against
 the broken version, so every case below asserts BOTH sides of the comparison.
+
+ADR-473 REWROTE WHAT THIS POINTS AT, not what it is for. The old shape was two
+hand-maintained maps (METRIC_DIRECTION, METRIC_TARGET_FIELD) that had to agree
+with each other and with ten columns. Five of those columns had the wrong
+direction or unit against Amazon's own guides, so the maps were mutually
+consistent AND wrong -- which is precisely what "map integrity" tests cannot
+catch. Direction now travels with the stored target.
 """
 import pytest
 
+from app.models.metric_target import VALID_DIRECTIONS, VALID_UNITS
 from app.services.company_config import (
-    METRIC_DIRECTION,
-    METRIC_TARGET_FIELD,
+    METRIC_SHAPES,
+    RETIRED_METRICS,
     meets_target,
 )
 
@@ -20,7 +28,7 @@ from app.services.company_config import (
 # Higher-is-better: value must be AT OR ABOVE target
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("key", ["dcr", "pod", "cc", "cdf", "fico", "dvic"])
+@pytest.mark.parametrize("key", ["pod", "fico"])
 def test_higher_is_better_passes_above_and_fails_below(key):
     assert meets_target(key, 100.0, 99.0) is True   # above target passes
     assert meets_target(key, 99.0, 99.0) is True    # exactly at target passes
@@ -32,28 +40,32 @@ def test_higher_is_better_passes_above_and_fails_below(key):
 # These are the cases a generic `>=` gets backwards.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "key", ["dnr_dpmo", "dsb_dpmo", "speeding_rate", "signsignal_rate"]
-)
+@pytest.mark.parametrize("key", [
+    "dsb_dpmo", "cdf_dpmo", "dc_dpmo",
+    "speeding_rate", "signsignal_rate",
+    "seatbelt_rate", "distractions_rate", "following_distance_rate",
+    "fleet_execution",
+])
 def test_lower_is_better_passes_below_and_fails_above(key):
     assert meets_target(key, 400.0, 950.0) is True    # well under target passes
     assert meets_target(key, 950.0, 950.0) is True    # exactly at target passes
     assert meets_target(key, 9000.0, 950.0) is False  # over target fails
 
 
-def test_dnr_dpmo_is_not_evaluated_as_higher_is_better():
-    """The specific inversion, stated as its own case.
+def test_cdf_is_not_evaluated_as_higher_is_better():
+    """The specific inversion ADR-473 found, stated as its own case.
 
-    An excellent DNR DPMO (400 against a 950 ceiling) must PASS, and a
-    catastrophic one (9000) must FAIL. A `value >= target` implementation
-    produces exactly the opposite and looks plausible doing it.
+    CDF was modelled as a percentage where higher passes. It is a DPMO where
+    LOWER passes, and the request schema capped it at 100 -- so a real target
+    could not even be stored. Both halves are asserted here because the cap made
+    the inversion invisible: nobody could enter a value large enough to notice.
     """
-    assert meets_target("dnr_dpmo", 400.0, 950.0) is True
-    assert meets_target("dnr_dpmo", 9000.0, 950.0) is False
+    assert meets_target("cdf_dpmo", 900.0, 980.0) is True
+    assert meets_target("cdf_dpmo", 1100.0, 980.0) is False
 
 
 # ---------------------------------------------------------------------------
-# Map integrity
+# Registry integrity
 # ---------------------------------------------------------------------------
 
 def test_unknown_metric_key_raises():
@@ -62,34 +74,29 @@ def test_unknown_metric_key_raises():
         meets_target("brand_new_metric", 1.0, 1.0)
 
 
-def test_every_metric_has_a_target_field_and_vice_versa():
-    """The two maps must not drift — a metric with a direction but no target
-    column is uncomparable, and a target column with no direction is unusable."""
-    assert set(METRIC_DIRECTION) == set(METRIC_TARGET_FIELD)
+def test_a_retired_key_raises_with_a_reason():
+    """Distinct from the unknown case on purpose. A bare KeyError on a key that
+    used to work reads as a typo, and the next person re-adds the column."""
+    for key in RETIRED_METRICS:
+        with pytest.raises(ValueError) as exc:
+            meets_target(key, 1.0, 1.0)
+        assert key in str(exc.value)
 
 
-def test_every_direction_is_a_known_value():
-    assert set(METRIC_DIRECTION.values()) <= {"higher", "lower"}
+def test_every_shape_is_valid():
+    for key, shape in METRIC_SHAPES.items():
+        assert shape["direction"] in VALID_DIRECTIONS, key
+        assert shape["unit"] in VALID_UNITS, key
 
 
-def test_target_fields_exist_on_the_model():
-    """Guards against a typo in METRIC_TARGET_FIELD that would make target_for()
-    silently return None — which callers read as 'no target configured' rather
-    than as a bug."""
-    from app.models.company import CompanyConfig
+def test_a_stored_direction_overrides_the_registry():
+    """The point of storing it. A company whose metric has a different shape
+    must be judged by its own row, not by our default -- and this is the test
+    that would have caught the original defect, because it does not assume the
+    registry is right."""
+    assert meets_target("pod", 5.0, 10.0, direction="lower") is True
+    assert meets_target("dsb_dpmo", 15.0, 10.0, direction="higher") is True
 
-    for key, field in METRIC_TARGET_FIELD.items():
-        assert hasattr(CompanyConfig, field), f"{key} -> missing column {field}"
 
-
-def test_resolved_config_target_for_returns_none_when_unset():
-    """NULL means 'no target configured'. It must never render as a failure —
-    callers show the reported value with no pass/fail judgement."""
-    from app.services.company_config import ResolvedConfig
-    import dataclasses
-
-    fields = {f.name: None for f in dataclasses.fields(ResolvedConfig)}
-    cfg = ResolvedConfig(**fields)
-
-    for key in METRIC_TARGET_FIELD:
-        assert cfg.target_for(key) is None
+def test_no_retired_key_is_still_live():
+    assert not (set(RETIRED_METRICS) & set(METRIC_SHAPES))
