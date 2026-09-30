@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import { useEffect, useState, useCallback, useRef } from 'react';
+import SelectMenu from '../components/ui/SelectMenu';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -580,16 +581,20 @@ function ManifestUploadPanel({
                     <label className="block text-xs text-muted-foreground mb-1">
                       Manifest for
                     </label>
-                    <select
-                      value={hubTruckId}
-                      onChange={e => setHubTruckId(e.target.value)}
-                      className="input-field text-sm h-9 w-48"
-                    >
-                      <option value="">Company manifest (sorted)</option>
-                      {hubTrucks.map(t => (
-                        <option key={t.id} value={t.id}>{t.name} (hub only)</option>
-                      ))}
-                    </select>
+                    <div className="w-48">
+                      <SelectMenu
+                        value={hubTruckId}
+                        options={[
+                          { value: '', label: 'Company manifest (sorted)' },
+                          ...hubTrucks.map(t => ({
+                            value: t.id, label: t.name, hint: 'hub only',
+                          })),
+                        ]}
+                        placeholder="Company manifest (sorted)"
+                        ariaLabel="Manifest source"
+                        onChange={setHubTruckId}
+                      />
+                    </div>
                   </div>
                 )}
                 <div>

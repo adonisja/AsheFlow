@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import SelectMenu from '../components/ui/SelectMenu';
 import { createPortal } from 'react-dom';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -153,16 +154,19 @@ function ReassignModal({ route, walkers, onClose, onReassigned }: ReassignModalP
             </p>
           )}
         </div>
-        <select
-          className="input w-full"
+        <SelectMenu
           value={selectedId}
-          onChange={e => setSelectedId(e.target.value)}
-        >
-          <option value="">Select walker…</option>
-          {eligible.map(w => (
-            <option key={w.id} value={w.id}>{w.name}{w.injury_status ? ` (${w.injury_status})` : ''}</option>
-          ))}
-        </select>
+          /* injury_status is a `hint`, not a parenthetical baked into the
+             name -- a native option could only ever hold one string. */
+          options={eligible.map(w => ({
+            value: w.id,
+            label: w.name,
+            hint: w.injury_status || undefined,
+          }))}
+          placeholder="Select walker…"
+          ariaLabel="Walker"
+          onChange={setSelectedId}
+        />
         {error && <p className="text-xs text-destructive">{error}</p>}
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
@@ -250,22 +254,23 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
           <label className="text-xs text-muted-foreground">
             {suggested ? 'Or pick a different route' : 'Package moved to route'}
           </label>
-          <select
-            className="input w-full"
+          <SelectMenu
             value={destRouteId}
-            onChange={e => setDestRouteId(e.target.value)}
-          >
-            <option value="">Select destination route…</option>
-            {/* Suggested route floats to the top */}
-            {[...routes].sort((a, b) =>
+            /* Suggested route still floats to the top; the marker moves from a
+               '★ ' prefix and a ' — suggested' suffix on one string into the
+               option's own hint. */
+            options={[...routes].sort((a, b) =>
               (a.route_number === suggestedRouteNumber ? -1 : 0) - (b.route_number === suggestedRouteNumber ? -1 : 0)
               || a.route_number - b.route_number,
-            ).map(r => (
-              <option key={r.id} value={r.id}>
-                {r.route_number === suggestedRouteNumber ? '★ ' : ''}#{r.route_number} — {r.executor?.name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested' : ''}
-              </option>
-            ))}
-          </select>
+            ).map(r => ({
+              value: r.id,
+              label: `#${r.route_number} — ${r.executor?.name ?? 'unassigned'} (${r.effort_class})`,
+              hint: r.route_number === suggestedRouteNumber ? '★ suggested' : undefined,
+            }))}
+            placeholder="Select destination route…"
+            ariaLabel="Destination route"
+            onChange={setDestRouteId}
+          />
         </div>
         {error && <p className="text-xs text-destructive">{error}</p>}
         <div className="flex gap-2 justify-end">
@@ -879,14 +884,18 @@ function ProposalReviewPanel({
           <div key={p.route_number} className={`flex items-center gap-2 p-2 rounded-lg border ${p.auto_proposed ? 'bg-info/5 border-info/20' : 'bg-background border-border'}`}>
             <span className="text-xs font-semibold text-foreground w-8 shrink-0">#{p.route_number}</span>
             <EffortBadge effort={p.effort_class} />
-            <select
-              value={overrides[p.route_number] ?? ''}
-              onChange={e => setOverrides(prev => ({ ...prev, [p.route_number]: e.target.value }))}
-              className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-            >
-              <option value="">Unassign…</option>
-              {walkers.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
+            <div className="flex-1">
+              <SelectMenu
+                value={overrides[p.route_number] ?? ''}
+                options={[
+                  { value: '', label: 'Unassign…' },
+                  ...walkers.map(w => ({ value: w.id, label: w.name })),
+                ]}
+                placeholder="Unassign…"
+                ariaLabel={`Walker for route ${p.route_number}`}
+                onChange={v => setOverrides(prev => ({ ...prev, [p.route_number]: v }))}
+              />
+            </div>
             {p.auto_proposed && <span className="text-[10px] text-info shrink-0">auto</span>}
           </div>
         ))}
@@ -1268,36 +1277,38 @@ function TruckSortPanel({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-muted-foreground mb-1">Trainer</label>
-                      <select
+                      <SelectMenu
                         value={selectedTrainerId}
-                        onChange={e => setSelectedTrainerId(e.target.value)}
-                        className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                      >
-                        <option value="">Select trainer…</option>
-                        {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
+                        options={trainers.map(t => ({ value: t.id, label: t.name }))}
+                        placeholder="Select trainer…"
+                        ariaLabel="Trainer"
+                        onChange={setSelectedTrainerId}
+                      />
                     </div>
                     <div>
                       <label className="block text-xs text-muted-foreground mb-1">Trainee (optional)</label>
-                      <select
+                      <SelectMenu
                         value={selectedTraineeId}
-                        onChange={e => setSelectedTraineeId(e.target.value)}
-                        className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                      >
-                        <option value="">No trainee</option>
-                        {walkers.filter(w => w.role === 'trainee').map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
+                        options={[
+                          { value: '', label: 'No trainee' },
+                          ...walkers.filter(w => w.role === 'trainee')
+                            .map(t => ({ value: t.id, label: t.name })),
+                        ]}
+                        placeholder="No trainee"
+                        ariaLabel="Trainee"
+                        onChange={setSelectedTraineeId}
+                      />
                     </div>
                     {selectedTraineeId && (
                       <div>
                         <label className="block text-xs text-muted-foreground mb-1">Trainee phase</label>
-                        <select
-                          value={traineePhase}
-                          onChange={e => setTraineePhase(Number(e.target.value))}
-                          className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        >
-                          {[1, 2, 3, 4, 5].map(p => <option key={p} value={p}>Phase {p}</option>)}
-                        </select>
+                        <SelectMenu
+                          value={String(traineePhase)}
+                          options={[1, 2, 3, 4, 5].map(p => ({ value: String(p), label: `Phase ${p}` }))}
+                          placeholder="Phase"
+                          ariaLabel="Trainee phase"
+                          onChange={v => setTraineePhase(Number(v))}
+                        />
                       </div>
                     )}
                   </div>

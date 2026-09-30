@@ -1,5 +1,6 @@
 import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
+import SelectMenu from '../../components/ui/SelectMenu';
 import axiosClient from '../../api/axiosClient';
 import OreRecordRow from '../../components/training/OreRecordRow';
 import {
@@ -408,18 +409,20 @@ function HistoryView({
         </div>
 
         {/* Switch trainee without going back */}
-        <select
-          className="border border-input rounded-xl p-2 bg-background text-sm focus:ring-1 focus:ring-primary focus:border-primary"
-          value={traineeId}
-          onChange={e => {
-            const selected = allTrainees.find(t => t.id === e.target.value);
-            if (selected) onSelectTrainee(selected.id, selected.name ?? selected.first_name ?? '');
-          }}
-        >
-          {allTrainees.map(t => (
-            <option key={t.id} value={t.id}>{t.name ?? t.first_name}</option>
-          ))}
-        </select>
+        <div className="w-64">
+          <SelectMenu
+            value={traineeId}
+            options={allTrainees.map(t => ({
+              value: t.id, label: String(t.name ?? t.first_name ?? ''),
+            }))}
+            placeholder="Select a trainee"
+            ariaLabel="Trainee"
+            onChange={v => {
+              const selected = allTrainees.find(t => t.id === v);
+              if (selected) onSelectTrainee(selected.id, selected.name ?? selected.first_name ?? '');
+            }}
+          />
+        </div>
       </div>
 
       {loading ? (

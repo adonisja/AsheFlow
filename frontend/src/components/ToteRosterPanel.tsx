@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import SelectMenu from './ui/SelectMenu';
 import axiosClient from '../api/axiosClient';
 import type { RostersResponse, TruckRoster, RosterTote, ToteTransferOut, AddFreightResponse, LooseFreightIn } from '../api/types';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -74,16 +75,21 @@ function AddFreightForm({ date, busy, onDone }: {
             placeholder="Delivery address"
             className="flex-[2] min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
-          <select
-            value={r.size ?? ''} onChange={e => update(i, { size: e.target.value })}
-            className="px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="">OV size…</option>
-            <option value="OV_S">OV_S</option>
-            <option value="OV_M">OV_M</option>
-            <option value="OV_L">OV_L</option>
-            <option value="OV_XL">OV_XL</option>
-          </select>
+          <div className="w-28">
+            <SelectMenu
+              value={r.size ?? ''}
+              options={[
+                { value: '',      label: 'OV size…' },
+                { value: 'OV_S',  label: 'OV_S' },
+                { value: 'OV_M',  label: 'OV_M' },
+                { value: 'OV_L',  label: 'OV_L' },
+                { value: 'OV_XL', label: 'OV_XL' },
+              ]}
+              placeholder="OV size…"
+              ariaLabel="Oversize tote size"
+              onChange={v => update(i, { size: v })}
+            />
+          </div>
           {rows.length > 1 && (
             <button onClick={() => removeRow(i)} className="text-muted-foreground hover:text-danger text-xs px-1">✕</button>
           )}

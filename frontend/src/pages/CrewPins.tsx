@@ -874,20 +874,25 @@ function TruckPinCard({
                     leaving someone on two trucks in one week. */}
                 {moving ? (
                   <div className="flex items-center gap-2">
-                    <select
-                      autoFocus
-                      defaultValue={truckId}
-                      disabled={busy}
-                      aria-label={`Move ${g.name} to another truck`}
-                      onChange={e => void move(e.target.value)}
-                      className="border border-input rounded-lg px-2 py-1.5 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
-                    >
-                      {trucks.map(t => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}{t.is_hub ? ' (hub)' : ''}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="w-48">
+                      {/* Was uncontrolled (defaultValue) and disabled while the
+                          move was in flight. SelectMenu is controlled, so the
+                          current truck is the value; `busy` now disables every
+                          option rather than the control, which keeps the
+                          in-flight state visible instead of blanking it. */}
+                      <SelectMenu
+                        value={truckId}
+                        options={trucks.map(t => ({
+                          value: t.id,
+                          label: t.name,
+                          hint: t.is_hub ? 'hub' : undefined,
+                          disabled: busy,
+                        }))}
+                        placeholder="Select a truck"
+                        ariaLabel={`Move ${g.name} to another truck`}
+                        onChange={v => void move(v)}
+                      />
+                    </div>
                     <button
                       onClick={() => setMoving(false)}
                       className="text-sm text-muted-foreground hover:text-foreground px-2 py-1.5 rounded-lg hover:bg-accent transition-colors"
