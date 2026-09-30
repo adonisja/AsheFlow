@@ -3,6 +3,7 @@ import { errorText } from '../utils/errorText';
 // anything in the context of an assignment, and a separate page would hide the
 // one screen that explains why a crew keeps landing together.
 import CrewPins from './CrewPins';
+import SelectMenu from '../components/ui/SelectMenu';
 import { useErrorBanner } from '../hooks/useErrorBanner';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -2548,18 +2549,17 @@ function CurrentAssignments() {
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">Destination Truck</label>
-                <select
+                <SelectMenu
                   value={transferDestTruckId}
-                  onChange={e => setTransferDestTruckId(e.target.value)}
-                  className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
-                >
-                  <option value="">Select a truck…</option>
-                  {Object.entries(trucks)
+                  /* The filter drops the truck this person is already on, so a
+                     transfer cannot be a no-op. Unchanged in substance. */
+                  options={Object.entries(trucks)
                     .filter(([tid]) => tid !== Object.entries(dispatchData?.assigned_crews ?? {}).find(([, crew]) => crew.some((m: any) => m.employee_id === transferModal.employeeId))?.[0])
-                    .map(([tid, t]: [string, any]) => (
-                      <option key={tid} value={tid}>{t.name}</option>
-                    ))}
-                </select>
+                    .map(([tid, t]: [string, any]) => ({ value: tid, label: t.name }))}
+                  placeholder="Select a truck…"
+                  ariaLabel="Destination truck"
+                  onChange={setTransferDestTruckId}
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">Note (optional)</label>
