@@ -11,6 +11,7 @@
  * See docs/SCORECARD_ACCESS_MODEL.md — dispatch is excluded from this tier.
  */
 import React, { useCallback, useEffect, useState } from 'react';
+import SelectMenu from '../components/ui/SelectMenu';
 import {
   Users, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Minus, X,
 } from 'lucide-react';
@@ -87,16 +88,19 @@ export default function ScorecardRoster() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={weeks}
-            onChange={e => setWeeks(Number(e.target.value))}
-            className="px-3 py-2 rounded-lg border border-border bg-accent/20 text-sm"
-            aria-label="Weeks considered"
-          >
-            <option value={2}>2 weeks</option>
-            <option value={4}>4 weeks</option>
-            <option value={12}>12 weeks</option>
-          </select>
+          <div className="w-36">
+            <SelectMenu
+              value={String(weeks)}
+              options={[
+                { value: '2',  label: '2 weeks' },
+                { value: '4',  label: '4 weeks' },
+                { value: '12', label: '12 weeks' },
+              ]}
+              placeholder="Weeks considered"
+              ariaLabel="Weeks considered"
+              onChange={v => setWeeks(Number(v))}
+            />
+          </div>
           <button onClick={load} className="btn-ghost flex items-center gap-2 text-sm">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
           </button>

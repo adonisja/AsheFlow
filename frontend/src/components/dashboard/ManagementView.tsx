@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { formatDayHeader, formatZone } from '../../utils/date';
+import SelectMenu from '../ui/SelectMenu';
 import axiosClient from '../../api/axiosClient';
 import { getLocalYMD } from '../../utils/date';
 import { useAuth } from '../../contexts/AuthContext';
@@ -146,16 +147,19 @@ export default function ManagementView() {
         <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
           <BarChart2 className="w-5 h-5 text-info" />
           <h2 className="text-base font-semibold text-foreground">Operational Efficiency</h2>
-          <select
-            value={effPeriod}
-            onChange={(e) => setEffPeriod(e.target.value as 'today' | 'week' | 'month')}
-            className="ml-auto px-2 py-1 rounded-lg border border-border bg-accent/20 text-xs"
-            aria-label="Efficiency period"
-          >
-            <option value="today">Today</option>
-            <option value="week">This week</option>
-            <option value="month">This month</option>
-          </select>
+          <div className="ml-auto w-36">
+            <SelectMenu
+              value={effPeriod}
+              options={[
+                { value: 'today', label: 'Today' },
+                { value: 'week',  label: 'This week' },
+                { value: 'month', label: 'This month' },
+              ]}
+              placeholder="Efficiency period"
+              ariaLabel="Efficiency period"
+              onChange={v => setEffPeriod(v as 'today' | 'week' | 'month')}
+            />
+          </div>
         </div>
 
         {!efficiency ? (
