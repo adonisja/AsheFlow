@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef } from 'react';
+import SelectMenu from '../components/ui/SelectMenu';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -163,14 +164,13 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
       {/* Category */}
       <div>
         <label className="block text-xs font-semibold text-subtle uppercase tracking-wider mb-1">Category *</label>
-        <select
+        <SelectMenu
           value={category}
-          onChange={e => setCategory(e.target.value)}
-          className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-        >
-          <option value="">Select a category…</option>
-          {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-        </select>
+          options={CATEGORIES.map(c => ({ value: c.value, label: c.label }))}
+          placeholder="Select a category…"
+          ariaLabel="Category"
+          onChange={setCategory}
+        />
       </div>
 
       {/* Severity */}
@@ -417,24 +417,45 @@ function ManagementView() {
       {/* Filters */}
       <div className="card">
         <div className="flex flex-wrap gap-3">
-          <select value={filterSeverity} onChange={e => setFilterSeverity(e.target.value)}
-            className="p-2 rounded-xl border border-border bg-background text-sm focus:outline-none flex-1 min-w-[120px]">
-            <option value="">All severities</option>
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="critical">Critical</option>
-          </select>
-          <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
-            className="p-2 rounded-xl border border-border bg-background text-sm focus:outline-none flex-1 min-w-[160px]">
-            <option value="">All categories</option>
-            {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-          </select>
-          <select value={filterResolved} onChange={e => setFilterResolved(e.target.value)}
-            className="p-2 rounded-xl border border-border bg-background text-sm focus:outline-none flex-1 min-w-[120px]">
-            <option value="">All statuses</option>
-            <option value="false">Open</option>
-            <option value="true">Resolved</option>
-          </select>
+          <div className="flex-1 min-w-[120px]">
+            <SelectMenu
+              value={filterSeverity}
+              options={[
+                { value: '',         label: 'All severities' },
+                { value: 'info',     label: 'Info' },
+                { value: 'warning',  label: 'Warning' },
+                { value: 'critical', label: 'Critical' },
+              ]}
+              placeholder="All severities"
+              ariaLabel="Filter by severity"
+              onChange={setFilterSeverity}
+            />
+          </div>
+          <div className="flex-1 min-w-[160px]">
+            <SelectMenu
+              value={filterCategory}
+              options={[
+                { value: '', label: 'All categories' },
+                ...CATEGORIES.map(c => ({ value: c.value, label: c.label })),
+              ]}
+              placeholder="All categories"
+              ariaLabel="Filter by category"
+              onChange={setFilterCategory}
+            />
+          </div>
+          <div className="flex-1 min-w-[120px]">
+            <SelectMenu
+              value={filterResolved}
+              options={[
+                { value: '',      label: 'All statuses' },
+                { value: 'false', label: 'Open' },
+                { value: 'true',  label: 'Resolved' },
+              ]}
+              placeholder="All statuses"
+              ariaLabel="Filter by status"
+              onChange={setFilterResolved}
+            />
+          </div>
         </div>
       </div>
 

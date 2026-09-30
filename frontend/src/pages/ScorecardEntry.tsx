@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
+import SelectMenu from '../components/ui/SelectMenu';
 import ScorecardBulkImport from '../components/ScorecardBulkImport';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
@@ -349,20 +350,31 @@ export default function ScorecardEntry() {
           </label>
           <label className="text-sm flex flex-col gap-1">
             <span className="text-xs font-semibold text-muted-foreground uppercase">Scope</span>
-            <select value={scope} onChange={e => { setScope(e.target.value as any); setSaved(false); }}
-                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
-              <option value="individual">Individual (DA)</option>
-              <option value="company">Company (station)</option>
-            </select>
+            <div className="w-56">
+              <SelectMenu
+                value={scope}
+                options={[
+                  { value: 'individual', label: 'Individual (DA)' },
+                  { value: 'company',    label: 'Company (station)' },
+                ]}
+                placeholder="Select a scope"
+                ariaLabel="Scorecard scope"
+                onChange={v => { setScope(v as any); setSaved(false); }}
+              />
+            </div>
           </label>
           {scope === 'individual' && (
             <label className="text-sm flex flex-col gap-1 flex-1 min-w-[180px]">
               <span className="text-xs font-semibold text-muted-foreground uppercase">Employee</span>
-              <select value={employeeId} onChange={e => setEmployeeId(e.target.value)}
-                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                <option value="">Select…</option>
-                {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-              </select>
+              <div className="w-64">
+                <SelectMenu
+                  value={employeeId}
+                  options={employees.map(e => ({ value: e.id, label: e.name }))}
+                  placeholder="Select…"
+                  ariaLabel="Employee"
+                  onChange={setEmployeeId}
+                />
+              </div>
             </label>
           )}
           <label className="text-sm flex flex-col gap-1">
@@ -387,12 +399,19 @@ export default function ScorecardEntry() {
                      className="col-span-4 rounded border border-border bg-background px-2 py-1.5 text-sm" />
               <input value={m.value} onChange={e => setMetric(i, { value: e.target.value })} placeholder="Value"
                      className="col-span-3 rounded border border-border bg-background px-2 py-1.5 text-sm" />
-              <select value={m.flag ?? ''} onChange={e => setMetric(i, { flag: (e.target.value || null) as any })}
-                      className="col-span-4 rounded border border-border bg-background px-2 py-1.5 text-sm">
-                <option value="">No flag</option>
-                <option value="excellent">Excellent</option>
-                <option value="needs_focus">Needs Focus</option>
-              </select>
+              <div className="col-span-4">
+                <SelectMenu
+                  value={m.flag ?? ''}
+                  options={[
+                    { value: '',            label: 'No flag' },
+                    { value: 'excellent',   label: 'Excellent' },
+                    { value: 'needs_focus', label: 'Needs Focus' },
+                  ]}
+                  placeholder="No flag"
+                  ariaLabel="Metric flag"
+                  onChange={v => setMetric(i, { flag: (v || null) as any })}
+                />
+              </div>
               <button onClick={() => removeMetric(i)} className="col-span-1 text-muted-foreground hover:text-danger flex justify-center">
                 <Trash2 className="w-4 h-4" />
               </button>
