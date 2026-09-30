@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import { formatDate } from '../utils/date';
+import SelectMenu from '../components/ui/SelectMenu';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
@@ -327,16 +328,26 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                 Role <span className="text-danger">*</span>
               </label>
               <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
-                <select
-                  required
-                  value={form.role}
-                  onChange={e => set('role', e.target.value)}
-                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground appearance-none focus:outline-none pr-8"
-                >
-                  {allowedRoles.map(r => (
-                    <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
-                  ))}
-                </select>
+                <div className="flex-1">
+                  {/* Was `required`. SelectMenu does not participate in native
+                      form validation, but this list has no empty option -- the
+                      value is always one of allowedRoles -- so `required` was
+                      never able to fire. */}
+                  <SelectMenu
+                    value={form.role}
+                    options={allowedRoles.map(r => ({
+                      value: r, label: r.charAt(0).toUpperCase() + r.slice(1),
+                    }))}
+                    placeholder="Select a role"
+                    ariaLabel="Role"
+                    /* portal: the rounded field wrapper above is
+                       overflow-hidden, which clips an absolute panel --
+                       verified in the browser, the last option was
+                       unreachable without this (ADR-484 D3). */
+                    portal
+                    onChange={v => set('role', v)}
+                  />
+                </div>
                 <span className="flex items-center pr-3 text-muted-foreground pointer-events-none shrink-0">
                   <ChevronDown className="w-4 h-4" />
                 </span>
@@ -996,27 +1007,35 @@ function PeopleTab() {
           />
         </div>
         <div className="relative">
-          <select
-            value={filter}
-            onChange={e => { setFilter(e.target.value); setPage(0); }}
-            className="input pr-8 appearance-none capitalize"
-          >
-            <option value="all">All roles</option>
-            {ROLES.map(r => <option key={r} value={r} className="capitalize">{r}</option>)}
-          </select>
+          <div className="w-44">
+            <SelectMenu
+              value={filter}
+              options={[
+                { value: 'all', label: 'All roles' },
+                ...ROLES.map(r => ({ value: r, label: r.charAt(0).toUpperCase() + r.slice(1) })),
+              ]}
+              placeholder="All roles"
+              ariaLabel="Filter by role"
+              onChange={v => { setFilter(v); setPage(0); }}
+            />
+          </div>
           <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
         <div className="relative">
-          <select
-            value={statusFilter}
-            onChange={e => { setStatusFilter(e.target.value as typeof statusFilter); setPage(0); }}
-            className="input pr-8 appearance-none"
-          >
-            <option value="all">All Statuses</option>
-            <option value="pending">Pending</option>
-            <option value="active">Active</option>
-            <option value="deactivated">Deactivated</option>
-          </select>
+          <div className="w-44">
+            <SelectMenu
+              value={statusFilter}
+              options={[
+                { value: 'all',         label: 'All Statuses' },
+                { value: 'pending',     label: 'Pending' },
+                { value: 'active',      label: 'Active' },
+                { value: 'deactivated', label: 'Deactivated' },
+              ]}
+              placeholder="All Statuses"
+              ariaLabel="Filter by status"
+              onChange={v => { setStatusFilter(v as typeof statusFilter); setPage(0); }}
+            />
+          </div>
           <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
         <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
@@ -1794,9 +1813,13 @@ function TruckAnchorModal({
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
-            <select className="input w-full" value={borough} onChange={e => setBorough(e.target.value)}>
-              {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-            </select>
+            <SelectMenu
+              value={borough}
+              options={BOROUGH_OPTIONS.map(b => ({ value: b.value, label: b.label }))}
+              placeholder="Select a borough"
+              ariaLabel="Borough"
+              onChange={setBorough}
+            />
           </div>
         </div>
 
@@ -1939,9 +1962,13 @@ function TruckAnchor2Modal({
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
-            <select className="input w-full" value={borough} onChange={e => setBorough(e.target.value)}>
-              {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-            </select>
+            <SelectMenu
+              value={borough}
+              options={BOROUGH_OPTIONS.map(b => ({ value: b.value, label: b.label }))}
+              placeholder="Select a borough"
+              ariaLabel="Borough"
+              onChange={setBorough}
+            />
           </div>
         </div>
 
@@ -2211,15 +2238,19 @@ function FleetTab() {
           />
         </div>
         <div className="relative">
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
-            className="input pr-8 appearance-none"
-          >
-            <option value="all">All</option>
-            <option value="active">Active only</option>
-            <option value="inactive">Inactive only</option>
-          </select>
+          <div className="w-44">
+            <SelectMenu
+              value={statusFilter}
+              options={[
+                { value: 'all',      label: 'All' },
+                { value: 'active',   label: 'Active only' },
+                { value: 'inactive', label: 'Inactive only' },
+              ]}
+              placeholder="All"
+              ariaLabel="Filter by status"
+              onChange={v => setStatusFilter(v as typeof statusFilter)}
+            />
+          </div>
           <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
         <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
@@ -2570,9 +2601,13 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
-                <select className="input w-full text-sm" value={borough} onChange={e => setBorough(e.target.value)}>
-                  {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                </select>
+                <SelectMenu
+                  value={borough}
+                  options={BOROUGH_OPTIONS.map(b => ({ value: b.value, label: b.label }))}
+                  placeholder="Select a borough"
+                  ariaLabel="Borough"
+                  onChange={setBorough}
+                />
               </div>
 
               <div className="space-y-2">
