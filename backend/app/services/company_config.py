@@ -66,23 +66,126 @@ PLATFORM_DEFAULTS: dict = {
     "driver_checkin_count":             4,
 }
 
+# ── Proprietary platform fields (ADR-483 D2) ─────────────────────────────────
+# The algorithm's coefficients. NEVER on a tenant-facing response and never
+# writable by a company admin.
+#
+# GET /companies/my-config is gated to `allow_admin` -- any COMPANY admin -- and
+# returned all 21 of these WITH THEIR VALUES; PATCH accepted writes to 12. These
+# are ADR-273's seed-priority relationship, ADR-356's target probabilities, and
+# the sort weights whose ordering ADR-186 D3 depends on.
+#
+# `dispatch_weight_captain` was already absent from that response: the
+# distinction was recognised once and never made systematic, which is exactly
+# how the other 21 drifted in. Hence the exhaustive test rather than a list
+# someone remembers to update.
+#
+# NOT obfuscated, deliberately. Renaming these to opaque identifiers protects
+# nothing the partition does not already protect -- an attacker with a token
+# sees whatever the endpoint returns regardless of naming, and one without sees
+# nothing either way -- while making ADR-186's `w_time >= w_dense` invariant
+# unreviewable by eye. The VALUES are the IP; that a driver weight exists is
+# inferable from the product working at all.
+PLATFORM_ONLY_FIELDS: frozenset[str] = frozenset({
+    # Pairing weights (ADR-273)
+    "dispatch_weight_driver",
+    "dispatch_weight_trainer",
+    "dispatch_weight_walker",
+    "dispatch_weight_captain",
+    "dispatch_weight_cap",
+    "dispatch_mutual_bonus",
+    "dispatch_tridirectional_bonus",
+    "dispatch_consecutive_penalty",
+    # Target probabilities (ADR-356)
+    "dispatch_target_oneway_weak",
+    "dispatch_target_oneway_trainer",
+    "dispatch_target_oneway_captain",
+    "dispatch_target_oneway_driver",
+    "dispatch_target_mutual_weak",
+    "dispatch_target_mutual_lead_crew",
+    "dispatch_target_mutual_driver_trainer",
+    "dispatch_target_mutual_driver_captain",
+    "dispatch_target_tridirectional",
+    "dispatch_target_trio_plus",
+    # Sort seed weights (ADR-186 D3)
+    "sort_w_dense",
+    "sort_w_time",
+    "sort_w_diff",
+    "sort_w_doorman",
+})
+
+
+# ── Platform settings (ADR-482 D1) ───────────────────────────────────────────
+# Passed by the PLATFORM at company creation, not by the tenant. The dispatch
+# weights are a platform policy -- ADR-186 D3 orders them against each other
+# (W_TIME and W_DIFF above W_DENSE), which is a property of the algorithm, not
+# a tenant preference -- and invite_expiry_days is in _SUPER_ADMIN_ONLY_FIELDS,
+# so a company admin is forbidden from setting it.
+#
+# These values lived as COMMENTS on the columns ("# default 0.70") with no
+# `default=` and no `server_default`. So `CompanyConfig(company_id=...)` wrote
+# eight NULLs, every company was created with all 15 required fields NULL, and
+# the Owner could only ever fill the seven the setup form collects. The other
+# eight had no surface at all: the Dispatch Weights section rendered EMPTY --
+# because nothing seeded them -- and was removed for looking broken.
+#
+# Seeded at the creation site rather than as column defaults so a platform
+# policy lives somewhere a super admin can see and change, not scattered across
+# column declarations.
+PLATFORM_SEEDED_DEFAULTS: dict[str, float | int] = {
+    "invite_expiry_days":            7,
+    "dispatch_weight_driver":        0.70,
+    "dispatch_weight_trainer":       0.25,
+    "dispatch_weight_walker":        0.15,
+    "dispatch_mutual_bonus":         0.10,
+    "dispatch_tridirectional_bonus": 0.20,
+    "dispatch_consecutive_penalty":  0.05,
+    "dispatch_weight_cap":           0.85,
+}
+
+
+# ── The setup gate (ADR-482 D2) ──────────────────────────────────────────────
+# ONLY what the company controls -- exactly the fields the setup form collects.
+#
+# It previously held all 15, including the eight above. A gate that includes
+# fields the gated party cannot set is not a gate, it is a deadlock: the live
+# prod tenant sat at is_configured=False with a 200 OK on every save, no error
+# and no redirect, because eight fields it had no way to fill were never set.
+#
+# Whether a platform setting arrived is checked SEPARATELY and loudly
+# (platform_settings_missing, below). Removing a field from this tuple removes
+# the only thing that was, accidentally, checking it.
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "rating_window_hours",
-    "invite_expiry_days",
     "graduation_assignments",
     "debt_escalation_threshold",
     "phase4_pass_score",
     "underperforming_trainer_threshold",
     "max_training_phase",
-    "dispatch_weight_driver",
-    "dispatch_weight_trainer",
-    "dispatch_weight_walker",
-    "dispatch_mutual_bonus",
-    "dispatch_tridirectional_bonus",
-    "dispatch_consecutive_penalty",
-    "dispatch_weight_cap",
     "flag_threshold",
 )
+
+
+def platform_settings_missing(config) -> list[str]:
+    """Platform settings that never arrived on this config (ADR-482 D3).
+
+    Empty list means healthy. A non-empty list is a PLATFORM fault, not a tenant
+    one: the company cannot fix it and must not be blocked by it.
+
+    Exists because D2 took these out of the setup gate, and that gate -- badly,
+    by deadlocking the tenant -- was the only thing checking them at all. Read by
+    GET /companies/my-config so a missing weight is visible to the platform
+    rather than surfacing weeks later as a dispatch that scores oddly."""
+    return [f for f in PLATFORM_SEEDED_DEFAULTS if getattr(config, f, None) is None]
+
+
+def platform_settings_ok(config) -> bool:
+    """The TENANT's view of the same question (ADR-483 D4).
+
+    A boolean, not the list: naming the absent fields would leak the very
+    parameter names this ADR removes from the tenant response. The named list
+    goes to PlatformConfigResponse, where the person who can fix it sees it."""
+    return not platform_settings_missing(config)
 
 
 # ---------------------------------------------------------------------------
