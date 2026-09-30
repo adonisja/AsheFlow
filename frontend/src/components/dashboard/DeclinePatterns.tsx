@@ -21,6 +21,7 @@
  * them on screen by default invites reading them as one.
  */
 import React, { useCallback, useEffect, useState } from 'react';
+import SelectMenu from '../ui/SelectMenu';
 import { CalendarX2, ChevronDown, RefreshCw, Truck, User } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import type { DeclineAnalysis, DeclineSlice } from '../../api/types';
@@ -104,16 +105,19 @@ export default function DeclinePatterns() {
       <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
         <CalendarX2 className="w-5 h-5 text-warning" />
         <h2 className="text-base font-semibold text-foreground">Decline Patterns</h2>
-        <select
-          value={days}
-          onChange={e => setDays(Number(e.target.value))}
-          className="ml-auto px-2 py-1 rounded-lg border border-border bg-accent/20 text-xs"
-          aria-label="Lookback window"
-        >
-          <option value={30}>30 days</option>
-          <option value={90}>90 days</option>
-          <option value={180}>180 days</option>
-        </select>
+        <div className="ml-auto w-32">
+          <SelectMenu
+            value={String(days)}
+            options={[
+              { value: '30',  label: '30 days' },
+              { value: '90',  label: '90 days' },
+              { value: '180', label: '180 days' },
+            ]}
+            placeholder="Lookback window"
+            ariaLabel="Lookback window"
+            onChange={v => setDays(Number(v))}
+          />
+        </div>
         <button
           onClick={load}
           disabled={loading}
