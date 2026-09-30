@@ -9,6 +9,7 @@
  */
 
 import { errorText } from '../utils/errorText';
+import SelectMenu from './ui/SelectMenu';
 import React, { useRef, useState, useCallback } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -411,13 +412,18 @@ function PreviewStep({ rows, onChange, onSubmit, onBack, submitting }: {
                   ))}
                   <td className="px-3 py-1.5">
                     <div className="relative">
-                      <select
+                      {/* portal: this sits in a table body with
+                          overflow-auto, which would clip an absolute panel.
+                          The native select's OS popup escaped that box; the
+                          house one has to be told to (ADR-484 D3). */}
+                      <SelectMenu
                         value={row.role}
-                        onChange={e => update(i, 'role', e.target.value)}
-                        className="w-full bg-transparent border-b border-border outline-none py-0.5 text-xs appearance-none pr-5 capitalize"
-                      >
-                        {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
+                        options={ROLES.map(r => ({ value: r, label: r }))}
+                        placeholder="Role"
+                        ariaLabel={`Role for row ${i + 1}`}
+                        portal
+                        onChange={v => update(i, 'role', v)}
+                      />
                       <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
                     </div>
                   </td>
