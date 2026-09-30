@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
+import SelectMenu from './ui/SelectMenu';
 import { errorText } from '../utils/errorText';
 import type { Scorecard } from '../api/types';
 import { Award, ChevronDown } from 'lucide-react';
@@ -31,13 +32,15 @@ export default function ScorecardCard() {
         <h2 className="text-base font-bold text-foreground">Amazon Scorecard</h2>
         {cards.length > 1 ? (
           <div className="relative ml-auto">
-            <select
-              value={idx}
-              onChange={e => setIdx(Number(e.target.value))}
-              className="appearance-none text-xs border border-border rounded-lg pl-3 pr-7 py-1.5 bg-background"
-            >
-              {cards.map((c, i) => <option key={c.id} value={i}>{c.week}</option>)}
-            </select>
+            <div className="w-40">
+              <SelectMenu
+                value={String(idx)}
+                options={cards.map((c, i) => ({ value: String(i), label: c.week }))}
+                placeholder="Select a week"
+                ariaLabel="Scorecard week"
+                onChange={v => setIdx(Number(v))}
+              />
+            </div>
             <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           </div>
         ) : (

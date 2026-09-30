@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import { formatDate } from '../utils/date';
+import SelectMenu from '../components/ui/SelectMenu';
 import { useState, useEffect, useCallback } from 'react';
 import {
   Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw, Upload,
@@ -100,15 +101,13 @@ function SubmitModal({ onClose, onCreated }: SubmitModalProps) {
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Building type</label>
-            <select
-              className="input w-full"
+            <SelectMenu
               value={buildingType}
-              onChange={e => setBuildingType(e.target.value as BuildingType)}
-            >
-              {BUILDING_TYPE_VALUES.map(t => (
-                <option key={t} value={t}>{buildingTypeLabel(t)}</option>
-              ))}
-            </select>
+              options={BUILDING_TYPE_VALUES.map(t => ({ value: t, label: buildingTypeLabel(t) }))}
+              placeholder="Select a building type"
+              ariaLabel="Building type"
+              onChange={v => setBuildingType(v as BuildingType)}
+            />
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Raw note (optional)</label>
@@ -207,29 +206,29 @@ function VerifyModal({ profile, onClose, onUpdated }: VerifyModalProps) {
         <div className="space-y-3">
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Confirmed type</label>
-            <select
-              className="input w-full"
+            <SelectMenu
               value={buildingType}
-              onChange={e => setBuildingType(e.target.value as BuildingType)}
-            >
-              {BUILDING_TYPE_VALUES.map(t => (
-                <option key={t} value={t}>{buildingTypeLabel(t)}</option>
-              ))}
-            </select>
+              options={BUILDING_TYPE_VALUES.map(t => ({ value: t, label: buildingTypeLabel(t) }))}
+              placeholder="Select a building type"
+              ariaLabel="Building type"
+              onChange={v => setBuildingType(v as BuildingType)}
+            />
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Workload override (optional)</label>
-            <select
-              className="input w-full"
+            <SelectMenu
               value={workloadOverride}
-              onChange={e => setWorkloadOverride(e.target.value)}
-            >
-              <option value="">Use default</option>
-              <option value="standard">Standard</option>
-              <option value="bulk_drop">Bulk Drop</option>
-              <option value="high_touch">High Touch</option>
-              <option value="high_wait">High Wait</option>
-            </select>
+              options={[
+                { value: '',           label: 'Use default' },
+                { value: 'standard',   label: 'Standard' },
+                { value: 'bulk_drop',  label: 'Bulk Drop' },
+                { value: 'high_touch', label: 'High Touch' },
+                { value: 'high_wait',  label: 'High Wait' },
+              ]}
+              placeholder="Use default"
+              ariaLabel="Workload override"
+              onChange={setWorkloadOverride}
+            />
           </div>
         </div>
         {profile.raw_note && (

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
+import SelectMenu from './ui/SelectMenu';
 import type {
   CrewAvailabilityResponse,
   CrewAvailabilityEntry,
@@ -145,18 +146,22 @@ export default function CrewStatusPanel({
       <div>
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs font-medium text-muted-foreground">Live board</span>
-          <select
-            className="text-xs border border-border rounded px-2 py-1 bg-background"
-            value={boardRouteId ?? ''}
-            onChange={e => setBoardRouteId(e.target.value || null)}
-          >
-            <option value="">Select a route…</option>
-            {activeRoutes.map(r => (
-              <option key={r.id} value={r.id}>
-                #{r.route_number} · {r.executor?.name ?? 'unassigned'}
-              </option>
-            ))}
-          </select>
+          <div className="w-56">
+            <SelectMenu
+              value={boardRouteId ?? ''}
+              /* The route number is the label; the person is a `hint`, which is
+                 what the native option could not express -- it had to inline
+                 both into one string. */
+              options={activeRoutes.map(r => ({
+                value: r.id,
+                label: `#${r.route_number}`,
+                hint: r.executor?.name ?? 'unassigned',
+              }))}
+              placeholder="Select a route…"
+              ariaLabel="Route"
+              onChange={v => setBoardRouteId(v || null)}
+            />
+          </div>
         </div>
         {boardRouteId && (
           board.length > 0 ? (

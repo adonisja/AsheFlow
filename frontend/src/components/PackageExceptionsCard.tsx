@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, PackageX } from 'lucide-react';
+import SelectMenu from './ui/SelectMenu';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import type { DamagedPackageResponse, MissingQueueEntry } from '../api/types';
@@ -112,15 +113,13 @@ export default function PackageExceptionsCard() {
               </div>
               {resolve?.id === m.id && (
                 <div className="mt-2 space-y-2">
-                  <select
-                    value={resolve.resolution}
-                    onChange={e => setResolve({ ...resolve, resolution: e.target.value })}
-                    className="input input-sm w-full"
-                  >
-                    {MISSING_RESOLUTIONS.map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                  <SelectMenu
+                    value={resolve.resolution ?? ''}
+                    options={MISSING_RESOLUTIONS.map(o => ({ value: o.value, label: o.label }))}
+                    placeholder="Select a resolution"
+                    ariaLabel="Resolution"
+                    onChange={v => setResolve({ ...resolve, resolution: v })}
+                  />
                   <textarea
                     value={resolve.notes}
                     onChange={e => setResolve({ ...resolve, notes: e.target.value })}

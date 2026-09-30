@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axiosClient from '../api/axiosClient';
+import SelectMenu from '../components/ui/SelectMenu';
 import {
   ShieldAlert, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronUp,
   Truck, Users, BarChart2,
@@ -225,31 +226,43 @@ function InspectionHistory({
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-4">
-        <select
-          value={filterDriver}
-          onChange={e => onFilterDriver(e.target.value)}
-          className="flex-1 min-w-[140px] p-2 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-        >
-          <option value="">All Drivers</option>
-          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-        <select
-          value={filterTruck}
-          onChange={e => onFilterTruck(e.target.value)}
-          className="flex-1 min-w-[140px] p-2 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-        >
-          <option value="">All Trucks</option>
-          {trucks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-        <select
-          value={filterFailed}
-          onChange={e => onFilterFailed(e.target.value)}
-          className="flex-1 min-w-[120px] p-2 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-        >
-          <option value="">All Results</option>
-          <option value="true">Failed Only</option>
-          <option value="false">Passed Only</option>
-        </select>
+        <div className="flex-1 min-w-[140px]">
+          <SelectMenu
+            value={filterDriver}
+            options={[
+              { value: '', label: 'All Drivers' },
+              ...drivers.map(d => ({ value: d.id, label: d.name })),
+            ]}
+            placeholder="All Drivers"
+            ariaLabel="Filter by driver"
+            onChange={onFilterDriver}
+          />
+        </div>
+        <div className="flex-1 min-w-[140px]">
+          <SelectMenu
+            value={filterTruck}
+            options={[
+              { value: '', label: 'All Trucks' },
+              ...trucks.map(t => ({ value: t.id, label: t.name })),
+            ]}
+            placeholder="All Trucks"
+            ariaLabel="Filter by truck"
+            onChange={onFilterTruck}
+          />
+        </div>
+        <div className="flex-1 min-w-[120px]">
+          <SelectMenu
+            value={filterFailed}
+            options={[
+              { value: '',      label: 'All Results' },
+              { value: 'true',  label: 'Failed Only' },
+              { value: 'false', label: 'Passed Only' },
+            ]}
+            placeholder="All Results"
+            ariaLabel="Filter by result"
+            onChange={onFilterFailed}
+          />
+        </div>
       </div>
 
       {visible.length === 0 ? (
