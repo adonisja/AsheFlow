@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import { formatDateTime } from '../utils/date';
+import SelectMenu from '../components/ui/SelectMenu';
 import React, { useEffect, useState } from 'react';
 import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -323,15 +324,15 @@ export default function GearRequest() {
                       {catItem.no_size ? (
                         <p className="text-xs text-muted-foreground">One size</p>
                       ) : (
-                        <select
-                          className="mt-1 text-xs bg-accent border border-border rounded-lg px-2 py-1 text-foreground"
-                          value={entry.size}
-                          onChange={e => updateSize(entry.item, e.target.value)}
-                        >
-                          {catItem.sizes.map(s => (
-                            <option key={s} value={s}>{s}</option>
-                          ))}
-                        </select>
+                        <div className="mt-1 w-28">
+                          <SelectMenu
+                            value={entry.size}
+                            options={catItem.sizes.map(s => ({ value: s, label: s }))}
+                            placeholder="Size"
+                            ariaLabel={`Size for ${entry.item}`}
+                            onChange={v => updateSize(entry.item, v)}
+                          />
+                        </div>
                       )}
                     </div>
                     <button

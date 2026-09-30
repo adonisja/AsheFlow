@@ -14,6 +14,7 @@
  * existed on the Management dashboard via /training/pipeline-summary.
  */
 import React, { useCallback, useEffect, useState } from 'react';
+import SelectMenu from '../components/ui/SelectMenu';
 import { Link } from 'react-router-dom';
 import {
   BarChart2, RefreshCw, TrendingUp, TrendingDown, Minus, AlertTriangle,
@@ -114,16 +115,19 @@ export default function OperationsAnalytics() {
         <p className="text-subtle mt-1">Amazon's weekly standing and metric trend.</p>
       </div>
       <div className="flex items-center gap-2">
-        <select
-          value={weeks}
-          onChange={e => setWeeks(Number(e.target.value))}
-          className="px-3 py-2 rounded-lg border border-border bg-accent/20 text-sm"
-          aria-label="Weeks of history"
-        >
-          <option value={6}>6 weeks</option>
-          <option value={12}>12 weeks</option>
-          <option value={26}>26 weeks</option>
-        </select>
+        <div className="w-36">
+          <SelectMenu
+            value={String(weeks)}
+            options={[
+              { value: '6',  label: '6 weeks' },
+              { value: '12', label: '12 weeks' },
+              { value: '26', label: '26 weeks' },
+            ]}
+            placeholder="Weeks of history"
+            ariaLabel="Weeks of history"
+            onChange={v => setWeeks(Number(v))}
+          />
+        </div>
         <button onClick={load} className="btn-ghost flex items-center gap-2 text-sm">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
         </button>

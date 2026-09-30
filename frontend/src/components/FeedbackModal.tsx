@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Bug, X, MessageSquare, Loader2 } from 'lucide-react';
+import SelectMenu from './ui/SelectMenu';
 import axiosClient from '../api/axiosClient';
 
 const FeedbackModal = () => {
@@ -74,15 +75,17 @@ const FeedbackModal = () => {
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Type</label>
-                    <select
+                    <SelectMenu
                       value={type}
-                      onChange={(e) => setType(e.target.value)}
-                      className="input-field"
-                    >
-                      <option value="bug">Bug Report</option>
-                      <option value="feature_request">Feature Request</option>
-                      <option value="general">General Feedback</option>
-                    </select>
+                      options={[
+                        { value: 'bug',             label: 'Bug Report' },
+                        { value: 'feature_request', label: 'Feature Request' },
+                        { value: 'general',         label: 'General Feedback' },
+                      ]}
+                      placeholder="Select a type"
+                      ariaLabel="Feedback type"
+                      onChange={setType}
+                    />
                   </div>
 
                   <div>

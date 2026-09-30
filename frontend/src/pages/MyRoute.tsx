@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import { useState, useEffect, useCallback } from 'react';
+import SelectMenu from '../components/ui/SelectMenu';
 import {
   MapPin, Package, AlertTriangle, PackageX, CheckCircle2,
   Truck, Navigation, ChevronDown, ChevronUp, Building2,
@@ -220,15 +221,13 @@ function RtsModal({ tba, routeId, onClose, onSubmitted }: RtsModalProps) {
           <h3 className="font-semibold text-foreground">Can't deliver — {tba}</h3>
         </div>
         <div className="space-y-3">
-          <select
-            className="input w-full"
+          <SelectMenu
             value={rtsType}
-            onChange={e => setRtsType(e.target.value)}
-          >
-            {Object.entries(RTS_LABELS).map(([v, l]) => (
-              <option key={v} value={v}>{l}</option>
-            ))}
-          </select>
+            options={Object.entries(RTS_LABELS).map(([v, l]) => ({ value: v, label: String(l) }))}
+            placeholder="Select a reason"
+            ariaLabel="RTS reason"
+            onChange={setRtsType}
+          />
           <textarea
             className="input w-full h-20 resize-none"
             placeholder="Additional notes (optional)"
@@ -356,15 +355,13 @@ function BuildingModal({ address, blockKey, onClose }: BuildingModalProps) {
         </div>
         <p className="text-xs text-muted-foreground">{address}</p>
         <div className="space-y-3">
-          <select
-            className="input w-full"
+          <SelectMenu
             value={buildingType}
-            onChange={e => setBuildingType(e.target.value as BuildingType)}
-          >
-            {BUILDING_TYPE_OPTIONS.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+            options={BUILDING_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+            placeholder="Select a building type"
+            ariaLabel="Building type"
+            onChange={v => setBuildingType(v as BuildingType)}
+          />
           <textarea
             className="input w-full h-20 resize-none"
             placeholder="Notes (e.g. gate code, floor, doorbell)"

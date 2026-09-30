@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
+import SelectMenu from './ui/SelectMenu';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import type { DamagedPackageCreate, DamageStage } from '../api/types';
@@ -95,15 +96,13 @@ export default function ReportDamagedModal({
           </div>
           <div>
             <label className="text-xs font-medium text-muted-foreground">Where found</label>
-            <select
+            <SelectMenu
               value={stage}
-              onChange={e => setStage(e.target.value as DamageStage)}
-              className="input w-full mt-1"
-            >
-              {STAGE_OPTIONS.map(o => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+              options={STAGE_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+              placeholder="Select a stage"
+              ariaLabel="Damage stage"
+              onChange={v => setStage(v as DamageStage)}
+            />
           </div>
           <div>
             <label className="text-xs font-medium text-muted-foreground">Damage notes</label>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axiosClient from '../api/axiosClient';
+import SelectMenu from '../components/ui/SelectMenu';
 import {
   Star, Users, TrendingUp, TrendingDown, Minus, ChevronRight, X,
   AlertTriangle, BarChart2, ArrowUpDown, Download, Calendar, AlertCircle,
@@ -491,16 +492,15 @@ export default function WalkerPerformance() {
         </div>
         <div className="ml-auto flex items-center gap-3">
           {/* Min shift threshold */}
-          <select
-            value={minShifts}
-            onChange={e => setMinShifts(Number(e.target.value))}
-            className="px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none"
-            title="Minimum shifts required to earn a grade"
-          >
-            {MIN_SHIFT_OPTIONS.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          <div className="w-44">
+            <SelectMenu
+              value={String(minShifts)}
+              options={MIN_SHIFT_OPTIONS.map(o => ({ value: String(o.value), label: o.label }))}
+              placeholder="Minimum shifts"
+              ariaLabel="Minimum shifts required to earn a grade"
+              onChange={v => setMinShifts(Number(v))}
+            />
+          </div>
           {/* CSV export */}
           {!loading && walkers.length > 0 && (
             <button
@@ -638,30 +638,34 @@ export default function WalkerPerformance() {
                   className="w-36 px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 />
                 {/* Grade filter */}
-                <select
-                  value={filterGrade}
-                  onChange={e => setFilterGrade(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none"
-                >
-                  <option value="">All grades</option>
-                  {['A', 'B', 'C', 'D', 'F'].map(g => (
-                    <option key={g} value={g}>{g} — {GRADE_CONFIG[g].label}</option>
-                  ))}
-                  {ungraded.length > 0 && (
-                    <option value="__ungraded">Ungraded</option>
-                  )}
-                </select>
+                <div className="w-52">
+                  <SelectMenu
+                    value={filterGrade}
+                    options={[
+                      { value: '', label: 'All grades' },
+                      ...['A', 'B', 'C', 'D', 'F'].map(g => ({
+                        value: g, label: `${g} — ${GRADE_CONFIG[g].label}`,
+                      })),
+                      // Only offered when there is something ungraded to filter to.
+                      ...(ungraded.length > 0
+                        ? [{ value: '__ungraded', label: 'Ungraded' }]
+                        : []),
+                    ]}
+                    placeholder="All grades"
+                    ariaLabel="Filter by grade"
+                    onChange={setFilterGrade}
+                  />
+                </div>
                 {/* Page size */}
-                <select
-                  value={pageSize}
-                  onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
-                  className="px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none"
-                  title="Rows per page"
-                >
-                  {PAGE_SIZE_OPTIONS.map(n => (
-                    <option key={n} value={n}>{n} / page</option>
-                  ))}
-                </select>
+                <div className="w-32">
+                  <SelectMenu
+                    value={String(pageSize)}
+                    options={PAGE_SIZE_OPTIONS.map(n => ({ value: String(n), label: `${n} / page` }))}
+                    placeholder="Rows per page"
+                    ariaLabel="Rows per page"
+                    onChange={v => { setPageSize(Number(v)); setPage(1); }}
+                  />
+                </div>
               </div>
             </div>
 
