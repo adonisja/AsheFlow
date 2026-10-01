@@ -38,6 +38,23 @@ MUTABLE_TYPES = (ARRAY, PG_ARRAY, JSONB, JSON)
 # assignment only, so mutation tracking would buy nothing but a deep copy on
 # every load. Format: "Model.column": why.
 REASSIGN_ONLY = {
+    # ADR-485. Both are written ONCE and never mutated in place.
+    #
+    # CampaignQuestion.choices is the option list of a `choice` question. A
+    # question that already has answers is never edited — it is retired and
+    # replaced (D2 supersession), precisely so an edit cannot rewrite what a
+    # past answer meant. Appending an option to a live question would do that
+    # silently, which is the thing the supersession rule exists to prevent.
+    "CampaignQuestion.choices":
+        "the option list of a choice question; a question with answers is "
+        "retired and replaced (ADR-485 D2), never edited in place",
+    # CampaignRun.skipped_assignment_ids is computed at open, in one pass over
+    # that date's assignments, and assigned whole. It is a record of what the
+    # dispatch looked like when the run opened, so a later append would be a
+    # claim about the past (D16).
+    "CampaignRun.skipped_assignment_ids":
+        "computed at open in one pass and assigned whole; a later append "
+        "would be a claim about what the dispatch looked like in the past",
     # ADR-476. The parked scorecard row is written ONCE, at import, as a whole
     # dict, and read back whole when an operator binds the Transporter ID. It is
     # a snapshot of what Amazon sent, not a structure anyone edits: resolving a
