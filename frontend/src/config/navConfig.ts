@@ -90,6 +90,13 @@ export const NAV_ITEMS: NavItem[] = [
   // (homeRouteForGroups), and every role has its own scoped home dashboard —
   // admin lands on /admin and doesn't need dispatch's. Route access is gated
   // in App.tsx (admin retains URL access per the full-access role model).
+  // ADR-485. ONE tab for every campaign — the driver survey, the captain
+  // survey, and anything an admin designs. Every field role is listed because
+  // who may actually answer is decided by the scoping invariant (D3), not by a
+  // role: a driver answers about their captain, a walker about their driver.
+  // The page shows "Nothing to answer right now" when the fetch comes back
+  // empty, rather than the tab vanishing.
+  { path: '/campaigns',             label: 'Campaigns',         icon: ClipboardList,  roles: ['admin', 'management', 'dispatch', ...ALL_FIELD] },
   { path: '/driver-surveys',        label: 'Driver Surveys',    icon: ClipboardList,  roles: ['admin', 'management'] },
   { path: '/feedback',              label: 'Feedback',          icon: MessageSquare,  roles: ['admin'] },
   { path: '/field-ops',             label: 'Field Ops',         icon: Shield,         roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
