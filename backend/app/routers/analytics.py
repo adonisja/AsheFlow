@@ -15,7 +15,7 @@ from statistics import median
 from typing import List
 from uuid import UUID
 
-from app.services.local_date import company_today, company_tz
+from app.services.local_date import company_today, company_tz, company_midnight
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -156,7 +156,8 @@ def get_ban_override_freq(
         .filter(
             Notification.company_id == caller.company_id,
             Notification.type == "ban_override_reassignment",
-            Notification.created_at >= datetime.combine(range_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+            # ADR-485 D18: the range starts at midnight in the company's zone.
+            Notification.created_at >= company_midnight(tz, range_start),
         )
         .all()
     )

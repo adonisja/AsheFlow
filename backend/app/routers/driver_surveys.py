@@ -22,6 +22,7 @@ import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from app.services.local_date import company_datetime, company_tz
 from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.database import get_db
 from app.models.assignment_member import AssignmentMember
@@ -198,7 +199,11 @@ def activate_survey(
     # 3-hour shift rule
     cfg = get_company_config(db, caller.company_id)
     if cfg and cfg.shift_start:
-        earliest_send = datetime.combine(body.date, cfg.shift_start).replace(tzinfo=timezone.utc) + timedelta(hours=3)
+        # ADR-485 D18. Was .replace(tzinfo=utc), which RELABELS 07:00 local as
+        # 07:00 UTC -- 4-5h early -- so a gate meant to hold until 10:00 local
+        # fired at 06:00. company_datetime converts instead of relabelling.
+        tz = company_tz(db, caller.company_id)
+        earliest_send = company_datetime(tz, body.date, cfg.shift_start) + timedelta(hours=3)
         if datetime.now(timezone.utc) < earliest_send:
             earliest_local = earliest_send.strftime("%-I:%M %p")
             raise HTTPException(
