@@ -30,6 +30,10 @@ from sqlalchemy.orm import sessionmaker
 # MetaData from only the tables we need.
 from sqlalchemy import MetaData
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
+from app.models.campaign import (  # ADR-485
+    AttributionRequest, Campaign, CampaignAnswer, CampaignQuestion,
+    CampaignResponse, CampaignRun, CampaignSchedule,
+)
 from app.models.base import Base
 from app.models.employee import Employee
 from app.models.truck import Truck
@@ -93,6 +97,47 @@ _audit_logs_sqlite = Table(
     Column("created_at",      DateTime,   nullable=True),
 )
 
+# ADR-485 campaign tables. Two of them carry JSONB (`choices`,
+# `skipped_assignment_ids`), which SQLite cannot compile — the same problem as
+# graduation_quizzes and audit_logs above.
+#
+# DERIVED, not hand-written. The two mirrors above are hand-maintained and
+# therefore drift from their models; seven more would drift seven ways
+# (ADR-464: a registry that must be kept in step with a schema is a registry
+# that goes stale). This walks the real Table and swaps only the types SQLite
+# rejects, so a column added to a campaign model appears here automatically.
+def _sqlite_mirror(table: Table) -> Table:
+    cols = []
+    for c in table.columns:
+        type_ = SQLiteJSON() if c.type.__class__.__name__ == "JSONB" else c.type
+        cols.append(Column(c.name, type_, primary_key=c.primary_key,
+                           nullable=c.nullable, index=c.index))
+    # Columns only -- no ForeignKey, no CheckConstraint. Two reasons:
+    #
+    #  * a copied FK drags the REAL target table into this MetaData, JSONB and
+    #    Postgres-only CHECKs included, which is what `to_metadata` then tries
+    #    to CREATE and SQLite rejects with "unrecognized token: :" (the `::int`
+    #    cast in ck_campaign_answer_exactly_one_value).
+    #  * those constraints are the thing worth testing, and SQLite would not
+    #    enforce them faithfully anyway. They are asserted against the migration
+    #    text in test_adr485_campaign_schema.py and exercised for real by CI's
+    #    fresh-database job against Postgres.
+    return Table(table.name, MetaData(), *cols)
+
+
+_CAMPAIGN_TABLES_SQLITE = [
+    _sqlite_mirror(t) for t in (
+        Campaign.__table__,
+        CampaignQuestion.__table__,
+        CampaignSchedule.__table__,
+        CampaignRun.__table__,
+        CampaignResponse.__table__,
+        CampaignAnswer.__table__,
+        AttributionRequest.__table__,
+    )
+]
+
+
 # Collect only the Table objects for models we actually need in tests.
 # Any model imported above registers its Table in Base.metadata.
 # We build a targeted MetaData containing only those tables.
@@ -125,6 +170,7 @@ DISPATCH_TABLES = [
 
     _graduation_quizzes_sqlite,
     _audit_logs_sqlite,
+    *_CAMPAIGN_TABLES_SQLITE,            # ADR-485
 ]
 
 
