@@ -125,8 +125,6 @@ _NO_AUDIT = {
     "continuation_requests.py::reject_continuation_request",
     "continuation_requests.py::set_request_priority",
     "continuation_requests.py::submit_continuation_request",
-    "driver_surveys.py::activate_survey",
-    "driver_surveys.py::submit_response",
     "employee_off_days.py::create_employee_off_day",
     "employees.py::confirm_email_change",
     "employees.py::request_discord_link",

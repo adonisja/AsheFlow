@@ -97,7 +97,6 @@ export const NAV_ITEMS: NavItem[] = [
   // The page shows "Nothing to answer right now" when the fetch comes back
   // empty, rather than the tab vanishing.
   { path: '/campaigns',             label: 'Campaigns',         icon: ClipboardList,  roles: ['admin', 'management', 'dispatch', ...ALL_FIELD] },
-  { path: '/driver-surveys',        label: 'Driver Surveys',    icon: ClipboardList,  roles: ['admin', 'management'] },
   { path: '/feedback',              label: 'Feedback',          icon: MessageSquare,  roles: ['admin'] },
   { path: '/field-ops',             label: 'Field Ops',         icon: Shield,         roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/field-packages',        label: 'Field Packages',    icon: Package,        roles: ['admin', 'dispatch', 'management'], feature: 'package_intake' },

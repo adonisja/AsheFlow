@@ -45,7 +45,6 @@ from app.models.adp_pay_period import ADPPayPeriod
 from app.models.adp_timecard import ADPTimeCard, ADPTimeCardBreak
 from app.models.flex_timesheets import FlexTimesheet
 from app.models.timecard_adjustments import TimeCardAdjustment
-from app.models.driver_survey import DriverSurvey, DriverSurveyResponse
 from app.models.campaign import (  # ADR-485
     AttributionRequest, Campaign, CampaignAnswer, CampaignQuestion,
     CampaignResponse, CampaignRun, CampaignSchedule,
