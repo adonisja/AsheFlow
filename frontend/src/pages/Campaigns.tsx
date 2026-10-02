@@ -17,11 +17,13 @@
  *     a blank screen.
  */
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ClipboardList, Clock, Truck, CheckCircle2, AlertCircle } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
 import SelectMenu from '../components/ui/SelectMenu';
 import { errorText } from '../utils/errorText';
+import { fetchMyCampaigns, type MyCampaign } from '../utils/myCampaigns';
 
 interface Question {
   id: string;
@@ -83,6 +85,22 @@ function closesIn(iso: string): { label: string; urgent: boolean } {
 }
 
 export default function Campaigns() {
+  /** Platform collection campaigns this company may contribute to (ADR-485 D9).
+   *
+   *  D9 meeting point 1: "Campaigns" lists BOTH -- the tenant's own campaigns and
+   *  any platform campaign they are eligible for. Visually one surface;
+   *  underneath, two routers with two trust models, which is why this is a
+   *  separate fetch against /collection rather than folded into the run list.
+   *
+   *  Absent rather than empty when there are none: a tenant with no platform
+   *  campaign should not be told about a feature that is not theirs. */
+  const [platform, setPlatform] = useState<MyCampaign[]>([]);
+  useEffect(() => {
+    let live = true;
+    void fetchMyCampaigns().then(rows => { if (live) setPlatform(rows); });
+    return () => { live = false; };
+  }, []);
+
   const [runs, setRuns] = useState<OpenRun[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<OpenRun | null>(null);
@@ -169,7 +187,7 @@ export default function Campaigns() {
           <div className="card text-center py-10 text-subtle text-sm">Loading…</div>
         )}
 
-        {runs !== null && runs.length === 0 && (
+        {runs !== null && runs.length === 0 && platform.length === 0 && (
           <div className="card text-center py-10">
             <p className="text-sm text-foreground">Nothing to answer right now.</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -228,6 +246,34 @@ export default function Campaigns() {
             </button>
           );
         })}
+        {/* ADR-485 D9 meeting point 1. A platform campaign is not a run: there is
+            no subject, no truck and no close -- it is an open invitation to
+            contribute. So it gets its own heading rather than being made to look
+            like a run it is not. */}
+        {platform.length > 0 && (
+          <div className="space-y-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground pt-2">
+              Platform campaigns
+            </h2>
+            {/* Two distinct ROUTES, not a query param: App.tsx mounts /walker-log
+        with dataset="routes" and /address-log with dataset="addresses".
+        `dataset` is a prop, so a ?tab= would be silently ignored and both
+        links would have landed on the routes page. */}
+    {platform.map(c => (
+              <Link
+                key={c.token}
+                to={c.dataset === 'routes' ? '/walker-log' : '/address-log'}
+                className="card block hover:bg-accent/30 transition-colors"
+              >
+                <p className="text-sm font-semibold text-foreground">{c.label}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {c.dataset === 'routes' ? 'Route collection' : 'Address collection'}
+                  {' \u00b7 open to everyone at your company'}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
