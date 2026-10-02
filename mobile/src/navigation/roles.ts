@@ -55,7 +55,12 @@ export const ROUTE_SORT_ROLES         = ['driver', 'trainer', 'captain'] as cons
 // the screen filters to routes where the caller is executor or supervisor —
 // verified on staging: a 2-route truck showed the captain only their own.
 export const MY_ROUTE_TAB_ROLES       = ['trainer', 'captain'] as const;
-export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
+// ADR-485 D3. Was ['trainer','walker'] for the driver survey, which
+// excluded every driver from ever responding about anyone. Who may
+// actually answer is decided SERVER-SIDE by the scoping invariant: a
+// driver answers about their captain, a walker about their driver. The
+// tab shows an empty state when there is nothing due.
+export const CAMPAIGN_ROLES           = ['driver', 'walker', 'trainer', 'trainee', 'captain'] as const;
 export const GEAR_ROLES               = ['driver', 'walker', 'trainer', 'trainee', 'captain'] as const;
 export const REATTEMPT_ROLES          = ['driver', 'trainer', 'captain'] as const;
 // ADR-277 D3: the truck-scoped building page. Field roles collect, sign-off
@@ -123,7 +128,7 @@ export const TAB_GATES: Record<string, TabGate> = {
   TruckBuildings:  { roles: TRUCK_BUILDINGS_ROLES },
   MyTraining:      { roles: TRAINEE_ROLES },
   Walker:          { roles: WALKER_ROLES,            feature: 'route_sort' },
-  DriverSurvey:    { roles: DRIVER_SURVEY_ROLES },
+  Campaigns:       { roles: CAMPAIGN_ROLES },
   Schedule:        { roles: SCHEDULE_ROLES },
   SchChanges:      { roles: SCHEDULE_CHANGE_ROLES },
   Incidents:       { roles: INCIDENT_ROLES },

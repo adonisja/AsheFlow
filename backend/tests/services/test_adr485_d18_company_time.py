@@ -55,10 +55,15 @@ def test_utc_company_is_unchanged():
 
 # ── the five converted sites ────────────────────────────────────────────────
 
+# driver_surveys.py was one of these until ADR-485 D17 migrated the driver
+# survey into campaigns and deleted the router. Its 3-hour send gate -- the
+# loudest instance of the bug this ADR fixed -- now lives in
+# campaign_runs._close_at and campaign_scope._transfer_cutoff, both of which
+# use the helper and are covered by their own tests.
 SITES = {
-    "backend/app/routers/driver_surveys.py": "company_datetime(tz, body.date, cfg.shift_start)",
     "backend/app/routers/analytics.py":      "company_midnight(tz, range_start)",
     "backend/app/routers/walker_routes.py":  "company_midnight(",
+    "backend/app/tasks/campaign_runs.py":    "company_datetime(tz,",
 }
 
 
@@ -77,7 +82,8 @@ def test_dispatch_converts_both_of_its_sites():
 def test_every_helper_used_is_imported():
     """A missing import is a NameError at REQUEST time -- `import app.main`
     passes and the endpoint 500s on every call (ADR-115 D3)."""
-    for rel in list(SITES) + ["backend/app/routers/dispatch.py"]:
+    for rel in list(SITES) + ["backend/app/routers/dispatch.py",
+                              "backend/app/services/campaign_scope.py"]:
         src = (ROOT / rel).read_text()
         used = {h for h in ("company_datetime", "company_midnight", "company_tz")
                 if re.search(rf"\b{h}\(", src)}

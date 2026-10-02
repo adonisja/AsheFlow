@@ -1517,7 +1517,7 @@ _BASE_FEATURES: tuple[str, ...] = (
     "time_off",
     "incidents",
     "gear",
-    "driver_surveys",
+    "campaigns",            # ADR-485 D17 (was driver_surveys)
     "scorecards",
     "vehicle_compliance",
     "notifications",

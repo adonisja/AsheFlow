@@ -72,7 +72,11 @@ const TYPE_META: Record<string, { label: string; icon: string }> = {
   assignment_change_request:      { label: 'Reassign Request',   icon: '📋' },
   assignment_change_approved:     { label: 'Reassign Approved',  icon: '✅' },
   assignment_change_rejected:     { label: 'Reassign Denied',    icon: '❌' },
-  driver_survey:                  { label: 'Driver Survey',      icon: '📊' },
+  // ADR-485 D17. The driver survey is a campaign now. `campaign_schedule_ended`
+  // is the only Notification type campaigns emit today -- opening a run does
+  // not notify anybody yet, which is why the Campaigns tab shows for every
+  // field role rather than appearing only when something is due.
+  campaign_schedule_ended:        { label: 'Campaign Ended',     icon: '📋' },
 };
 
 function typeMeta(type: string): { label: string; icon: string } {

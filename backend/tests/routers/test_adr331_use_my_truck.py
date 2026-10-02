@@ -131,18 +131,24 @@ def test_fieldops_is_deliberately_not_adopted():
     assert "t.truck_id === truckId" in s
 
 
-def test_driversurvey_header_now_reads_real_fields():
-    """Was an INVERTED test asserting the bug still existed, so that whoever
-    fixed it would trip this and find the ADR rather than re-deriving it.
+def test_the_campaign_screen_cannot_reintroduce_the_members_bug():
+    """ADR-331/332's concern, re-pointed by ADR-485 D17.
 
-    That is exactly what happened: ADR-332 D1 added `truck_name`, this test
-    fired, and the header turned out to be only HALF fixable — the field
-    existed but the code still flatMapped over a non-existent `ta.members`.
-    Now it goes through useMyTruck, and the driver comes from the crew list
-    (ADR-332 D3: a person does not belong on a row describing a vehicle).
+    The DriverSurvey screen this replaced flatMapped `ta.members`, a field that
+    does not exist, and derived the driver client-side. The fix routed it
+    through useMyTruck so the driver came from the crew list.
+
+    CampaignsScreen cannot have that bug at all: the truck name and the subject
+    come from `GET /campaigns/my-open`, resolved server-side by the scoping
+    invariant (D3). There is no client-side derivation to get wrong.
+
+    useMyTruck is unchanged and still used by four other screens, which the
+    rest of this file covers.
     """
-    code = _strip_comments(_src("screens/DriverSurvey/DriverSurveyScreen.tsx"))
-    assert "ta.members" not in code, "still flatMapping a field that does not exist"
-    assert "useMyTruck" in code
-    assert "mine.truckName" in code
-    assert "m.role === 'driver'" in code, "the driver must come from the crew list"
+    code = _strip_comments(_src("screens/Campaigns/CampaignsScreen.tsx"))
+    assert "ta.members" not in code, "flatMapping a field that does not exist"
+    assert "flatMap" not in code
+    assert "role === 'driver'" not in code, (
+        "the subject must come from the server, not be derived on the client")
+    assert "subject_name" in code and "truck_name" in code
+
