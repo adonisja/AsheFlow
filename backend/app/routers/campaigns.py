@@ -32,14 +32,18 @@ from sqlalchemy.orm import Session
 from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.campaign import (
-    VALID_QUESTION_KINDS, VALID_SUBJECT_ROLES, Campaign, CampaignAnswer,
-    CampaignQuestion, CampaignResponse, CampaignRun,
+    VALID_QUESTION_KINDS, VALID_SUBJECT_ROLES, AttributionRequest, Campaign,
+    CampaignAnswer, CampaignQuestion, CampaignResponse, CampaignRun,
 )
 from app.models.employee import Employee
 from app.services.audit import write_audit
 from app.services.campaign_scope import (
     assignments_without_a_subject, may_answer_about, respondents_for,
     subjects_for,
+)
+from app.services.campaign_attribution import (
+    AttributionError, approve, attributed_responses, deny,
+    request_attribution,
 )
 from app.services.campaign_results import (
     campaign_trend, free_text, non_respondents, question_rollups, response_rate,
@@ -783,3 +787,190 @@ def campaign_trend_endpoint(
         )
         for p in campaign_trend(db, campaign)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Attribution (ADR-485 D13)
+#
+# Anonymous by default. A manager REQUESTS, an admin APPROVES, and the unlock
+# expires. D5 is untouched: the subject never sees responses about them, in any
+# state.
+# ---------------------------------------------------------------------------
+
+allow_admin_only = RoleChecker(["admin"])
+
+
+class AttributionRequestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Free text, so it carries D14's constraints. The WORD count is enforced in
+    # the service, not here: a 10-word minimum is a rule about substance, and
+    # the message a manager sees should say what is wanted rather than
+    # "string too short".
+    reason: str = Field(..., min_length=1, max_length=2000)
+
+
+class AttributionRequestOut(BaseModel):
+    id: uuid.UUID
+    run_id: uuid.UUID
+    requested_by: Optional[uuid.UUID] = None
+    requester_name: Optional[str] = None
+    reason: str
+    requested_at: datetime
+    approved_at: Optional[datetime] = None
+    denied_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    status: str
+
+
+class AttributedResponseOut(BaseModel):
+    response_id: uuid.UUID
+    respondent_id: uuid.UUID
+    respondent_name: str
+
+
+def _request_out(db: Session, req: AttributionRequest) -> AttributionRequestOut:
+    name = None
+    if req.requested_by is not None:
+        row = db.query(Employee.name).filter(
+            Employee.id == req.requested_by,
+            Employee.company_id == req.company_id,
+        ).first()
+        name = row[0] if row else None
+    if req.approved_at is not None:
+        status_label = "expired" if (req.expires_at and
+                                     req.expires_at <= datetime.now(timezone.utc)) \
+                       else "approved"
+    elif req.denied_at is not None:
+        status_label = "denied"
+    else:
+        status_label = "pending"
+    return AttributionRequestOut(
+        id=req.id, run_id=req.run_id, requested_by=req.requested_by,
+        requester_name=name, reason=req.reason, requested_at=req.requested_at,
+        approved_at=req.approved_at, denied_at=req.denied_at,
+        expires_at=req.expires_at, status=status_label,
+    )
+
+
+@router.post("/runs/{run_id}/attribution-requests",
+             response_model=AttributionRequestOut,
+             status_code=status.HTTP_201_CREATED)
+def request_attribution_endpoint(
+    run_id: uuid.UUID,
+    body: AttributionRequestIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+    db: Session = Depends(get_db),
+):
+    """Ask an admin to unlock who said what, for ONE run."""
+    run = _get_run(db, run_id, caller.company_id)
+    try:
+        req = request_attribution(db, run, caller, body.reason)
+    except AttributionError as exc:
+        raise HTTPException(exc.status, exc.detail)
+    db.commit()
+    db.refresh(req)
+    return _request_out(db, req)
+
+
+@router.get("/attribution-requests", response_model=List[AttributionRequestOut])
+def list_attribution_requests(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+    db: Session = Depends(get_db),
+):
+    """Every request in this company. Visible to management as well as admin:
+    a manager must be able to see that their own request is still pending, and
+    a request nobody can see is a request nobody chases."""
+    rows = (
+        db.query(AttributionRequest)
+        .filter(AttributionRequest.company_id == caller.company_id)
+        .order_by(AttributionRequest.requested_at.desc())
+        .limit(200)
+        .all()
+    )
+    return [_request_out(db, r) for r in rows]
+
+
+@router.post("/attribution-requests/{request_id}/approve",
+             response_model=AttributionRequestOut)
+def approve_attribution(
+    request_id: uuid.UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin_only),
+    db: Session = Depends(get_db),
+):
+    """ADMIN ONLY, and never your own request.
+
+    Narrower than every other management endpoint here, deliberately: a manager
+    who could approve their own request is a self-serve reveal with two extra
+    clicks.
+    """
+    req = _get_attribution_request(db, request_id, caller.company_id)
+    try:
+        approve(db, req, caller)
+    except AttributionError as exc:
+        raise HTTPException(exc.status, exc.detail)
+    db.commit()
+    db.refresh(req)
+    return _request_out(db, req)
+
+
+@router.post("/attribution-requests/{request_id}/deny",
+             response_model=AttributionRequestOut)
+def deny_attribution(
+    request_id: uuid.UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Refuse it. Audited as deliberately as an approval — a denial that leaves
+    no trace makes "nobody asked" and "somebody was told no" look identical."""
+    req = _get_attribution_request(db, request_id, caller.company_id)
+    try:
+        deny(db, req, caller)
+    except AttributionError as exc:
+        raise HTTPException(exc.status, exc.detail)
+    db.commit()
+    db.refresh(req)
+    return _request_out(db, req)
+
+
+@router.get("/runs/{run_id}/attributed", response_model=List[AttributedResponseOut])
+def attributed_run(
+    run_id: uuid.UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+    db: Session = Depends(get_db),
+):
+    """Who said what, for a viewer holding a live grant.
+
+    The ONLY endpoint that returns a campaign respondent's identity. Reading it
+    writes its own audit row: approval and use are separate facts, and an
+    approval nobody acted on must not look like one read eleven times.
+    """
+    run = _get_run(db, run_id, caller.company_id)
+    try:
+        rows = attributed_responses(db, run, caller)
+    except AttributionError as exc:
+        raise HTTPException(exc.status, exc.detail)
+    db.commit()   # the audit row is the point; it must not be rolled back
+    return [
+        AttributedResponseOut(response_id=rid, respondent_name=name,
+                              respondent_id=resp_id)
+        for rid, name, resp_id in rows
+    ]
+
+
+def _get_attribution_request(db: Session, request_id: uuid.UUID,
+                             company_id: uuid.UUID) -> AttributionRequest:
+    req = (
+        db.query(AttributionRequest)
+        .filter(AttributionRequest.id == request_id,
+                AttributionRequest.company_id == company_id)
+        .first()
+    )
+    if req is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found.")
+    return req
