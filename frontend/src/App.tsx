@@ -27,6 +27,7 @@ import GearRequest from './pages/GearRequest';
 import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import DriverSurveys from './pages/DriverSurveys';
+import Campaigns from './pages/Campaigns';
 import AnchorPoints from './pages/AnchorPoints';
 import CrewStatus from './pages/CrewStatus';
 import CaptainDashboard from './pages/CaptainDashboard';
@@ -387,6 +388,10 @@ function App() {
             />
             {/* incidents: all authenticated roles can file or view incidents */}
             <Route path="/incidents" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}><Incidents /></ProtectedRoute>} />
+            {/* ADR-485. Roles come from navConfig (routeRoles), so the tab and
+                its route cannot disagree. Who may ANSWER is narrower still and
+                is decided server-side by the scoping invariant. */}
+            <Route path="/campaigns" element={<ProtectedRoute allowedRoles={routeRoles('/campaigns')}><Campaigns /></ProtectedRoute>} />
             <Route
               path="/preferences"
               element={
