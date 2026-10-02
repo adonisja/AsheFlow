@@ -48,6 +48,21 @@ _WRITE_VERBS = {"post", "patch", "put", "delete"}
 # Adding a line here is a decision: it says "this write is routine operational
 # traffic and auditing it would dilute the log", NOT "I could not be bothered".
 _NO_AUDIT = {
+    # ADR-485 D13. All three ARE audited -- in campaign_attribution.py, not
+    # inline in the endpoint, which is the only thing this heuristic can see.
+    #
+    # Deliberately placed there: attributed_responses() is the one function in
+    # the codebase that returns a campaign respondent's identity, and its grant
+    # check and its audit row sit together with it. A future endpoint copying
+    # the pattern cannot copy it without both. Inlining them here to satisfy
+    # the scan would move the audit AWAY from the thing it guards.
+    #
+    # Verified: request_attribution writes campaign.attribution_requested,
+    # approve writes campaign.attribution_approved, deny writes
+    # campaign.attribution_denied, and reading writes attribution_viewed.
+    "campaigns.py::approve_attribution",
+    "campaigns.py::deny_attribution",
+    "campaigns.py::request_attribution_endpoint",
     "anchor_points.py::arrive_anchor_point",
     "anchor_points.py::confirm_anchor_point",
     "anchor_points.py::depart_anchor_point",
