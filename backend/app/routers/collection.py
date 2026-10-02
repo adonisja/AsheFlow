@@ -49,6 +49,7 @@ from app.schemas.collection import (
     CollectionCheckOut,
     CollectedProfileOut, CollectionSubmitIn, CollectionSubmitOut,
     CollectionTokenCreate, CollectionTokenOut, CollectionTokenSummary,
+    MyCampaignOut,
 )
 from app.services.audit import write_audit
 from app.services.door_key import door_key
@@ -981,3 +982,66 @@ def list_collected_profiles(
         item.closed = item.observations >= VERIFICATION_LIMIT
         out.append(item)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Discovery for authenticated tenant users (ADR-485 D9)
+#
+# The address study stays PLATFORM-OWNED. Tenants get a route into the existing
+# one, not a copy of it: the address library is a global resource (ADR-237),
+# and per-tenant studies would fragment it into silos each too small to be
+# useful while multiplying the public write surface that ADR-415/431/435 spent
+# three ADRs hardening.
+#
+# What was missing is only DISCOVERY. `_authorise_scope` (ADR-423 D2) already
+# requires a scope='company' token to carry an authenticated employee of the
+# owning tenant, so the link alone has never been sufficient. But every submit
+# path takes a token in the request body, which left a logged-in walker with no
+# way to find a campaign they are eligible for -- the link had to arrive by
+# Discord or not at all.
+# ---------------------------------------------------------------------------
+
+@router.get("/my-campaigns", response_model=list[MyCampaignOut])
+def my_campaigns(
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Platform campaigns this caller's company may submit to.
+
+    No role gate: a collection campaign is issued TO a company, and every
+    employee of that company may contribute. Who may submit is already decided
+    by the token's scope, and narrowing it further here would mean two places
+    deciding the same thing.
+    """
+    now = datetime.now(timezone.utc)
+    rows = (
+        db.query(CollectionToken)
+        .filter(
+            # SCOPE_COMPANY only. An open-scoped token is the anonymous public
+            # study; surfacing one inside the app would put a link with no
+            # tenant check into a place that implies one.
+            CollectionToken.scope == SCOPE_COMPANY,
+            # A company token always carries its company. The NULL case is an
+            # open campaign by construction, which the scope filter above
+            # already excludes -- this is the ADR-115 D1 predicate, stated
+            # rather than inferred from the scope.
+            CollectionToken.company_id == caller.company_id,
+            CollectionToken.revoked_at.is_(None),
+        )
+        .order_by(CollectionToken.label.asc())
+        .all()
+    )
+    # Expiry is filtered in Python rather than SQL because `expires_at` is
+    # nullable and "never expires" is a legitimate state: a NULL would drop out
+    # of `expires_at > now` silently.
+    live = [t for t in rows if t.expires_at is None or t.expires_at > now]
+
+    return [
+        MyCampaignOut(
+            token=t.token,
+            label=t.label,
+            dataset=t.dataset or DATASET_ADDRESSES,
+            expires_at=t.expires_at,
+        )
+        for t in live
+    ]

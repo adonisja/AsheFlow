@@ -8,7 +8,7 @@ something to persist silently.
 """
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 from typing import Optional
 from uuid import UUID
 
@@ -438,3 +438,19 @@ class CollectionTokenSummary(BaseModel):
     # None: its link no longer works, and showing a dead string invites someone
     # to send it.
     token: Optional[str] = None
+
+
+class MyCampaignOut(BaseModel):
+    """A platform campaign an authenticated tenant user may submit to (ADR-485 D9).
+
+    Carries the TOKEN, deliberately. Handing it to an already-authorised caller
+    gives away nothing: `_authorise_scope` (ADR-423 D2) re-checks tenant
+    membership on every submit, so a forwarded token is no more useful than it
+    is today. The alternative -- a per-user submit path that bypasses the token
+    -- would be a second way in, and the token is what carries `daily_cap`,
+    revocation and the dataset gate.
+    """
+    token: str
+    label: str
+    dataset: str
+    expires_at: Optional[datetime] = None
