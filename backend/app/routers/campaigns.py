@@ -41,6 +41,10 @@ from app.services.campaign_scope import (
     assignments_without_a_subject, may_answer_about, respondents_for,
     subjects_for,
 )
+from app.services.campaign_results import (
+    campaign_trend, free_text, non_respondents, question_rollups, response_rate,
+    subject_rollups,
+)
 from app.services.company_config import get_company_config
 from app.services.local_date import company_datetime, company_today, company_tz
 
@@ -649,3 +653,133 @@ def _validate_answers(body: ResponseIn, questions: dict) -> None:
     if missing:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"Still needed: {', '.join(missing)}.")
+
+
+# ---------------------------------------------------------------------------
+# Results (management, admin) — ADR-485 D15
+#
+# Answers come back ANONYMOUS. Attribution is D13's approved, audited exception
+# and is not built yet, so there is currently no way to see who said what.
+# ---------------------------------------------------------------------------
+
+class QuestionRollupOut(BaseModel):
+    question_id: uuid.UUID
+    prompt: str
+    kind: str
+    position: int
+    answered: int
+    yes: Optional[int] = None
+    mean: Optional[float] = None
+    option_counts: Optional[List[int]] = None
+    choices: Optional[List[str]] = None
+
+
+class SubjectRollupOut(BaseModel):
+    subject_id: uuid.UUID
+    subject_name: str
+    truck_name: Optional[str] = None
+    expected: int
+    responded: int
+
+
+class FreeTextOut(BaseModel):
+    prompt: str
+    text: str
+
+
+class PersonOut(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class RunDetailOut(BaseModel):
+    run: RunOut
+    responded: int
+    expected: int
+    questions: List[QuestionRollupOut]
+    subjects: List[SubjectRollupOut]
+    # Unattributed (D13). The subject never sees any of this (D5).
+    free_text: List[FreeTextOut]
+    # Named, deliberately: chasing a missing response needs a name, and "did
+    # not answer" is not an opinion about anybody.
+    not_answered: List[PersonOut]
+
+
+class TrendPointOut(BaseModel):
+    run_id: uuid.UUID
+    date: str
+    responded: int
+    expected: int
+    per_question: dict[str, Optional[float]]
+
+
+@router.get("/runs/{run_id}/results", response_model=RunDetailOut)
+def run_results(
+    run_id: uuid.UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+    db: Session = Depends(get_db),
+):
+    """What happened on this day (D15).
+
+    The page a manager opens the morning after. Read-only, management+admin
+    only — D5 is unconditional: the subject never sees responses about them,
+    and this endpoint is the reason that has to be enforced by the gate rather
+    than by the UI.
+    """
+    run = _get_run(db, run_id, caller.company_id)
+    campaign = _get_campaign(db, run.campaign_id, caller.company_id)
+
+    responded, expected = response_rate(db, run, campaign)
+    rollups = question_rollups(db, run)
+
+    # Attach the option labels so the client renders counts against names
+    # without a second round trip. The COUNTS are index-aligned (D2), so the
+    # labels are resolved here, at read time, from the live question row.
+    questions = {q.id: q for q in _live_questions(db, campaign.id, caller.company_id)}
+    out_questions = [
+        QuestionRollupOut(
+            question_id=r.question_id, prompt=r.prompt, kind=r.kind,
+            position=r.position, answered=r.answered, yes=r.yes, mean=r.mean,
+            option_counts=r.option_counts,
+            choices=(questions[r.question_id].choices
+                     if r.question_id in questions else None),
+        )
+        for r in rollups
+    ]
+
+    return RunDetailOut(
+        run=_run_out(run, campaign.label),
+        responded=responded,
+        expected=expected,
+        questions=out_questions,
+        subjects=[SubjectRollupOut(**s._asdict()) for s in
+                  subject_rollups(db, run, campaign)],
+        free_text=[FreeTextOut(prompt=p, text=t) for p, t in free_text(db, run)],
+        not_answered=[PersonOut(id=i, name=n) for i, n in
+                      non_respondents(db, run, campaign)],
+    )
+
+
+@router.get("/{campaign_id}/trend", response_model=List[TrendPointOut])
+def campaign_trend_endpoint(
+    campaign_id: uuid.UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+    db: Session = Depends(get_db),
+):
+    """Is this getting better (D15).
+
+    A falling response rate is the leading indicator that a campaign has become
+    noise, and it is the number that should decide whether to renew it at the
+    end of a schedule (D12).
+    """
+    campaign = _get_campaign(db, campaign_id, caller.company_id)
+    return [
+        TrendPointOut(
+            run_id=p.run_id, date=p.date, responded=p.responded,
+            expected=p.expected,
+            per_question={str(k): v for k, v in p.per_question.items()},
+        )
+        for p in campaign_trend(db, campaign)
+    ]
