@@ -166,6 +166,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.dispatch_alerts.alert_finalization_deadline",
         "schedule": crontab(hour=9, minute=5),
     },
+    # 05:30 Eastern — ADR-485 D12. Opens every campaign run due today, across
+    # every company. After the overnight ADP/dispatch syncs so the day's
+    # assignments exist, and before shift start so a daily run is open when the
+    # crew arrives. 05:30 is a free slot: 03:15, 03:30 and 04:30 each already
+    # carry two tasks.
+    "open-campaign-runs": {
+        "task": "app.tasks.campaign_runs.open_scheduled_runs",
+        "schedule": crontab(hour=5, minute=30),
+    },
     # 17:00 Eastern — first fuel/mileage log reminder for drivers who haven't submitted
     "fuel-log-reminder-first": {
         "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
