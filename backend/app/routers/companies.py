@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_platform_staff, get_caller_employee, RoleChecker
+from app.services.campaign_seeds import seed_campaigns_for
 from app.services.company_config import (
     _REQUIRED_FIELDS, PLATFORM_ONLY_FIELDS, PLATFORM_SEEDED_DEFAULTS,
     platform_settings_missing, platform_settings_ok,
@@ -416,6 +417,11 @@ def create_company(
     # column COMMENTS ("# default 0.70") and no default= anywhere, so this line
     # used to write eight NULLs and every company was born unconfigurable.
     db.add(CompanyConfig(company_id=company.id, **PLATFORM_SEEDED_DEFAULTS))
+
+    # ADR-485 D8. The built-in campaigns ship as ordinary rows, seeded here
+    # beside the config for the same reason: a tenant that has to design a
+    # driver survey from scratch before they can run one will not run one.
+    seed_campaigns_for(db, company.id, created_by=None)
 
     write_audit(
         db=db,
