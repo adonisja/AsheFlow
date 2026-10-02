@@ -45,6 +45,7 @@ from app.services.campaign_attribution import (
     AttributionError, approve, attributed_responses, deny,
     request_attribution,
 )
+from app.services.free_text import sanitise_submitted_text
 from app.services.campaign_results import (
     campaign_trend, free_text, non_respondents, question_rollups, response_rate,
     subject_rollups,
@@ -140,6 +141,13 @@ class OpenRunOut(BaseModel):
     truck_name: Optional[str] = None
     answered: bool
     questions: List[QuestionOut]
+    # ADR-485 D14. First names of the crew on THIS assignment, so the client
+    # can warn before a respondent names a colleague in free text.
+    #
+    # Deliberately not the company roster: handing a walker every employee's
+    # name to run a client-side check would be a larger disclosure than the one
+    # it prevents. These are the people they demonstrably worked beside today.
+    crew_names: List[str] = []
 
 
 class AnswerIn(BaseModel):
@@ -530,10 +538,31 @@ def my_open_runs(
                 subject_name=subject.name if subject else "Unknown",
                 truck_name=_truck_name(db, elig.truck_assignment_id, caller.company_id),
                 answered=answered,
+                crew_names=_crew_first_names(db, elig.truck_assignment_id,
+                                             caller.company_id),
                 questions=[QuestionOut.model_validate(q, from_attributes=True)
                            for q in _live_questions(db, campaign.id, caller.company_id)],
             ))
     return out
+
+
+def _crew_first_names(db: Session, assignment_id, company_id) -> List[str]:
+    """First names of everyone on this assignment (ADR-485 D14).
+
+    First names only: enough for the client to match "Maria was late" against,
+    and it does not hand back a surname the respondent did not already know.
+    """
+    from app.models.assignment_member import AssignmentMember
+
+    rows = (
+        db.query(Employee.name)
+        .join(AssignmentMember, AssignmentMember.employee_id == Employee.id)
+        .filter(AssignmentMember.assignment_id == assignment_id,
+                AssignmentMember.company_id == company_id,
+                Employee.company_id == company_id)
+        .all()
+    )
+    return sorted({(r[0] or "").split()[0] for r in rows if (r[0] or "").strip()})
 
 
 def _truck_name(db: Session, assignment_id, company_id) -> Optional[str]:
@@ -602,7 +631,11 @@ def submit_response(
             question_id=q.id,
             bool_value=a.bool_value if q.kind == "bool" else None,
             int_value=a.int_value if q.kind in ("scale", "choice") else None,
-            text_value=a.text_value if q.kind == "text" else None,
+            # ADR-485 D14: capped and control-stripped on the way IN.
+            # NOT formula-escaped -- that is the export's job, and doing
+            # it here would rewrite what somebody said.
+            text_value=(sanitise_submitted_text(a.text_value)
+                        if q.kind == "text" else None),
         ))
     db.flush()
 

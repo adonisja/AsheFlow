@@ -44,10 +44,32 @@ interface OpenRun {
   truck_name?: string | null;
   answered: boolean;
   questions: Question[];
+  /** ADR-485 D14. First names of the crew on this assignment, so free text
+   *  can be checked for a colleague's name before it is sent. */
+  crew_names?: string[];
 }
 
 /** One answer, shaped by the question's kind. */
 type Draft = Record<string, { bool?: boolean; int?: number; text?: string }>;
+
+/**
+ * Does this free text name someone on the crew? (ADR-485 D14)
+ *
+ * Word boundaries, case-insensitive. Without `\b`, an employee named Al turns
+ * "the van was almost empty" into a false positive, and a warning that fires
+ * on ordinary sentences is a warning people learn to dismiss.
+ */
+function namesACoworker(text: string, crew: string[] | undefined): string | null {
+  if (!text || !crew?.length) return null;
+  for (const name of crew) {
+    // Names shorter than three characters match inside ordinary words too
+    // often to warn on.
+    if (name.length < 3) continue;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escaped}\\b`, 'i').test(text)) return name;
+  }
+  return null;
+}
 
 function closesIn(iso: string): { label: string; urgent: boolean } {
   const ms = new Date(iso).getTime() - Date.now();
@@ -319,15 +341,31 @@ export default function Campaigns() {
             )}
 
             {q.kind === 'text' && (
-              <textarea
-                value={draft[q.id]?.text ?? ''}
-                onChange={e => setAnswer(q.id, { text: e.target.value })}
-                maxLength={2000}
-                rows={3}
-                aria-label={q.prompt}
-                className="input-field w-full resize-y"
-                placeholder="Optional"
-              />
+              <>
+                <textarea
+                  value={draft[q.id]?.text ?? ''}
+                  onChange={e => setAnswer(q.id, { text: e.target.value })}
+                  maxLength={2000}
+                  rows={3}
+                  aria-label={q.prompt}
+                  className="input-field w-full resize-y"
+                  placeholder="Optional"
+                />
+                {/* A WARNING, not a block. A walker may have a legitimate
+                    reason to name someone, and a hard refusal on 2000
+                    characters they just typed is how a report gets abandoned
+                    instead of rewritten. */}
+                {namesACoworker(draft[q.id]?.text ?? '', active.crew_names) && (
+                  <p className="text-xs text-warning mt-1.5 flex items-start gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      This mentions a coworker by name. Reviews are about{' '}
+                      {active.subject_name}, so use someone's role if you need
+                      to refer to them.
+                    </span>
+                  </p>
+                )}
+              </>
             )}
           </div>
         ))}
