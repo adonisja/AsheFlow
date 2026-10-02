@@ -87,3 +87,48 @@ def test_discovery_does_not_live_in_the_public_submit_module():
     """
     public = (ROOT / "frontend/src/utils/collectionSubmit.ts").read_text()
     assert "axiosClient" not in public.replace("Deliberately NOT using `axiosClient`", "")
+
+
+CAMPAIGNS = ROOT / "frontend/src/pages/Campaigns.tsx"
+APP = ROOT / "frontend/src/App.tsx"
+
+
+def test_the_campaigns_page_lists_platform_campaigns():
+    """ADR-485 D9 meeting point 1: "Campaigns" lists BOTH kinds.
+
+    Re-read against the diff rather than against a summary of it (CLAUDE.md):
+    the first version of D9 shipped the picker inside WalkerLog only, which
+    satisfies "an authenticated user never needs the link" while missing the
+    nav-section half of the same decision.
+    """
+    src = CAMPAIGNS.read_text()
+    assert "fetchMyCampaigns" in src
+    assert "void fetchMyCampaigns()" in src
+    assert "Platform campaigns" in src
+
+
+def test_the_empty_state_accounts_for_platform_campaigns():
+    """"Nothing to answer right now." must not render above a listed campaign.
+
+    The run list and the platform list are separate fetches, so an empty `runs`
+    with a non-empty `platform` is a real state -- and the original empty-state
+    condition only looked at `runs`.
+    """
+    src = CAMPAIGNS.read_text()
+    assert "runs.length === 0 && platform.length === 0" in src
+
+
+def test_the_platform_links_point_at_routes_that_exist():
+    """The two datasets have two ROUTES, not one route with a tab param.
+
+    `dataset` is a prop passed in App.tsx, so an invented `?tab=routes` would be
+    silently ignored and both links would land on the routes page. This test
+    reads App.tsx so a future route rename cannot leave the links dangling.
+    """
+    app = APP.read_text()
+    assert 'path="/walker-log"' in app and 'dataset="routes"' in app
+    assert 'path="/address-log"' in app and 'dataset="addresses"' in app
+
+    src = CAMPAIGNS.read_text()
+    assert "'/walker-log' : '/address-log'" in src, (
+        "the platform links do not distinguish the two dataset routes")
