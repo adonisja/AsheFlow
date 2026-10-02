@@ -268,7 +268,7 @@ export default function Campaigns() {
                 <p className="text-sm font-semibold text-foreground">{c.label}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {c.dataset === 'routes' ? 'Route collection' : 'Address collection'}
-                  {' \u00b7 open to everyone at your company'}
+                  {' · open to everyone at your company'}
                 </p>
               </Link>
             ))}
