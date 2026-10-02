@@ -166,6 +166,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.dispatch_alerts.alert_finalization_deadline",
         "schedule": crontab(hour=9, minute=5),
     },
+    # 02:45 Eastern — ADR-485 D14. Rewrites roster names in campaign free text
+    # seven days after a run closed. Overnight because it rewrites rows nobody
+    # should be reading mid-edit, and 02:45 is free (03:15, 03:30 and 04:30
+    # each already carry two tasks).
+    "redact-campaign-free-text": {
+        "task": "app.tasks.campaign_redaction.redact_old_free_text",
+        "schedule": crontab(hour=2, minute=45),
+    },
     # 05:30 Eastern — ADR-485 D12. Opens every campaign run due today, across
     # every company. After the overnight ADP/dispatch syncs so the day's
     # assignments exist, and before shift start so a daily run is open when the
