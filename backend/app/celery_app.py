@@ -209,18 +209,27 @@ celery_app.conf.beat_schedule = {
     # older than operational_record_retention_days (default 1095 / 3 years, FLSA §211).
     "purge-expired-operational-records-monthly": {
         "task": "app.tasks.cleanup.purge_expired_operational_records",
-        "schedule": crontab(hour=3, minute=30, day_of_month=1),
+        # :31 not :30 (ADR-487). Collided with expire-owner-email-changes on the
+        # 1st of each month only, which is why a daily-only collision scan missed
+        # it — the check must evaluate day_of_month/day_of_week qualifiers, not
+        # skip the entries that carry them.
+        "schedule": crontab(hour=3, minute=31, day_of_month=1),
     },
     # 02:30 AM Eastern — decay BuildingProfile troublesome scores (~30d half-life, ADR-218).
     "decay-troublesome-scores-nightly": {
         "task": "app.tasks.cleanup.decay_troublesome_scores",
         "schedule": crontab(hour=2, minute=30),
     },
-    # 03:15 AM Eastern — delete notifications older than notification_retention_days
+    # 03:16 AM Eastern — delete notifications older than notification_retention_days
     # (default 3, read or unread) + any expired (ADR-227). Bounds the table + SSE poll.
+    #
+    # :16 not :15 (ADR-487). 03:15 is claimed by expire-registered-unused, which is
+    # there deliberately — ADR-379 D2 put it fifteen minutes after the invite sweep
+    # so the two partitions of that table do not interleave in the log. This task
+    # has no such dependency, so it is the one that moves.
     "prune-notifications-nightly": {
         "task": "app.tasks.cleanup.prune_notifications",
-        "schedule": crontab(hour=3, minute=15),
+        "schedule": crontab(hour=3, minute=16),
     },
     # 03:45 AM Eastern — roll yesterday's sort decisions into route_sort_daily
     # (ADR-273). Each company rolls up ITS OWN yesterday, so completed-day-only
@@ -244,11 +253,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.null_expired_delivery_addresses",
         "schedule": crontab(hour=4, minute=0),
     },
-    # 04:30 AM Eastern — redact departed employees' denormalized name copies
+    # 04:31 AM Eastern — redact departed employees' denormalized name copies
     # past employee_name_retention_days (default 180, ADR-221).
+    #
+    # :31 not :30 (ADR-487). enrich-place-geometry holds 04:30 and keeps it: it is
+    # _BATCH=2000 with a GeoClient call per item, the longest-running task in this
+    # schedule. This one is pure DB, so it is the cheaper one to displace.
     "redact-departed-employee-names-nightly": {
         "task": "app.tasks.cleanup.redact_departed_employee_names",
-        "schedule": crontab(hour=4, minute=30),
+        "schedule": crontab(hour=4, minute=31),
     },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {
