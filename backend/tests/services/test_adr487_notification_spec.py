@@ -202,6 +202,28 @@ class TestTheInvariantsTheRegistryExistsForFootnote:
         bad = [t for t, s in SPEC.items() if not s.label.strip() or not s.icon]
         assert not bad, f"entries missing a label or icon: {bad}"
 
+    def test_no_two_types_share_a_label(self):
+        """A label is what mobile renders as the card title, so two types with
+        the same label are indistinguishable to the reader.
+
+        Found by reading the generated table rather than the rows: three pairs
+        collided, and all three were pairs this ADR had just SPLIT on purpose —
+        training_record_due/unsubmitted, quiz_submitted/quiz_submitted_trainer,
+        graduation/trainee_graduated. An identical label undoes a split at
+        exactly the point somebody sees it, which is why routing and labelling
+        cannot be reviewed separately.
+        """
+        from collections import defaultdict
+
+        by_label: dict[str, list[str]] = defaultdict(list)
+        for ty, spec in SPEC.items():
+            by_label[spec.label].append(ty)
+        collisions = {lbl: ts for lbl, ts in by_label.items() if len(ts) > 1}
+        assert not collisions, (
+            f"types sharing a label: {collisions}. Each label is a card title; "
+            f"two types with one label read as the same notification."
+        )
+
     def test_labels_are_short_noun_phrases(self):
         """Mobile shows the label as a one-line title above the message. A
         sentence there wraps and pushes the message itself off the card."""

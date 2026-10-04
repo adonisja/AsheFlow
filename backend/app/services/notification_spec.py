@@ -173,7 +173,7 @@ SPEC: dict[str, Spec] = {
     "training_record_due": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Record Due', WARN, '📋'),   # The assigned trainer
     "training_record_unsubmitted": Spec(ACTION, BANNER,
-        'Record Due', WARN, '📋'),   # Management + admin
+        'Record Locked', BAD, '🔒'),   # Management + admin — AFTER midnight, is_locked
 
     # ── INFO ──────────────────────────────────────────────────────────────
     "anchor_point_arrived": Spec(INFO, TICKER | PUSH | DISCORD,
@@ -239,7 +239,7 @@ SPEC: dict[str, Spec] = {
     "quiz_submitted": Spec(INFO, TICKER,
         'Quiz Submitted', NEUTRAL, '📝'),   # Management + admin
     "quiz_submitted_trainer": Spec(INFO, TICKER,
-        'Quiz Submitted', NEUTRAL, '📝'),   # The paired trainer
+        'Your Trainee Submitted', NEUTRAL, '📝'),   # The paired trainer
     "role_change": Spec(INFO, BANNER,
         'Role Change', NEUTRAL, '👤'),   # The employee
     "route_ready": Spec(INFO, TICKER | PROMPT,
@@ -263,7 +263,7 @@ SPEC: dict[str, Spec] = {
     "trainee_bumped": Spec(INFO, BANNER,
         'Trainee Bumped', WARN, '⚠️'),   # Oversight
     "trainee_graduated": Spec(INFO, BANNER,
-        'Graduation', GOOD, '🎓'),   # Management
+        'Trainee Graduated', GOOD, '🎓'),   # Management
     "trainee_ncns": Spec(INFO, BANNER,
         'No Call No Show', WARN, '⚠️'),   # Oversight
     "trainee_reassigned": Spec(INFO, BANNER,
