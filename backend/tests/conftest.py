@@ -434,3 +434,52 @@ def make_graduation_quiz(db, trainee: Employee, passed: bool = True,
     db.commit()
     db.refresh(quiz)
     return quiz
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Source-level assertions: match CODE, never prose (ADR-487)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def code_only(obj) -> str:
+    """Source of `obj` with docstrings and comments removed.
+
+    FIVE tests in this repo have asserted something about a function by
+    searching its source text and matched the COMMENT instead of the code:
+
+        assert "09:10" not in src        # failed on the comment explaining
+                                         # that 09:10 used to be hardcoded
+        assert "anonymous" not in src    # failed on a comment describing
+                                         # open-scoped tokens
+        assert '"admin", "manager"' not in src
+                                         # failed on the comment quoting the
+                                         # old filter to explain the fix
+
+    The pattern is specific and recurring: a fix whose comment NAMES the thing
+    it removed, and an absence assertion that cannot tell the difference. The
+    better the comment, the more likely the test fails.
+
+    Four local copies of this helper had already accumulated
+    (test_adr335_platform_alerts, test_adr328_clear_retracts_discord,
+    test_adr485_d9_my_campaigns, and a JavaScript-only variant in
+    test_adr401_preclose_warning), each written after somebody hit this. One
+    copy here instead.
+
+    Works by reparsing and unparsing: `ast.unparse` emits no comments at all,
+    and docstrings are dropped explicitly because they ARE code to the parser.
+
+    Use it for ABSENCE assertions. A presence assertion ("the source mentions
+    write_notification") is safe either way, and reparsing normalises
+    formatting, so prefer the raw source when matching exact layout.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    src = obj if isinstance(obj, str) else inspect.getsource(obj)
+    tree = ast.parse(textwrap.dedent(src))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef, ast.Module)):
+            if ast.get_docstring(node) is not None:
+                node.body = node.body[1:]
+    return ast.unparse(tree)
