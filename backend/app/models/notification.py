@@ -5,9 +5,17 @@ from sqlalchemy.sql import func
 from app.models.base import Base
 
 
-# ADR-487 D2. False while the 83 call sites migrate; True once they are done.
-# The guard itself is tested in both states — see test_adr487_notify.py.
-_GUARD_ARMED = False
+# ADR-487 D2. ARMED 2026-10-05, when the last of the 83 original call sites was
+# migrated. It was False through the six migration batches because arming it
+# first broke 48 tests across 12 files — correct behaviour, but a red suite
+# across a dozen commits is where a genuine regression hides among the expected
+# failures.
+#
+# What made the disarm temporary was not discipline:
+# test_the_guard_is_armed_once_migration_completes counts remaining direct sites
+# and FAILS once they reach zero with this still False. Finishing the work broke
+# the test, which is what forced this line.
+_GUARD_ARMED = True
 
 
 class Notification(Base):
@@ -53,18 +61,9 @@ class Notification(Base):
         Tests that genuinely exercise the model pass `_via_helper=True`; tests
         that exercise behaviour should go through `services.notify` instead.
         """
-        # MIGRATION IN PROGRESS (ADR-487 D2). The guard is written and verified
-        # but not yet armed: 83 call sites across 38 files still construct
-        # directly, and arming it before they migrate means a red suite across
-        # a dozen commits — in which a genuine regression hides among the
-        # expected failures.
-        #
-        # Flip _GUARD_ARMED to True in the final migration commit, when nothing
-        # violates it. `test_adr487_notify.py` asserts the guard WORKS whether
-        # or not it is armed, so this cannot be forgotten silently: the test
-        # that pins the armed behaviour is skipped with a reason, and
-        # `test_the_guard_is_armed_once_migration_completes` fails as soon as
-        # the last site is migrated.
+        # _GUARD_ARMED is True (see the module-level note). It stays a flag
+        # rather than an unconditional raise so a future migration can disarm it
+        # the same way — with the completion test forcing it back on.
         if _GUARD_ARMED and not kwargs.pop("_via_helper", False):
             raise RuntimeError(
                 "Construct notifications with services.notify.write_notification() "

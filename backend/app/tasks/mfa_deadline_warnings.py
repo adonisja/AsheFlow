@@ -29,6 +29,7 @@ from app.database import SessionLocal
 from app.models.employee import Employee
 from app.services import mfa_status
 from app.services.notify import write_notification
+from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
 

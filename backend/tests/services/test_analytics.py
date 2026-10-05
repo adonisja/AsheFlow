@@ -198,6 +198,7 @@ def make_closed_training_record(db, trainee: Employee, trainer: Employee) -> Tra
 def make_override_notification(db, employee: Employee,
                                 when: datetime = None) -> Notification:
     notif = Notification(
+        _via_helper=True,   # ADR-487 D2: a fixture testing the MODEL
         id=uuid.uuid4(),
         company_id=SEED_COMPANY_ID,
         employee_id=employee.id,
@@ -503,6 +504,7 @@ class TestBanOverrideFreq:
         """Only 'ban_override_reassignment' type notifications count."""
         employee = make_employee(db)
         notif = Notification(
+            _via_helper=True,   # ADR-487 D2: a fixture testing the MODEL
             id=uuid.uuid4(),
             company_id=SEED_COMPANY_ID,
             employee_id=employee.id,

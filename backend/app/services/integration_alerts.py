@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.employee import Employee
 from app.models.platform_alert import PlatformAlert
 from app.services.notify import write_notification
+from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
 

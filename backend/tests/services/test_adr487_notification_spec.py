@@ -62,9 +62,13 @@ def _literal_types_in_source() -> set[str]:
         except (SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "Notification"):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func.id if isinstance(node.func, ast.Name) else None
+            # Post-migration the types live on the helper calls. `Notification`
+            # stays in the list because the constructor guard is a flag, not a
+            # deletion — a future migration could legitimately disarm it.
+            if fn not in ("Notification", "write_notification", "fan_out"):
                 continue
             for kw in node.keywords:
                 if kw.arg == "type" and isinstance(kw.value, ast.Constant):
@@ -123,18 +127,18 @@ class TestTheRegistryIsComplete:
         non-empty, so a refactor that moves or renames `Notification` turns the
         completeness test into a silent no-op instead of a failure.
         """
-        raised = _literal_types_in_source()
-        # The floor RATCHETS DOWN as the D2 migration proceeds: each migrated
-        # site stops being a `Notification(type="...")` literal and becomes a
-        # `write_notification(..., type="...")` argument. So this cannot assert a
-        # fixed count against the original 61 — it asserts that SOMETHING was
-        # found, which is the actual property (a broken walk returns zero and
-        # would make the completeness test above pass vacuously).
+        # The D2 migration is COMPLETE, so there are no
+        # `Notification(type="...")` literals left in app/ — every site now
+        # passes the type to write_notification() or fan_out(). The walk
+        # therefore counts those, which is where the types live now.
         #
-        # Once the migration completes this becomes a check on write_notification
-        # call sites instead; test_the_guard_is_armed_once_migration_completes is
-        # what forces that moment to be noticed.
-        assert len(raised) >= 10, (
+        # This assertion has been re-pointed twice as the migration proceeded
+        # (61 literals -> a ratcheting floor -> helper call sites). Each time the
+        # PROPERTY was the same: a walk that finds nothing makes the
+        # completeness test above pass vacuously. Only the place the types live
+        # changed.
+        raised = _literal_types_in_source()
+        assert len(raised) >= 55, (
             f"only {len(raised)} literal notification types found by AST — the "
             f"walk is probably broken, which would make the completeness test "
             f"above pass while checking nothing"

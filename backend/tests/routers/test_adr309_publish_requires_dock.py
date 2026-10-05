@@ -16,6 +16,25 @@ import inspect
 from app.routers import dispatch as D
 
 
+def _first_notification_write(src: str) -> int:
+    """Where the first notification write appears, however it is spelled.
+
+    These tests asserted `src.index("Notification(")` until ADR-487 D2 routed
+    every write through services.notify. The ORDERING property they pin — the
+    dock guard must precede notification seeding — never changed; only the call
+    did. An anchor on the spelling makes a refactor look like a regression,
+    which is the third time that has happened in this body of work.
+    """
+    for token in ("write_notification(", "fan_out(", "Notification("):
+        if token in src:
+            return src.index(token)
+    raise AssertionError(
+        "publish_dispatch seeds no notifications at all — the ordering this "
+        "test pins no longer has two things to order"
+    )
+
+
+
 def _code_only(obj) -> str:
     """Source with docstrings stripped — grep matches its own prose otherwise."""
     tree = ast.parse(inspect.getsource(obj))
@@ -51,7 +70,7 @@ def test_the_dock_is_settled_before_any_notification_goes_out():
     notifications and the status flip — which is why a dockless truck-day could
     be published at all. Refusing has to still be free at that point."""
     src = _code_only(D.publish_dispatch)
-    assert src.index("_dockless") < src.index("Notification("), (
+    assert src.index("_dockless") < _first_notification_write(src), (
         "the dock guard must precede notification seeding (ADR-309 D1)"
     )
 
@@ -112,7 +131,7 @@ def test_per_truck_publish_checks_only_its_own_truck():
 
 def test_the_per_truck_dock_guard_precedes_its_notifications():
     src = _code_only(D.publish_hub)
-    assert src.index("has no dock assigned") < src.index("Notification(")
+    assert src.index("has no dock assigned") < _first_notification_write(src)
 
 
 # ── Cross-ADR ordering (Dimension 2) ─────────────────────────────────────────
