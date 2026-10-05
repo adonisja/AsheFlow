@@ -204,3 +204,89 @@ class TestTheMigrationCoveredTheseFiles:
             and n.func.id == "Notification"
         ]
         assert not sites, f"{rel} still constructs Notification at {sites}"
+
+
+class TestTheFStringTypeGeneratorsAreClosed:
+    """Two sites build a notification type from request input (ADR-487 D1).
+
+        shift_ops.py:696    type=f"rts_{payload.status}"
+        incidents.py:76     notif_type = f"incident_{severity}"
+
+    Both were `str` fields whose allowed values lived in a COMMENT, which made
+    them request-controlled type names. The routers did check the value, so the
+    sets were closed in practice — but a constraint that lives in an `if` rather
+    than the type is one a new caller or a refactor can bypass silently.
+
+    Now both are `Literal[...]`, so the set of producible types is finite AND
+    derivable. These tests read the schema rather than hardcoding the members,
+    so widening a Literal without declaring the new type fails here.
+    """
+
+    @staticmethod
+    def _literal_members(cls, field: str) -> list[str]:
+        import typing
+
+        return list(typing.get_args(cls.model_fields[field].annotation))
+
+    def test_rts_status_is_a_closed_set(self):
+        from app.schemas.shift_ops import RTSReportReview
+
+        members = self._literal_members(RTSReportReview, "status")
+        assert members, (
+            "RTSReportReview.status is not a Literal — an unconstrained str here "
+            "is a request-controlled notification type (shift_ops.py:696)"
+        )
+        assert set(members) == {"approved", "rejected"}
+
+    def test_every_rts_type_it_can_produce_is_declared(self):
+        from app.schemas.shift_ops import RTSReportReview
+
+        produced = {f"rts_{v}" for v in self._literal_members(RTSReportReview, "status")}
+        missing = produced - set(SPEC)
+        assert not missing, (
+            f"f\"rts_{{status}}\" can produce {sorted(missing)}, which is not in "
+            f"notification_spec.SPEC. Widening the Literal means declaring the "
+            f"type too."
+        )
+
+    def test_incident_severity_is_a_closed_set(self):
+        from app.schemas.incident import IncidentCreate
+
+        members = self._literal_members(IncidentCreate, "severity")
+        assert members, (
+            "IncidentCreate.severity is not a Literal — an unconstrained str "
+            "here is a request-controlled notification type (incidents.py:76)"
+        )
+        assert set(members) == {"info", "warning", "critical"}
+
+    def test_every_incident_type_it_can_produce_is_declared(self):
+        from app.schemas.incident import IncidentCreate
+
+        produced = {
+            f"incident_{v}" for v in self._literal_members(IncidentCreate, "severity")
+        }
+        missing = produced - set(SPEC)
+        assert not missing, (
+            f"f\"incident_{{severity}}\" can produce {sorted(missing)}, which is "
+            f"not in notification_spec.SPEC."
+        )
+
+    def test_the_literal_matches_the_runtime_check_it_replaces(self):
+        """VALID_SEVERITIES still exists and is still checked at incidents.py:140.
+
+        Two sources for one rule is the drift this ADR is about, so assert they
+        agree rather than deleting one — the runtime check also guards the
+        CATEGORY_DEFAULT_SEVERITY path, which the schema does not see.
+        """
+        from app.schemas.incident import VALID_SEVERITIES, IncidentCreate
+
+        assert set(self._literal_members(IncidentCreate, "severity")) == set(
+            VALID_SEVERITIES
+        ), "the Literal and VALID_SEVERITIES disagree — one of them is stale"
+
+    def test_a_value_outside_the_literal_is_rejected_at_the_boundary(self):
+        import pydantic
+        from app.schemas.shift_ops import RTSReportReview
+
+        with pytest.raises(pydantic.ValidationError):
+            RTSReportReview(status="maybe", dispatch_notes=None)
