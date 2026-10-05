@@ -44,7 +44,6 @@ from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.campaign import Campaign, CampaignRun, CampaignSchedule
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
 from app.services.audit import write_audit
 from app.services.campaign_scope import (
@@ -52,6 +51,7 @@ from app.services.campaign_scope import (
 )
 from app.services.company_config import get_company_config
 from app.services.local_date import company_datetime, company_tz, task_today
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -307,12 +307,13 @@ def _notify_schedule_ended(db, schedule: CampaignSchedule) -> None:
         f"Start another?"
     )
     for employee_id in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=schedule.company_id,
             employee_id=employee_id,
             type="campaign_schedule_ended",
             message=message,
-        ))
+        )
 
     # One-way stamp: the notice is sent once, not on every tick for the rest of
     # the schedule's existence.

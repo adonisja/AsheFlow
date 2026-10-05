@@ -15,8 +15,8 @@ from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.services.local_date import task_today, fetch_company_timezones
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
+from app.services.notify import write_notification
 
 
 @celery_app.task(name="app.tasks.dispatch_alerts.alert_finalization_deadline")
@@ -58,12 +58,13 @@ def alert_finalization_deadline() -> dict:
             ).all()
 
             for emp in recipients:
-                db.add(Notification(
+                write_notification(
+                    db,
                     company_id=company_id,
                     employee_id=emp.id,
                     type="dispatch_finalization_reminder",
                     message=message,
-                ))
+                )
 
             total_recipients += len(recipients)
             alerted_companies.append((company_id, today, message))

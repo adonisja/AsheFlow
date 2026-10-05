@@ -27,13 +27,13 @@ from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.models.company import CompanyConfig
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.services.adp_urgency import calculate_urgency
 from app.services.break_selection import (
     MIN_QUALIFYING_BREAK,
     BreakCandidate,
     select_break,
 )
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +103,13 @@ def _open_finding(
         urgency=urgency,
         detected_at=now,
     ))
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=integration.company_id,
         employee_id=employee.id,
         type="timecard_mismatch",
         message=f"Action required: {description} Please review and sign off in AsheFlow.",
-    ))
+    )
 
 
 @celery_app.task(name="app.tasks.adp_mismatch_detect.detect_timecard_mismatches")

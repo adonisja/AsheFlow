@@ -23,9 +23,9 @@ import redis as redis_lib
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.database import SessionLocal
-from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import RouteClusterCentroid
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -155,15 +155,14 @@ def run_zone_sort(
         # Notify the dispatcher who triggered the sort so the SSE stream wakes
         # them up regardless of which page they're on when the task finishes.
         try:
-            db.add(Notification(
-                company_id  = company_uuid,
-                employee_id = created_by_uuid,
-                type        = "zone_sort_complete",
-                message     = (
-                    f"Zone assignment for {sort_date} finished — "
-                    f"{len(result.zones_persisted)} zone(s) created."
-                ),
-            ))
+            write_notification(
+                db,
+                company_id=company_uuid,
+                employee_id=created_by_uuid,
+                type="zone_sort_complete",
+                message=f"Zone assignment for {sort_date} finished — "
+                    f"{len(result.zones_persisted)} zone(s) created.",
+            )
             db.commit()
         except Exception:
             pass  # notification failure must never crash the sort task

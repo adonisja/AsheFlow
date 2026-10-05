@@ -13,9 +13,9 @@ from app.database import SessionLocal
 from app.services.local_date import task_today, fetch_company_timezones
 from app.models.employee import Employee
 from app.models.field_ops import FuelMileageLog, CheckIn
-from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
+from app.services.notify import write_notification
 
 
 @celery_app.task(name="app.tasks.eod_reminders.remind_fuel_log_missing")
@@ -88,15 +88,14 @@ def remind_fuel_log_missing() -> dict:
             ).all()
 
             for driver in drivers:
-                db.add(Notification(
+                write_notification(
+                    db,
                     company_id=company_id,
                     employee_id=driver.id,
                     type="fuel_log_reminder",
-                    message=(
-                        f"📋 Reminder: Please submit your fuel and mileage log for today ({today}). "
-                        f"Go to Field Ops → Fuel & Mileage to complete your submission."
-                    ),
-                ))
+                    message=f"📋 Reminder: Please submit your fuel and mileage log for today ({today}). "
+                        f"Go to Field Ops → Fuel & Mileage to complete your submission.",
+                )
 
             total_reminded += len(drivers)
 

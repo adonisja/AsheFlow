@@ -96,9 +96,16 @@ def test_the_notification_is_written_even_if_discord_is_down():
     a successful send makes a bot outage look like a warning that never
     happened -- and makes the retry re-nag."""
     src = inspect.getsource(W.warn_before_mfa_deadline)
-    add = src.index("db.add(Notification(")
+    # The WRITE, however it is spelled. This asserted `db.add(Notification(`
+    # until ADR-487 D2 routed the write through services.notify — the ordering
+    # property never changed, only the call. An anchor on the spelling makes a
+    # refactor look like a regression.
+    write = next(
+        src.index(tok) for tok in ("write_notification(", "db.add(Notification(")
+        if tok in src
+    )
     dm = src.index("_send_dm(emp.discord_id")
-    assert add < dm, "the notification must be recorded before the DM is tried"
+    assert write < dm, "the notification must be recorded before the DM is tried"
 
 
 def test_the_dm_is_synchronous_unlike_the_router_helper():

@@ -5,13 +5,13 @@ from app.database import SessionLocal
 from app.services.local_date import task_today, fetch_company_timezones
 from app.services.local_date import task_today
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.trainer_mark import TrainerMark
 from app.models.training import TrainingRecord
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.services.record_trainer_mark import record_trainer_mark
 from app.services.company_config import get_company_config
+from app.services.notify import write_notification
 
 
 @celery_app.task(name="app.tasks.training_deadlines.check_training_submissions")
@@ -90,12 +90,13 @@ def check_training_submissions() -> dict:
                 Employee.is_active == True,
             ).all()
             for recipient in recipients:
-                db.add(Notification(
+                write_notification(
+                    db,
                     company_id=record.company_id,
                     employee_id=recipient.id,
                     type="training_record_unsubmitted",
                     message=message,
-                ))
+                )
 
             flagged += 1
 

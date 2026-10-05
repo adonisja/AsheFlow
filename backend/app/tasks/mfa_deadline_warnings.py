@@ -27,8 +27,8 @@ import requests as http_requests
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.services import mfa_status
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -182,12 +182,13 @@ def warn_before_mfa_deadline() -> dict:
             # reachable: it is the durable record, and the DM is the delivery.
             # Writing it only on a successful send would make a bot outage look
             # like a warning that never happened.
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=emp.company_id,
                 employee_id=emp.id,
                 type=notif_type,
                 message=message,
-            ))
+            )
             sent += 1
 
             if emp.discord_id:

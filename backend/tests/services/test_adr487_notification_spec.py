@@ -116,7 +116,17 @@ class TestTheRegistryIsComplete:
         completeness test into a silent no-op instead of a failure.
         """
         raised = _literal_types_in_source()
-        assert len(raised) >= 55, (
+        # The floor RATCHETS DOWN as the D2 migration proceeds: each migrated
+        # site stops being a `Notification(type="...")` literal and becomes a
+        # `write_notification(..., type="...")` argument. So this cannot assert a
+        # fixed count against the original 61 — it asserts that SOMETHING was
+        # found, which is the actual property (a broken walk returns zero and
+        # would make the completeness test above pass vacuously).
+        #
+        # Once the migration completes this becomes a check on write_notification
+        # call sites instead; test_the_guard_is_armed_once_migration_completes is
+        # what forces that moment to be noticed.
+        assert len(raised) >= 10, (
             f"only {len(raised)} literal notification types found by AST — the "
             f"walk is probably broken, which would make the completeness test "
             f"above pass while checking nothing"
