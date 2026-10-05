@@ -22,9 +22,9 @@ from app.api.deps import get_caller_employee, RoleChecker
 from app.core.encryption import decrypt, encrypt
 from app.database import get_db
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.trainee_credentials import TraineeCredentials
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 router = APIRouter(
     prefix="/trainee-credentials",
@@ -142,7 +142,10 @@ def send_credentials(
         )
         db.add(row)
 
-    notification = Notification(
+    # ADR-487 D2. GATE in the registry (D8): they cannot use the app without the
+    # credentials, so there is nothing to work around the modal for.
+    notification = write_notification(
+        db,
         company_id=trainee.company_id,
         employee_id=trainee_id,
         type="credentials_sent",

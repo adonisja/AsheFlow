@@ -30,11 +30,11 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.truck_transfer import TruckTransfer
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -313,8 +313,10 @@ def create_transfers(
             existing_to.status = "active"
             existing_to.departed_at = None
 
-        # Notification
-        db.add(Notification(
+        # ADR-487 D2. The registry routes this TICKER + PUSH + DISCORD: the
+        # person moved must find out, and nothing is waiting on them.
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=eid,
             type="truck_transfer",
@@ -322,7 +324,7 @@ def create_transfers(
                 f"You've been transferred from {from_truck.name} to {to_truck.name} for today. "
                 f"Check your Discord for your updated channel."
             ),
-        ))
+        )
 
         db.flush()  # give transfer an id before building the response
 

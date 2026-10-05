@@ -143,6 +143,31 @@ class TestTheMigrationCannotStallSilently:
             f"{remaining}"
         )
 
+    def test_every_app_module_still_parses(self):
+        """A migration that leaves a stray paren is a syntax error, and the AST
+        walk above silently SKIPS a file it cannot parse.
+
+        That is the dangerous combination: `truck_transfers.py` was migrated by
+        replacing `db.add(Notification(` with `write_notification(` and the
+        wrapper's closing `))` survived. The file stopped parsing, so
+        `_direct_construction_sites` skipped it — the remaining-site count went
+        DOWN and the ratchet was satisfied, by a broken file.
+
+        Checked here rather than left to collection errors, because the walk's
+        `except SyntaxError: continue` is what makes the failure quiet.
+        """
+        import ast
+
+        broken: list[str] = []
+        for path in APP.rglob("*.py"):
+            try:
+                ast.parse(path.read_text())
+            except SyntaxError as e:
+                broken.append(f"{path.relative_to(APP)}:{e.lineno} {e.msg}")
+            except UnicodeDecodeError:
+                pass
+        assert not broken, f"modules that do not parse: {broken}"
+
     def test_the_site_walk_actually_finds_something(self):
         """Guard against the count going to zero because the walk broke.
 
