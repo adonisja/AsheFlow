@@ -81,6 +81,27 @@ class ToteAddress(Base):
     first_cross_street  = Column(String(120), nullable=True)
     second_cross_street = Column(String(120), nullable=True)
 
+    # ADR-408 D2. The LION segment this address sits on.
+    #
+    # `resolve_address` has always COMPUTED this and the write site always threw
+    # it away, because there was no column to put it in. That single missing
+    # column was the whole reason workforce mode sorted on a graph with no
+    # cost-1 edges: with no segment id stored, the adapter could not pass one,
+    # so `load_node_adjacency` had nothing to look up and the shared-LION-node
+    # topology — 100% populated on the field that matters — went unread.
+    #
+    # Nullable, and null is ordinary: GeoClient answers for most addresses and
+    # not all, exactly as `block_key` is null when the address did not parse. A
+    # tote with no segment still sorts; it falls back to the block-key edges the
+    # graph builds today, which is current behaviour and not a regression.
+    #
+    # String(32) to match StreetSegment.segment_id. Deliberately NOT a foreign
+    # key: StreetSegment is a global, tenant-independent library (ADR-236) that
+    # is populated lazily by sorts, so an address can legitimately resolve to a
+    # segment no row has been written for yet. An FK would reject the entry and
+    # lose the tote — the same reasoning that keeps bag_id off BTRBag.
+    segment_id = Column(String(32), nullable=True, index=True)
+
     # Ties break by first-entered so a re-sort is stable (ADR-291 D2). Assigned
     # server-side, never client-supplied.
     # ADR-403 D1a. How many packages in this tote go to THIS address.
