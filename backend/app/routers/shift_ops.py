@@ -11,7 +11,6 @@ from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privil
 from app.models.employee import Employee
 from app.models.field_ops import Departure
 from app.models.shift_roll_call import ShiftRollCall
-from app.models.notification import Notification
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.crew_compliance import CrewCompliance
@@ -25,6 +24,7 @@ from app.schemas.shift_ops import (
     RTSReportCreate, RTSReportReview, RTSReportResponse,
     StationHandoffCreate, StationHandoffResponse,
 )
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/shift-ops", tags=["shift-ops"])
 
@@ -449,18 +449,17 @@ def submit_driver_check_in(
             Employee.is_active == True,
         ).all():
             fails = roster_summary["compliance_fails"]
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=caller.company_id,
                 employee_id=recipient.id,
                 type="crew_roster_submitted",
-                message=(
-                    f"📋 {caller.name}'s crew roster is in — {roster_summary['present']} present, "
+                message=f"📋 {caller.name}'s crew roster is in — {roster_summary['present']} present, "
                     f"{roster_summary['ncns']} NCNS"
                     + (f", ⚠ {fails} uniform/cart-cover fail(s)" if fails else ", all compliant")
-                    + f" ({payload.date})."
-                ),
+                    + f" ({payload.date}).",
                 dispatch_date=payload.date,
-            ))
+            )
 
     # ADR-215: push a "Request help" to dispatch on submit (the badge on the
     # dashboard only surfaced if someone was looking). Fire on every submitted
@@ -473,16 +472,15 @@ def submit_driver_check_in(
             Employee.is_active == True,
         ).all()
         for recipient in dispatch_recipients:
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=caller.company_id,
                 employee_id=recipient.id,
                 type="driver_help_requested",
-                message=(
-                    f"🆘 {caller.name} requested help at check-in #{payload.check_in_number} "
-                    f"for {payload.date} — {payload.routes_remaining} route(s) remaining."
-                ),
+                message=f"🆘 {caller.name} requested help at check-in #{payload.check_in_number} "
+                    f"for {payload.date} — {payload.routes_remaining} route(s) remaining.",
                 dispatch_date=payload.date,
-            ))
+            )
 
     db.commit()
     db.refresh(row)
@@ -614,16 +612,15 @@ def submit_rts_report(
     ).all()
     rts_summary = f"{total_rts} package(s)" if total_rts else "no undelivered packages"
     for recipient in dispatch_recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=recipient.id,
             type="rts_submitted",
-            message=(
-                f"{caller.name} submitted an RTS report for {payload.date} "
+            message=f"{caller.name} submitted an RTS report for {payload.date} "
                 f"({rts_summary}). Crew confirmed: {'yes' if payload.crew_confirmed else 'no'}. "
-                f"Awaiting your approval to release the driver."
-            ),
-        ))
+                f"Awaiting your approval to release the driver.",
+        )
 
     db.commit()
     db.refresh(row)
@@ -692,12 +689,13 @@ def review_rts_report(
                 f"Your RTS report for {target_date} was not approved.{notes_suffix} "
                 f"Contact dispatch for further instructions."
             )
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=driver.id,
             type=f"rts_{payload.status}",
             message=driver_message,
-        ))
+        )
 
     # On approval (return confirmed), auto-close the day for any crew still on the
     # truck who were never marked off — the run is over, so still-active members

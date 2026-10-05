@@ -73,7 +73,14 @@ def _literal_types_in_source() -> set[str]:
 
 
 def _dynamic_type_sites() -> list[str]:
-    """Sites passing `type=` as anything other than a literal."""
+    """Sites passing `type=` as anything other than a literal.
+
+    Counts BOTH call forms. A first version looked only for `Notification(`,
+    and the D2 migration then made it fail — not because dynamic sites went
+    away, but because they moved to `write_notification(`. The property this
+    test protects is "there exist types a source walk cannot resolve", which is
+    independent of which function receives them.
+    """
     sites: list[str] = []
     for path in APP.rglob("*.py"):
         try:
@@ -81,9 +88,10 @@ def _dynamic_type_sites() -> list[str]:
         except (SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "Notification"):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func.id if isinstance(node.func, ast.Name) else None
+            if fn not in ("Notification", "write_notification", "fan_out"):
                 continue
             for kw in node.keywords:
                 if kw.arg == "type" and not isinstance(kw.value, ast.Constant):

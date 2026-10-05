@@ -7,9 +7,9 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_off_day import EmployeeOffDay
-from app.models.notification import Notification
 from app.schemas.employee_off_day import EmployeeOffDayCreate, EmployeeOffDayResponse
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/employee-off-days", tags=["employee-off-days"])
 allow_mgmt       = RoleChecker(["management", "admin", "dispatch"])
@@ -159,12 +159,13 @@ def approve_employee_off_day(
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
     off_day.status = "approved"
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=off_day.employee_id,
         type="offday_approved",
         message=f"Your request to have {off_day.day_of_week}s off has been approved.",
-    ))
+    )
     write_audit(
         db,
         action_type="off_day.approved",
@@ -196,12 +197,13 @@ def reject_employee_off_day(
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
     off_day.status = "rejected"
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=off_day.employee_id,
         type="offday_rejected",
         message=f"Your request to have {off_day.day_of_week}s off was not approved.",
-    ))
+    )
     write_audit(
         db,
         action_type="off_day.rejected",

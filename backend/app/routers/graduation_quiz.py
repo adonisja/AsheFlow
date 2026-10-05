@@ -21,10 +21,10 @@ from app.api.deps import get_caller_employee, RoleChecker, require_configured
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.graduation_quiz import GraduationQuiz, GraduationQuizResponse, GraduationQuizTemplate
-from app.models.notification import Notification
 from app.models.training import TrainingRecord
 from app.services.generate_quiz_remediation import generate_quiz_remediation
 from app.services.score_graduation_quiz import apply_manager_review, score_graduation_quiz
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/graduation-quiz", tags=["graduation-quiz"])
 
@@ -185,15 +185,14 @@ def issue_quiz(
         ))
 
     # Notify the trainee in-app
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=trainee_id,
         type="quiz_issued",
-        message=(
-            "Your graduation quiz is ready. Open AsheFlow to complete it. "
-            "Submit your answers before the end of your shift today."
-        ),
-    ))
+        message="Your graduation quiz is ready. Open AsheFlow to complete it. "
+            "Submit your answers before the end of your shift today.",
+    )
 
     db.commit()
     return {"status": "issued", "quiz_id": str(quiz.id), "attempt_number": attempt_number}
@@ -290,12 +289,13 @@ def submit_quiz(
         f"Please review and confirm the final result."
     )
     for recipient in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=recipient.id,
             type="quiz_submitted",
             message=mgmt_message,
-        ))
+        )
 
     # Notify the paired trainer (confirmation only — no score details)
     if quiz.training_record_id:
@@ -303,12 +303,20 @@ def submit_quiz(
         if record and record.trainer_id:
             trainer_already_notified = any(r.id == record.trainer_id for r in recipients)
             if not trainer_already_notified:
-                db.add(Notification(
+                # ADR-487 D11a. A DIFFERENT type from the management copy above,
+                # which carries the score and asks for a decision. This one is
+                # confirmation only — the "no score details" the comment above
+                # already promised. Under one type the trainer would inherit
+                # management's ACTION severity and its push, for a decision they
+                # do not make, so the score-withholding is a registry property
+                # rather than a branch.
+                write_notification(
+                    db,
                     company_id=caller.company_id,
                     employee_id=record.trainer_id,
-                    type="quiz_submitted",
+                    type="quiz_submitted_trainer",
                     message=f"{caller.name} has submitted their graduation quiz (attempt {quiz.attempt_number}).",
-                ))
+                )
 
     db.commit()
     return {
@@ -429,12 +437,13 @@ def review_quiz(
                 "You have been referred for additional training on the topics that need improvement. "
                 "You will be scheduled with a trainer on your next dispatch day."
             )
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=quiz.trainee_id,
             type="quiz_result_confirmed",
             message=trainee_msg,
-        ))
+        )
 
     db.commit()
 

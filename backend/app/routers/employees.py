@@ -23,7 +23,6 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
-from app.models.notification import Notification
 from app.schemas.employee import (
     _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse,
     EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse,
@@ -39,6 +38,7 @@ from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
     IDENTITY_REVOCATION_FAILED, IDENTITY_REVOCATION_MESSAGE,
 )
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -1709,16 +1709,15 @@ def _apply_role_transition(
                         )
 
     verb = "promoted" if is_promotion else "changed"
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=db_employee.company_id,
         employee_id=db_employee.id,
         type="role_change",
-        message=(
-            f"Congratulations! You have been promoted from {old_role} to {new_role} by {caller.name}."
+        message=f"Congratulations! You have been promoted from {old_role} to {new_role} by {caller.name}."
             if is_promotion
-            else f"Your role has been updated from {old_role} to {new_role} by {caller.name}."
-        ),
-    ))
+            else f"Your role has been updated from {old_role} to {new_role} by {caller.name}.",
+    )
     write_audit(
         db,
         actor_id=str(caller.id),

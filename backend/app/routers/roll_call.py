@@ -27,7 +27,6 @@ from app.models.assignment_member import AssignmentMember
 from app.models.shift_roll_call import ShiftRollCall
 from app.models.truck import Truck
 from app.models.training import TrainingRecord
-from app.models.notification import Notification
 from app.models.company import CompanyConfig, Company
 from app.schemas.roll_call import (
     RollCallCreate, RollCallOverride, RollCallResponse, RollCallSummaryEntry,
@@ -35,6 +34,7 @@ from app.schemas.roll_call import (
 from app.services.audit import write_audit
 from app.services.local_date import company_tz
 from app.services.constants import ROLE_DRIVER, ROLE_TRAINER, ROLE_TRAINEE, OVERSIGHT_ROLES
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -337,16 +337,15 @@ def _apply_ncns_side_effects(db: Session, trainee: Employee, target_date: date, 
         .all()
     )
     for staff in oversight:
-        db.add(Notification(
+        write_notification(
+            db,
             employee_id=staff.id,
             company_id=company_id,
             type="trainee_ncns",
-            message=(
-                f"⚠️ **Trainee NCNS:** {trainee.name} did not show up for {target_date}. "
-                f"Training record locked. Trainer freed from pairing duty."
-            ),
+            message=f"⚠️ **Trainee NCNS:** {trainee.name} did not show up for {target_date}. "
+                f"Training record locked. Trainer freed from pairing duty.",
             dispatch_date=target_date,
-        ))
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -837,15 +836,14 @@ def confirm_ap_arrival(
 
     trainer_notified = False
     if member.role == "trainee" and member.paired_trainer_id:
-        db.add(Notification(
+        write_notification(
+            db,
             employee_id=member.paired_trainer_id,
             company_id=caller.company_id,
             type="trainee_arrived",
-            message=(
-                f"\U0001F4CD {caller.name} confirmed arrival at the anchor point — "
-                f"open AP Sort to run the paired rebalance."
-            ),
-        ))
+            message=f"\U0001F4CD {caller.name} confirmed arrival at the anchor point — "
+                f"open AP Sort to run the paired rebalance.",
+        )
         trainer_notified = True
 
     db.flush()

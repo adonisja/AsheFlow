@@ -1295,6 +1295,7 @@ from app.routers.company_zones import (  # noqa: E402
     upsert_company_zone_from_intersections as _cz_ix,
     upsert_company_zone_from_corners as _cz_corners,
 )
+from app.services.notify import write_notification
 
 
 @router.get("/company-zone", response_model=Optional[_ZoneOut], deprecated=True)
@@ -2700,13 +2701,14 @@ def confirm_load(
         _Emp.role.in_(list(OVERSIGHT_ROLES)),
         _Emp.is_active.is_(True),
     ).all():
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=peer.id,
             type="load_confirmed",
             dispatch_date=sort_date,
             message=f"{caller.name} confirmed loading for {truck_label}{short_note}.",
-        ))
+        )
     db.commit()
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
 
@@ -2780,13 +2782,14 @@ def unconfirm_load(
         _Emp.role.in_(list(OVERSIGHT_ROLES)),
         _Emp.is_active.is_(True),
     ).all():
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=peer.id,
-            type="load_confirmed",  # same channel — dispatch panel refetches on it
+            type="load_confirmed",
             dispatch_date=sort_date,
             message=f"{caller.name} reopened loading for {truck_label}.",
-        ))
+        )
     db.commit()
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
 
@@ -3000,13 +3003,14 @@ def add_freight(
             _Emp.role.in_(list(OVERSIGHT_ROLES)),
             _Emp.is_active.is_(True),
         ).all():
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=caller.company_id,
                 employee_id=peer.id,
                 type="load_confirmed",
                 dispatch_date=sort_date,
                 message=f"{caller.name} added {added} item(s) to {labels}.",
-            ))
+            )
         db.commit()
 
     base = get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)

@@ -1423,12 +1423,13 @@ def _notify_mode_change(
         .all()
     )
     for emp in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=company_id,
             employee_id=emp.id,
             type="operating_mode_change",
             message=message,
-        ))
+        )
     return len(recipients)
 
 
@@ -1659,6 +1660,7 @@ def _list_deadlines(db: Session, company_id: UUID) -> list[CheckInDeadline]:
 
 
 from app.models.metric_target import CompanyMetricTarget
+from app.services.notify import write_notification
 
 # ---------------------------------------------------------------------------
 # Scorecard metric targets (ADR-473 D6)
