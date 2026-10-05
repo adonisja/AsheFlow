@@ -6,15 +6,12 @@ PATCH /roll-call/{id}             — dispatch/admin override
 GET   /roll-call/my-truck/{date}  — own-truck view (driver, trainer)
 GET   /roll-call/summary/{date}   — full-date view (dispatch, mgmt, admin)
 """
-import os
-import threading
 import logging
 from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
@@ -35,6 +32,7 @@ from app.services.audit import write_audit
 from app.services.local_date import company_tz
 from app.services.constants import ROLE_DRIVER, ROLE_TRAINER, ROLE_TRAINEE, OVERSIGHT_ROLES
 from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 logger = logging.getLogger(__name__)
 
@@ -243,21 +241,17 @@ def _get_caller_truck_assignment(db: Session, caller: Employee, target_date: dat
 
 def _fire_revoke_member(discord_id: str, channel_id: str, company_id: str) -> None:
     """Fire-and-forget: ask bot to revoke a member's truck channel access."""
-    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-    secret  = os.environ.get("INTERNAL_SECRET", "")
-
-    def _run():
-        try:
-            http_requests.post(
-                f"{bot_url}/internal/revoke-member",
-                json={"discord_id": discord_id, "channel_id": channel_id, "company_id": company_id},
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("revoke-member webhook failed discord_id=%s: %s", discord_id, exc)
-
-    threading.Thread(target=_run, daemon=True).start()
+    # ADR-487 D7: a Celery task, not a daemon thread — retry, backoff and
+    # response classification live there.
+    #
+    # An access change, not a notification: a silently-failed revoke leaves a
+    # removed crew member reading a truck channel, so a terminal failure
+    # records an audit row rather than a delivery_failed_at.
+    send_discord.delay(
+        "revoke-member",
+        {"discord_id": discord_id, "channel_id": channel_id, "company_id": company_id},
+        company_id=str(company_id),
+    )
 
 
 def _apply_ncns_side_effects(db: Session, trainee: Employee, target_date: date, company_id, caller_company_id) -> None:

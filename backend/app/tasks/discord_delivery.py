@@ -90,7 +90,16 @@ KINDS: frozenset[str] = frozenset({
     "revoke-member",       # remove channel access
     "role-sync",           # reconcile a member's Discord roles
     "invite",              # fetch an invite link for a new employee
+    "alert",               # an operational alert posted to the company channel
 })
+
+# An access change, not a message. A silently-failed revoke leaves someone with
+# channel access they should not have, and a silently-failed role-sync leaves a
+# trainer without the role that gates their Discord commands — neither has a
+# Notification behind it, so neither can record a `delivery_failed_at`. They get
+# an audit row instead: the place a person already looks when asking "why does
+# this member still see the channel?".
+_ACCESS_KINDS: frozenset[str] = frozenset({"revoke-member", "role-sync"})
 
 # Terminal statuses, and what each means. A status NOT in here is retried.
 _TERMINAL: dict[int, str] = {
@@ -171,7 +180,10 @@ def send_discord(
 
     if resp.status_code in _TERMINAL:
         reason = _TERMINAL[resp.status_code]
-        _record_terminal_failure(notification_id, reason)
+        if kind in _ACCESS_KINDS:
+            _record_access_failure(kind, payload, company_id, reason)
+        else:
+            _record_terminal_failure(notification_id, reason)
         if resp.status_code == 403:
             # Only a super admin can rotate the token, and they have no Employee
             # row so a Notification cannot reach them (ADR-324 D2).
@@ -257,6 +269,57 @@ def _record_terminal_failure(notification_id: str | None, reason: str) -> None:
     except Exception:
         logger.warning("could not record delivery failure for %s", notification_id,
                        exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _record_access_failure(
+    kind: str,
+    payload: dict[str, Any],
+    company_id: str | None,
+    reason: str,
+) -> None:
+    """A failed access change is a security finding, not a missed message.
+
+    `revoke-member` and `role-sync` have no Notification behind them, so there
+    is no `delivery_failed_at` to stamp. The consequence of losing one is also
+    different in kind: a revoke that silently failed leaves a removed crew
+    member reading a truck channel, which is exactly the question an audit log
+    is read to answer.
+
+    Best effort, and deliberately so — raising here would retry a send the bot
+    has already refused, and five more refusals do not produce the row.
+    """
+    if company_id is None:
+        # No tenant to attribute it to. The warning is all there is, and an
+        # audit row with a NULL company_id is invisible to every tenant query.
+        logger.warning("discord %s refused (%s) with no company_id to audit",
+                       kind, reason)
+        return
+    db = SessionLocal()
+    try:
+        from app.services.audit import write_audit
+
+        write_audit(
+            db,
+            company_id=company_id,
+            action_type=f"discord.{kind.replace('-', '_')}.failed",
+            target_table="employees",
+            # The Discord snowflake is the only handle the task carries — it is
+            # what the payload addresses, and resolving it to an employee_id
+            # would mean a second query for a row nobody disputes.
+            target_id=str(payload.get("discord_id") or "unknown"),
+            detail={
+                "kind": kind,
+                "reason": reason,
+                "channel_id": str(payload.get("channel_id") or ""),
+                "action": str(payload.get("action") or ""),
+            },
+        )
+        db.commit()
+    except Exception:
+        logger.warning("could not audit the failed discord %s", kind, exc_info=True)
         db.rollback()
     finally:
         db.close()

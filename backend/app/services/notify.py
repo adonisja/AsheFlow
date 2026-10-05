@@ -101,6 +101,28 @@ class Audience:
     ADMIN_ONLY = ("admin",)                     # admins alone — see below
 
 
+def _as_uuid(value: UUID | str | None) -> UUID | None:
+    """Coerce an id to UUID, because the columns are UUID() and a str is not one.
+
+    `write_notification` has always declared `company_id: UUID | str` and
+    `employee_id: UUID | str`, and the `| str` half was never true: both columns
+    are `UUID()`, so a raw string reaches SQLAlchemy's type binding and raises
+    `AttributeError: 'str' object has no attribute 'hex'` on flush. No live
+    caller passes one — every site hands over an ORM attribute or a path
+    parameter FastAPI has already parsed — so this was latent rather than
+    broken, and it surfaced only when a test took the signature at its word.
+
+    Coercing rather than narrowing the annotation to `UUID`: the looser type has
+    shipped, and making a documented-as-accepted input start raising is a worse
+    outcome than accepting it properly. A malformed string still raises
+    ValueError here, at the call site, instead of as an opaque
+    `'str' has no attribute 'hex'` from inside a flush.
+    """
+    if value is None or isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
 def write_notification(
     db: Session,
     *,
@@ -123,6 +145,8 @@ def write_notification(
     """
     spec = _resolve_raisable(type)
     _require_tenant(type, company_id)
+    company_id = _as_uuid(company_id)
+    employee_id = _as_uuid(employee_id)
     notif = Notification(
         _via_helper=True,
         company_id=company_id,
@@ -133,7 +157,8 @@ def write_notification(
         expires_at=expires_at,
     )
     db.add(notif)
-    _record_intent(db, spec, notif)
+    _record_intent(db, spec, notif,
+                   discord_ids=_resolve_discord_ids(db, spec, company_id, [employee_id]))
     return notif
 
 
@@ -168,6 +193,7 @@ def fan_out(
     """
     spec = _resolve_raisable(type)
     _require_tenant(type, company_id)
+    company_id = _as_uuid(company_id)
     recipients = (
         db.query(Employee)
         .filter(
@@ -177,10 +203,20 @@ def fan_out(
         )
         .all()
     )
-    skip = exclude or set()
+    # Normalised to str, like the discord_ids keys below and for the same
+    # reason: `exclude: set` says nothing about its ELEMENT type, and `emp.id`
+    # is always a UUID. A caller passing a set of strings would match nothing
+    # and exclude nobody — and the failure is both silent AND inverted: the
+    # person the caller meant to spare receives the notification anyway.
+    #
+    # Worse than the discord_ids miss, which merely skipped a convenience
+    # channel. No live caller passes `exclude` yet; the ADR names
+    # graduation_quiz.py's hand-rolled `trainer_already_notified` check as the
+    # case it exists for, so one is coming.
+    skip = {str(x) for x in (exclude or set())}
     out: list[Notification] = []
     for emp in recipients:
-        if emp.id in skip:
+        if str(emp.id) in skip:
             continue
         notif = Notification(
             _via_helper=True,
@@ -195,8 +231,55 @@ def fan_out(
         out.append(notif)
 
     if out:
-        _record_intent(db, spec, *out)
+        # The recipients are already loaded, so discord_id costs nothing extra.
+        # Scoped by construction: the query above filtered on company_id.
+        _record_intent(
+            db, spec, *out,
+            discord_ids={
+                str(e.id): d for e in recipients
+                if (d := getattr(e, "discord_id", None))
+            },
+        )
     return out
+
+
+def _resolve_discord_ids(db: Session, spec: Spec, company_id, employee_ids: list) -> dict:
+    """Map employee_id -> discord_id for a DISCORD-channel notification.
+
+    Scoped by company_id (Dimension 1) even though `write_notification`'s caller
+    has almost certainly passed one of its own employees. `employee_id` is a
+    PARAMETER, so "the caller passed its own" is an assumption about every
+    present and future caller, not a property of this function — and the value
+    being resolved is a Discord address, so an unscoped match would DM a
+    stranger in another tenant. That is a cross-tenant leak that leaves the
+    building, not merely an over-broad read.
+
+    `db.query(Employee)` rather than `db.query(Employee.id, Employee.discord_id)`
+    deliberately: 60 tests in this suite stub `db.query` with a single-positional
+    double (`def _query(model)`), the established idiom here, and a two-column
+    query raises TypeError inside them. A whole-entity query is also what
+    `fan_out` issues, so both paths exercise one shape.
+    """
+    if Channel.DISCORD not in spec.channels or not employee_ids:
+        return {}
+    rows = (
+        db.query(Employee)
+        .filter(Employee.id.in_(employee_ids), Employee.company_id == company_id)
+        .all()
+    )
+    # getattr, not `e.discord_id`: the column is nullable on a real Employee, and
+    # an absent attribute and a NULL value mean the same thing here — "no Discord
+    # address", which is a skip rather than an error. It also keeps the helper
+    # tolerant of the suite's lightweight recipient doubles, which set only the
+    # fields the test under them cares about.
+    #
+    # Keyed by str(e.id), not e.id. `write_notification` declares
+    # `employee_id: UUID | str`; before `_as_uuid` it passed the value straight
+    # through, so a caller handing it a string looked up a UUID-keyed dict with
+    # a string and got None — a SILENTLY SKIPPED Discord send, not an error.
+    # `_as_uuid` now closes that at the entry points, and this keeps the two
+    # sides agreeing on one type regardless, because the miss is silent.
+    return {str(e.id): d for e in rows if (d := getattr(e, "discord_id", None))}
 
 
 def _require_tenant(notification_type: str, company_id) -> None:
@@ -271,6 +354,11 @@ class _Dispatch:
     notification_id: str
     company_id: str
     employee_id: str
+    # Captured HERE rather than looked up in the hook, because after_commit must
+    # not emit SQL (property 3). Nullable on Employee — a walker who never
+    # linked Discord has none — so None means "no Discord delivery", not
+    # "resolve it later".
+    discord_id: str | None
     type: str
     message: str
     severity: Severity
@@ -287,12 +375,23 @@ def _pending(session: Session) -> list[_Dispatch]:
     return session.info.setdefault(_PENDING_KEY, [])
 
 
-def _record_intent(db: Session, spec: Spec, *notifications: Notification) -> None:
+def _record_intent(
+    db: Session,
+    spec: Spec,
+    *notifications: Notification,
+    discord_ids: dict | None = None,
+) -> None:
     """Record what to deliver. Sends nothing.
 
     Called with every row from one fan_out so the batch arrives as one unit —
     which is what makes "one Discord post per event" possible instead of one per
     recipient.
+
+    `discord_ids` maps employee_id -> discord_id. It is PASSED IN rather than
+    looked up here because `fan_out` has already loaded the full `Employee` rows
+    and has the column for free — querying again would be N+1 against data in
+    hand. `write_notification`, which receives a bare `employee_id`, resolves
+    its one row itself.
     """
     if not _deliverable(spec.channels):
         # A BANNER-only type is delivered by being read. Recording an intent
@@ -301,11 +400,20 @@ def _record_intent(db: Session, spec: Spec, *notifications: Notification) -> Non
         return
 
     pending = _pending(db)
+    discord_ids = discord_ids or {}
+
     for n in notifications:
         pending.append(_Dispatch(
             notification_id=str(n.id),
             company_id=str(n.company_id),
             employee_id=str(n.employee_id),
+            # str() on both sides, matching how the dict was keyed. With
+            # _as_uuid coercing at both entry points this is now belt-and-braces
+            # rather than load-bearing — but `_record_intent` is reachable from
+            # any future caller, the miss is a SILENT skip rather than an error,
+            # and the normalisation costs nothing. Dropping it would make the
+            # key agreement depend on a coercion two functions away.
+            discord_id=discord_ids.get(str(n.employee_id)),
             type=n.type,
             message=n.message,
             severity=spec.severity,
@@ -369,14 +477,28 @@ def _enqueue(d: _Dispatch) -> None:
     company-local quiet-hours hold. Logging the skip rather than silently
     dropping it means the gap is visible in the one place somebody would look.
     """
-    if Channel.DISCORD in d.channels:
+    if Channel.DISCORD in d.channels and d.discord_id:
+        # The bot's contract is `{"discord_id", "message"}` (bot/main.py:451) —
+        # it 400s on anything else. An earlier version sent `employee_id`, so
+        # every delivery would have been refused — and refused TERMINALLY, since
+        # 400 is in _TERMINAL, stamping a delivery_failed_at that looked like a
+        # bot problem rather than a payload one.
         from app.tasks.discord_delivery import send_discord
 
         send_discord.delay(
             "dm",
-            {"employee_id": d.employee_id, "message": d.message},
+            {"discord_id": d.discord_id, "message": d.message},
             notification_id=d.notification_id,
             company_id=d.company_id,
+        )
+    elif Channel.DISCORD in d.channels:
+        # No linked Discord account. Not a failure: the in-app notification is
+        # the channel of record (ADR-324) and Discord is the convenience
+        # surface. Logged at debug because on a workforce tenant this is the
+        # common case, and a warning per send would be noise.
+        logger.debug(
+            "notification %s has no Discord recipient (employee %s is unlinked)",
+            d.notification_id, d.employee_id,
         )
 
     if Channel.PUSH in d.channels:

@@ -17,8 +17,6 @@ The actual finalization (posting to truck channels, setting permissions) is
 always triggered manually by dispatch via POST /dispatch/{date}/finalize.
 """
 
-import os
-import requests
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
@@ -32,6 +30,7 @@ from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.services.company_config import get_company_config
 from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 
 @celery_app.task(name="app.tasks.dispatch_alerts.alert_finalization_deadline")
@@ -151,20 +150,20 @@ def alert_finalization_deadline() -> dict:
 
 
 def _post_bot_alert(dispatch_date: str, message: str, company_id: str) -> None:
-    """Best-effort POST to the bot's internal alert endpoint.
+    """Hand the channel alert to the Discord task (ADR-487 D7).
 
-    Non-blocking — logged on failure but does not raise so the Celery task
-    doesn't retry on a bot connectivity issue.
+    This was a bare `requests.post` with a 3-second timeout, no response check
+    and no retry — so a bot restart during the alert window silently dropped
+    the alert for every company in that pass. It is the one case in this module
+    where fire-and-forget was genuinely intended (nobody reads the return), so
+    it moves onto the task rather than becoming synchronous: retry, backoff and
+    the 403-to-platform-alert route all come with it.
+
+    Unlike `mfa_deadline_warnings._send_dm`, which stays synchronous because its
+    caller counts what was delivered, nothing here consumes a result.
     """
-    import logging
-    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-    secret  = os.environ.get("INTERNAL_SECRET", "")
-    try:
-        requests.post(
-            f"{bot_url}/internal/alert",
-            json={"date": dispatch_date, "message": message, "company_id": company_id},
-            headers={"X-Internal-Secret": secret},
-            timeout=3,
-        )
-    except Exception as e:
-        logging.getLogger(__name__).warning("Could not reach bot for alert (company %s): %s", company_id, e)
+    send_discord.delay(
+        "alert",
+        {"date": dispatch_date, "message": message, "company_id": company_id},
+        company_id=company_id,
+    )

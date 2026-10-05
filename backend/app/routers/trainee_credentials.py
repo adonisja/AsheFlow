@@ -8,12 +8,9 @@ Endpoints:
 """
 
 import logging
-import os
-import threading
 import uuid
 from uuid import UUID
 
-import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -25,6 +22,7 @@ from app.models.employee import Employee
 from app.models.trainee_credentials import TraineeCredentials
 from app.services.audit import write_audit
 from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 router = APIRouter(
     prefix="/trainee-credentials",
@@ -37,21 +35,10 @@ logger = logging.getLogger(__name__)
 
 
 def _fire_discord_dm(discord_id: str, message: str) -> None:
-    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-    secret  = os.environ.get("INTERNAL_SECRET", "")
-
-    def _run():
-        try:
-            http_requests.post(
-                f"{bot_url}/internal/dm",
-                json={"discord_id": discord_id, "message": message},
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("credentials DM failed for discord_id=%s: %s", discord_id, exc)
-
-    threading.Thread(target=_run, daemon=True).start()
+    # ADR-487 D7: the send is a Celery task, not a daemon thread. Retry,
+    # backoff, jitter and response classification live there; this builds
+    # the payload and hands it over.
+    send_discord.delay("dm", {"discord_id": discord_id, "message": message})
 
 # ORE training link — delivered once in the notification, never persisted.
 _ORE_LINK = (

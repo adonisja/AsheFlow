@@ -14,14 +14,11 @@ Endpoints:
   GET  /truck-transfers/mine?date=   any authenticated employee
 """
 
-import os
-import threading
 import logging
 import uuid
 from datetime import date as date_type, datetime, timezone
 from uuid import UUID
 
-import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -35,6 +32,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.truck_transfer import TruckTransfer
 from app.services.audit import write_audit
 from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +84,6 @@ def _fire_transfer_discord(
     to_truck_name: str,
     transfer_date: str,
 ) -> None:
-    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-    secret  = os.environ.get("INTERNAL_SECRET", "")
-
     payload: dict = {
         "company_id":    company_id,
         "employee_name": employee_name,
@@ -108,18 +103,10 @@ def _fire_transfer_discord(
     if new_channel_id:
         payload["new_channel_id"] = new_channel_id
 
-    def _run():
-        try:
-            http_requests.post(
-                f"{bot_url}/internal/swap",
-                json=payload,
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("transfer discord failed for %s: %s", employee_name, exc)
-
-    threading.Thread(target=_run, daemon=True).start()
+    # ADR-487 D7: a Celery task, not a daemon thread — retry, backoff and
+    # response classification live there. The payload is built above because
+    # the worker has no access to this request's session.
+    send_discord.delay("swap", payload, company_id=str(company_id))
 
 
 # ---------------------------------------------------------------------------

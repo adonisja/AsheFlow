@@ -1,6 +1,4 @@
-import os
 import logging
-import requests
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.models.employee import Employee
@@ -8,6 +6,7 @@ from app.models.graduation_quiz import GraduationQuiz
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord, TrainingTask
 from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 logger = logging.getLogger(__name__)
 
@@ -150,19 +149,6 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
 
 
 def _send_graduation_dm(discord_id: str, message: str) -> None:
-    import threading
-
-    def _fire():
-        bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-        secret = os.environ.get("INTERNAL_SECRET", "")
-        try:
-            requests.post(
-                f"{bot_url}/internal/dm",
-                json={"discord_id": discord_id, "message": message},
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("Graduation DM failed for discord_id=%s: %s", discord_id, exc)
-
-    threading.Thread(target=_fire, daemon=True).start()
+    # ADR-487 D7: a Celery task, not a daemon thread. This one ran inside a
+    # nightly task, where a dropped thread at container stop was invisible.
+    send_discord.delay("dm", {"discord_id": discord_id, "message": message})

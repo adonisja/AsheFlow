@@ -122,7 +122,7 @@ def resweep_undelivered() -> dict:
                 )
                 continue
 
-            _requeue(n, spec)
+            _requeue(db, n, spec)
             requeued += 1
 
         db.commit()
@@ -140,7 +140,7 @@ def resweep_undelivered() -> dict:
         db.close()
 
 
-def _requeue(n: Notification, spec) -> None:
+def _requeue(db, n: Notification, spec) -> None:
     """Hand a lost delivery back to the delivery task.
 
     Deliberately NOT routed through `_enqueue` in `services.notify`: that one
@@ -149,12 +149,31 @@ def _requeue(n: Notification, spec) -> None:
     dataclass from a row to satisfy a signature — the duplication here is four
     lines and the coupling it avoids is worse.
     """
-    if Channel.DISCORD in spec.channels:
-        from app.tasks.discord_delivery import send_discord
+    if Channel.DISCORD not in spec.channels:
+        return
 
-        send_discord.delay(
-            "dm",
-            {"employee_id": str(n.employee_id), "message": n.message},
-            notification_id=str(n.id),
-            company_id=str(n.company_id),
-        )
+    # The bot's contract is {"discord_id", "message"} — it 400s on anything
+    # else. Here the lookup IS legal (a task, not an after_commit hook), so the
+    # sweep resolves it rather than carrying it.
+    from app.models.employee import Employee
+
+    discord_id = (
+        db.query(Employee.discord_id)
+        .filter(Employee.id == n.employee_id,
+                Employee.company_id == n.company_id)
+        .scalar()
+    )
+    if not discord_id:
+        # Unlinked. Stamp it so the sweep stops re-reading a row it can never
+        # deliver — the in-app notification is the channel of record (ADR-324).
+        n.dispatched_at = datetime.now(timezone.utc)
+        return
+
+    from app.tasks.discord_delivery import send_discord
+
+    send_discord.delay(
+        "dm",
+        {"discord_id": discord_id, "message": n.message},
+        notification_id=str(n.id),
+        company_id=str(n.company_id),
+    )
