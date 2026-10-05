@@ -6,7 +6,8 @@ from app.api.deps import RoleChecker, Pagination, get_current_user, get_caller_e
 from app.database import get_db
 from app.models.feedback import Feedback
 from app.models.employee import Employee
-from app.models.notification import Notification
+from app.services.integration_alerts import raise_platform_alert
+from app.services.notify import Audience, fan_out
 from app.schemas.feedback import FeedbackCreate, FeedbackResponse, FeedbackStatusUpdate
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
@@ -51,18 +52,33 @@ def create_feedback(
         f"{type_label} submitted by {sender_name}: "
         f"{feedback.message[:120]}{'…' if len(feedback.message) > 120 else ''}"
     )
-    admins = db.query(Employee).filter(
-        Employee.role == "admin",
-        Employee.is_active == True,
-        *([Employee.company_id == company_id] if company_id else []),
-    ).all()
-    for admin in admins:
-        db.add(Notification(
+    # ADR-487 D2. Two destinations, because a tenant-less submitter is a
+    # different KIND of thing, not a notification with a missing field.
+    #
+    # A super admin has no Employee row (ADR-324 D2), so `company_id` is None
+    # here — and the previous version let that reach the insert: the admin query
+    # dropped its company filter, fanned out across EVERY tenant, and then every
+    # row failed `Notification.company_id` NOT NULL. A 500, after the Feedback
+    # row had already been added, on a path no test covered.
+    #
+    # `PlatformAlert.company_id` IS nullable and NULL there means "platform"
+    # (ADR-335, ADR-337 D4), so that is where a tenant-less signal belongs.
+    if company_id is not None:
+        fan_out(
+            db,
             company_id=company_id,
-            employee_id=admin.id,
+            audience=Audience.ADMIN_ONLY,
             type="feedback_submitted",
             message=notif_message,
-        ))
+        )
+    else:
+        raise_platform_alert(
+            db,
+            alert_type="feedback_submitted",
+            company_id=None,
+            message=notif_message,
+            severity="info",
+        )
 
     db.commit()
     db.refresh(db_feedback)

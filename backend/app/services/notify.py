@@ -67,6 +67,13 @@ class Audience:
       MANAGEMENT      excludes dispatch. The payroll and offboarding notices use
                       this, and widening them would be a privacy change.
 
+      ADMIN_ONLY      admins alone. The only member with no constant in
+                      `constants.py`, because it is not an oversight set — it is
+                      the audience for product feedback, which is a message to
+                      whoever runs the tenant rather than to anyone operating
+                      it. Kept narrow deliberately: a bug report is not dispatch
+                      business.
+
     Migrating a site means choosing which one it MEANT — a judgment call per
     site, not a mechanical substitution. The 12 sites that hand-wrote
     `["management", "admin"]` must not silently gain `dispatch` and
@@ -76,6 +83,7 @@ class Audience:
     OVERSIGHT = OVERSIGHT_ROLES                 # mgmt, admin, dispatch, field_supervisor
     STATION_RESOLVE = STATION_RESOLVE_ROLES     # dispatch, management, admin
     MANAGEMENT = MANAGEMENT_ROLES               # management, admin
+    ADMIN_ONLY = ("admin",)                     # admins alone — see below
 
 
 def write_notification(
@@ -99,6 +107,7 @@ def write_notification(
     Does not send. D3's after-commit hook does that.
     """
     spec = _resolve_raisable(type)
+    _require_tenant(type, company_id)
     notif = Notification(
         _via_helper=True,
         company_id=company_id,
@@ -143,6 +152,7 @@ def fan_out(
     hand with a `trainer_already_notified` check.
     """
     spec = _resolve_raisable(type)
+    _require_tenant(type, company_id)
     recipients = (
         db.query(Employee)
         .filter(
@@ -172,6 +182,39 @@ def fan_out(
     if out:
         _record_intent(db, spec, *out)
     return out
+
+
+def _require_tenant(notification_type: str, company_id) -> None:
+    """A notification always belongs to a tenant. Platform-level is a DIFFERENT
+    vocabulary, and the codebase already has it.
+
+    `Notification.company_id` is NOT NULL because a notification addresses an
+    EMPLOYEE, and an employee always belongs to a company. `PlatformAlert.
+    company_id` is nullable, and NULL there MEANS "platform, not a tenant"
+    (ADR-335, ADR-337 D4).
+
+    ADR-324 D2 states the constraint that makes the two irreducible: "a
+    super_admin has no Employee row, so Notification cannot address them at
+    all." So a tenant-less notification is not a notification with a missing
+    field — it is a platform alert wearing the wrong type.
+
+    Refusing here rather than at the insert is the point. `feedback.py` reached
+    the NOT NULL with `company_id=None` whenever a super admin (who has no
+    employee row) submitted feedback: the admin query fanned out across EVERY
+    tenant, and then every insert failed — a 500 raised after the feedback row
+    had already been added. Caught while migrating the first file, with no test
+    covering the path.
+    """
+    if company_id is None:
+        raise ValueError(
+            f"cannot raise {notification_type!r} with no company_id: a "
+            f"Notification addresses an employee, and Notification.company_id "
+            f"is NOT NULL (ADR-487 D2). For a platform-level condition with no "
+            f"tenant, use services.integration_alerts.raise_platform_alert, "
+            f"whose company_id is nullable and where NULL means 'platform' "
+            f"(ADR-335). A super admin has no Employee row and cannot be "
+            f"addressed by a Notification at all (ADR-324 D2)."
+        )
 
 
 def _resolve_raisable(notification_type: str) -> Spec:
