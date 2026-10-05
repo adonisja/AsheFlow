@@ -114,6 +114,16 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.enrich_geometry.enrich_place_geometry",
         "schedule": crontab(hour=4, minute=30),
     },
+    # Every 10 min — re-enqueues notification deliveries whose .delay() was
+    # lost (broker restart, worker killed between the commit and the enqueue).
+    # ADR-487 D3: the safety net, not the mechanism — after_commit does the
+    # work, and this only bounds how long an undelivered URGENT push stays
+    # invisible. A */10 sweep is a recurring tick, not a start time, so it does
+    # not contend for a minute with anything (check_beat_collisions.py).
+    "notification-delivery-sweep": {
+        "task": "app.tasks.notification_sweep.resweep_undelivered",
+        "schedule": crontab(minute="*/10"),
+    },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
         "schedule": crontab(minute="*/10"),

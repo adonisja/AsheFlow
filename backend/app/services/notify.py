@@ -36,9 +36,12 @@ helper called `db.rollback()` in between.
 """
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
@@ -48,7 +51,19 @@ from app.services.constants import (
     OVERSIGHT_ROLES,
     STATION_RESOLVE_ROLES,
 )
-from app.services.notification_spec import Spec, is_raisable, resolve_spec
+from app.services.notification_spec import (
+    Channel,
+    Severity,
+    Spec,
+    is_raisable,
+    resolve_spec,
+)
+
+logger = logging.getLogger(__name__)
+
+# Key under which a session's pending deliveries live. Namespaced because
+# `session.info` is shared with anything else that wants per-session state.
+_PENDING_KEY = "adr487_pending_notification_dispatches"
 
 
 class Audience:
@@ -234,13 +249,140 @@ def _resolve_raisable(notification_type: str) -> Spec:
     return spec
 
 
-def _record_intent(db: Session, spec: Spec, *notifications: Notification) -> None:
-    """Record what to deliver, for the after-commit hook to pick up (D3).
+# ── Delivery, after the transaction commits (ADR-487 D3) ─────────────────────
+#
+# These functions only touch the session. The sends happen on `after_commit`,
+# because ADR-324 found BOTH halves of getting this wrong:
+#
+#   * a Discord call placed BEFORE the commit took out the in-app notifications
+#     created downstream of it — "a dead secondary channel was taking out the
+#     primary one";
+#   * an alert committed WITH the main transaction was discarded when an
+#     unrelated helper called db.rollback() in between.
+#
+# after_commit cannot send for a row that does not exist, and it cannot be
+# skipped by a rollback. Both failures become unexpressible rather than fixed.
 
-    A no-op until D3 lands. Separated now so the migration does not have to be
-    revisited: every site routed through this module is already recording its
-    intent, and D3 only has to drain the list.
+
+@dataclass(frozen=True)
+class _Dispatch:
+    """One row's delivery intent, recorded before the commit."""
+
+    notification_id: str
+    company_id: str
+    employee_id: str
+    type: str
+    message: str
+    severity: Severity
+    channels: Channel
+
+
+def _pending(session: Session) -> list[_Dispatch]:
+    """The session's pending-delivery list.
+
+    Stored in `session.info`, which SQLAlchemy provides for exactly this and
+    which is discarded with the session — so a request that raises leaves no
+    residue for the next one.
     """
-    # D3: append Dispatch(spec.severity, spec.channels, notif.id) to a
-    # session-scoped pending list, flushed on `after_commit`.
-    return None
+    return session.info.setdefault(_PENDING_KEY, [])
+
+
+def _record_intent(db: Session, spec: Spec, *notifications: Notification) -> None:
+    """Record what to deliver. Sends nothing.
+
+    Called with every row from one fan_out so the batch arrives as one unit —
+    which is what makes "one Discord post per event" possible instead of one per
+    recipient.
+    """
+    if not _deliverable(spec.channels):
+        # A BANNER-only type is delivered by being read. Recording an intent
+        # with nothing to do would mean sweeping rows that were never meant to
+        # be dispatched, and the sweep's whole signal is "dispatched_at is NULL".
+        return
+
+    pending = _pending(db)
+    for n in notifications:
+        pending.append(_Dispatch(
+            notification_id=str(n.id),
+            company_id=str(n.company_id),
+            employee_id=str(n.employee_id),
+            type=n.type,
+            message=n.message,
+            severity=spec.severity,
+            channels=spec.channels,
+        ))
+
+
+def _deliverable(channels: Channel) -> bool:
+    """Does this channel set imply a SEND, as opposed to a render?
+
+    BANNER, TICKER, GATE and PROMPT are all "the client shows it when it reads
+    the row" — there is no server-side delivery. PUSH and DISCORD leave the
+    building.
+    """
+    return bool(channels & (Channel.PUSH | Channel.DISCORD))
+
+
+@event.listens_for(Session, "after_commit")
+def _flush_notification_dispatches(session: Session) -> None:
+    """Enqueue every recorded delivery, once the DB has accepted the rows.
+
+    THREE PROPERTIES THIS RELIES ON, stated because nothing local demonstrated
+    them before this (the only other SQLAlchemy listener in the repo is an
+    Engine-level "connect" hook in one test):
+
+    1. It fires OUTSIDE the transaction, after the commit succeeded. A send
+       cannot be issued for a rolled-back row.
+    2. It fires once per `Session.commit()`, for EVERY commit on that session —
+       hence the clear() below. Without it, a request that commits twice
+       re-sends the first commit's batch.
+    3. It must not emit SQL. Writing here starts a new implicit transaction,
+       which is why the payload carries what the task needs and the task
+       re-reads anything else.
+
+    Never raises. The rows are committed and the operation is complete; an
+    enqueue failure is what the sweep exists to catch, and letting it propagate
+    would turn a delivery problem into a 500 on an operation that succeeded.
+    """
+    pending = session.info.get(_PENDING_KEY)
+    if not pending:
+        return
+    # Clear FIRST. If an enqueue raises, the next commit on this session must
+    # not re-send the batch that partly went out.
+    session.info[_PENDING_KEY] = []
+
+    for d in pending:
+        try:
+            _enqueue(d)
+        except Exception:
+            logger.warning(
+                "could not enqueue delivery for notification %s (type=%s) — the "
+                "row is committed and the sweep will retry it",
+                d.notification_id, d.type, exc_info=True,
+            )
+
+
+def _enqueue(d: _Dispatch) -> None:
+    """Hand one delivery to Celery.
+
+    PUSH is recorded and not yet sent: D5 builds the SNS path and the
+    company-local quiet-hours hold. Logging the skip rather than silently
+    dropping it means the gap is visible in the one place somebody would look.
+    """
+    if Channel.DISCORD in d.channels:
+        from app.tasks.discord_delivery import send_discord
+
+        send_discord.delay(
+            "dm",
+            {"employee_id": d.employee_id, "message": d.message},
+            notification_id=d.notification_id,
+            company_id=d.company_id,
+        )
+
+    if Channel.PUSH in d.channels:
+        # D5. Not built: no device_tokens table, no SNS platform ARNs.
+        logger.info(
+            "push not yet wired for notification %s (type=%s, severity=%s) — "
+            "ADR-487 D5",
+            d.notification_id, d.type, d.severity.value,
+        )

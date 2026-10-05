@@ -34,6 +34,34 @@ class Notification(Base):
     # dispatch_assignment: expires at confirmation deadline; dispatch_assignment_info: expires at midnight of dispatch_date; others: NULL
     expires_at    = Column(DateTime(timezone=True), nullable=True)
 
+    # ── Delivery state (ADR-487 D3) ──────────────────────────────────────────
+    #
+    # The row is the durable record; these say what happened to the SENDS it
+    # implied. They are nullable because the common case is "nothing to send":
+    # a BANNER-only type is delivered by being read, so it is never dispatched.
+    #
+    # dispatched_at — set when the after-commit hook enqueued this row's
+    #   delivery. NULL after the retention window means the enqueue was LOST (a
+    #   broker restart, a worker killed between commit and .delay()), which is
+    #   what the sweep looks for. Same shape as the BuildingProfile `pending`
+    #   sweep whose comment states the rule: "this is the safety net, not the
+    #   mechanism".
+    #
+    # release_at — a held push (D5). Quiet hours mean an ACTION or INFO push
+    #   waits until the company's shift_start, and a Celery `countdown=` of six
+    #   hours lives in the broker and dies with it. A row survives.
+    #
+    # delivery_failed_at / delivery_error — a TERMINAL failure, after retries
+    #   are exhausted or on a response that must not be retried (403 revoked,
+    #   404 recipient gone). ADR-443 exists because a swallowed Discord failure
+    #   left an employee who looked entirely normal and was simply absent, so a
+    #   failure that reaches nobody is the thing being fixed. The error is a
+    #   short classification, never a raw exception string (Dimension 6).
+    dispatched_at      = Column(DateTime(timezone=True), nullable=True, index=True)
+    release_at         = Column(DateTime(timezone=True), nullable=True, index=True)
+    delivery_failed_at = Column(DateTime(timezone=True), nullable=True)
+    delivery_error     = Column(String(80), nullable=True)
+
     def __init__(self, *args, **kwargs):
         """Refuse direct construction (ADR-487 D2).
 
