@@ -17,8 +17,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.platform_alert import PlatformAlert
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -229,13 +229,12 @@ def alert_admins_integration_down(
             if existing is not None:
                 continue
 
-            db.add(
-                Notification(
-                    company_id=company_id,
-                    employee_id=admin.id,
-                    type=notif_type,
-                    message=message,
-                )
+            write_notification(
+                db,
+                company_id=company_id,
+                employee_id=admin.id,
+                type=notif_type,
+                message=message,
             )
             added += 1
 

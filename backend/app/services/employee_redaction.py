@@ -14,6 +14,14 @@ REGISTRY is the single source of truth — every new `_by_name` column MUST be
 added here, or a name escapes redaction (same explicit-list discipline as the
 private-repo sync TESTS list). BuildingProfileLibrary is intentionally EXCLUDED:
 its actor is the platform super-admin, not a tenant employee (ADR-220).
+
+That obligation is ENFORCED, not remembered (ADR-464): between ADR-221 and
+2026-09-27 the schema grew 15 employee-name columns that were never registered,
+and each retained a departed employee's name indefinitely. The existing test
+validated the registry inward (do its entries resolve?) and could not see the
+omission. `tests/services/test_employee_redaction_drift.py` now walks the MODELS
+and fails on any employee-name column that is neither registered nor explicitly
+exempted — add a new column there, or the build breaks.
 """
 from uuid import UUID
 
@@ -22,16 +30,22 @@ from sqlalchemy.orm import Session
 from app.models.anchor_point import AnchorPoint
 from app.models.assignment_change_request import AssignmentChangeRequest
 from app.models.building_profile import BuildingProfile
+from app.models.building_profile_verification import BuildingProfileVerification
+from app.models.collection import CollectionToken
 from app.models.delivery_stop import DeliveryStop
 from app.models.dock_assignment import DockAssignment
 from app.models.incident import Incident
 from app.models.package_manifest import PackageManifest
-from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment
+from app.models.rts import (
+    RTSPackage, MissingPackage, DamagedPackage, RouteHandoff, ReattemptAssignment,
+)
 from app.models.rts_clearance import RTSReport
 from app.models.schedule_change_request import ScheduleChangeRequest
-from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
+from app.models.scorecard_appeal import ScorecardAppeal
+from app.models.tote_address import ToteAddress
+from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval, LoadConfirmation
 from app.models.truck_zone import TruckZone
-from app.models.walker_route import Route, MisroutedPackageFlag
+from app.models.walker_route import Route, MisroutedPackageFlag, LocationDifficultyFlag
 
 REDACTED_NAME = "[former employee]"
 
@@ -71,6 +85,28 @@ REGISTRY: list[tuple[type, str, str]] = [
     (PackageRemoval,          "received_by",           "received_by_name"),
     (TruckZone,               "created_by",            "created_by_name"),
     (MisroutedPackageFlag,    "resolved_by",           "resolved_by_name"),
+
+    # ADR-464 — found by the drift guard (tests/services/test_employee_redaction_drift.py).
+    # Each of these was added after ADR-221 and never registered, so a departed
+    # employee's name persisted in it indefinitely. Ordered by table.
+    (BuildingProfile,            "submitted_by", "submitted_by_name"),
+    (BuildingProfileVerification, "employee_id", "employee_name"),
+    (CollectionToken,            "created_by",   "created_by_name"),
+    (DamagedPackage,             "reported_by",  "reported_by_name"),
+    (DamagedPackage,             "resolved_by",  "resolved_by_name"),
+    (DeliveryStop,               "recorded_by",  "recorded_by_name"),
+    (LoadConfirmation,           "confirmed_by", "confirmed_by_name"),
+    (LocationDifficultyFlag,     "flagged_by",   "flagged_by_name"),
+    (MissingPackage,             "recorded_by",  "recorded_by_name"),
+    (RTSPackage,                 "recorded_by",  "recorded_by_name"),
+    # The appeal is a financial record kept past departure (employee_id is
+    # SET NULL), which is exactly why the NAME must be redacted on schedule —
+    # otherwise the record outlives the FK and the name is all that is left.
+    (ScorecardAppeal,            "employee_id",  "employee_name"),
+    (ScorecardAppeal,            "created_by",   "created_by_name"),
+    (ScorecardAppeal,            "submitted_by", "submitted_by_name"),
+    (ScorecardAppeal,            "resolved_by",  "resolved_by_name"),
+    (ToteAddress,                "entered_by",   "entered_by_name"),
 ]
 REGISTRY = [r for r in REGISTRY if r is not None]
 

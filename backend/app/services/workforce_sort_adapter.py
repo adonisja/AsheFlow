@@ -224,6 +224,13 @@ def build_packages(
                 lng=e.lng,
                 first_cross_street=e.first_cross_street,
                 second_cross_street=e.second_cross_street,
+                # ADR-408 D2. The segment is what makes node-adjacency edges
+                # possible; without it the caller's load_node_adjacency() has
+                # nothing to look up and the sort falls back to block-key edges
+                # alone. Null for rows written before the column existed, and
+                # for addresses GeoClient could not place — both degrade to
+                # exactly the previous behaviour.
+                segment_id=e.segment_id,
                 # ADR-400 A2. `OV_{size}` for an OV, None for a tote.
                 #
                 # This is the whole capacity fix and it needs no new arithmetic:

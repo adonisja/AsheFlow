@@ -113,8 +113,7 @@ from app.models.employee_relationship import EmployeeRelationship
 def _emp(db, company_id, role):
     e = Employee(
         id=_uuid.uuid4(), company_id=company_id, name=f"{role}-{_uuid.uuid4().hex[:6]}",
-        role=role, is_active=True, account_status="active",
-        reset_on_graduation=False, hr_system_id_adp=_uuid.uuid4(),
+        role=role, is_active=True, account_status="active", hr_system_id_adp=_uuid.uuid4(),
         hr_system_id_adp_verified=False,
     )
     db.add(e)

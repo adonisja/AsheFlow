@@ -5,7 +5,6 @@ HOW graduate_eligible_trainees WORKS (summary):
 1. Query all active trainees.
 2. For each trainee, look for a GraduationQuiz row where passed=True
    (most recent manager_reviewed_at wins). If none exists: skip.
-3. If reset_on_graduation=True: delete all TrainingRecord + TrainingTask rows
    and all GraduationQuiz rows for this trainee, emit a reset Notification.
    Role stays 'trainee'.
 4. Otherwise: promote trainee.role → 'walker', emit Notifications to all
@@ -19,7 +18,6 @@ WHAT WE'RE VERIFYING:
 - Trainees with a passed quiz (passed=True) are graduated.
 - Trainees with a failed quiz (passed=False) are not graduated.
 - Graduation promotes role to 'walker' and writes Notification rows.
-- reset_on_graduation=True keeps role as 'trainee', resets training records.
 - Open continuation requests are nullified on graduation.
 - Continuation requests in other states (nullified, rejected) are not touched.
 - Multiple trainees are processed independently in one call.
@@ -254,112 +252,6 @@ class TestNormalGraduation:
 
 
 # ---------------------------------------------------------------------------
-# reset_on_graduation path
-# ---------------------------------------------------------------------------
-
-class TestResetOnGraduation:
-    """
-    Trainees with reset_on_graduation=True should NOT be promoted.
-    Their training records and quiz rows are deleted; they remain 'trainee' for the next cycle.
-    """
-
-    def test_reset_trainee_stays_trainee(self, db):
-        """
-        ASSERT: role remains 'trainee' after a passed quiz when reset_on_graduation=True.
-        """
-        trainee = make_employee(db, role="trainee", name="Timmy Reset")
-        trainee.reset_on_graduation = True
-        db.commit()
-        make_graduation_quiz(db, trainee, passed=True)
-
-        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
-
-        db.refresh(trainee)
-        assert trainee.role == "trainee", "reset_on_graduation trainee must stay 'trainee'"
-
-    def test_reset_deletes_training_records_and_tasks(self, db):
-        """
-        ARRANGE: trainee has a TrainingRecord with 2 TrainingTasks.
-        ASSERT: after reset, both the record and its tasks are deleted.
-
-        WHY: The training injection service checks for an open record to decide
-        what phase to inject next. If the record isn't deleted, the trainee
-        would resume from where they left off rather than starting Phase 1.
-        """
-        trainer = make_employee(db, role="trainer", name="Trainer")
-        trainee = make_employee(db, role="trainee", name="Timmy Reset")
-        trainee.reset_on_graduation = True
-        db.commit()
-        make_graduation_quiz(db, trainee, passed=True)
-
-        record = make_training_record(db, trainee, trainer)
-        make_training_task(db, record)
-        make_training_task(db, record)
-
-        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
-
-        remaining_records = db.query(TrainingRecord).filter(TrainingRecord.trainee_id == trainee.id).all()
-        remaining_tasks   = db.query(TrainingTask).filter(TrainingTask.training_record_id == record.id).all()
-
-        assert remaining_records == [], "TrainingRecords must be deleted on reset"
-        assert remaining_tasks   == [], "TrainingTasks must be deleted on reset"
-
-    def test_reset_deletes_graduation_quiz_rows(self, db):
-        """
-        ASSERT: GraduationQuiz rows are deleted on reset so the next cycle
-        starts clean — without a stale passed=True row triggering graduation again.
-        """
-        trainee = make_employee(db, role="trainee", name="Timmy Reset")
-        trainee.reset_on_graduation = True
-        db.commit()
-        make_graduation_quiz(db, trainee, passed=True)
-
-        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
-
-        remaining = db.query(GraduationQuiz).filter(
-            GraduationQuiz.trainee_id == trainee.id,
-        ).all()
-        assert remaining == [], "GraduationQuiz rows must be deleted on reset"
-
-    def test_reset_emits_reset_notification_not_graduated(self, db):
-        """
-        ASSERT: Notification type is 'trainee_reset', not 'trainee_graduated'.
-        """
-        trainee = make_employee(db, role="trainee", name="Timmy Reset")
-        trainee.reset_on_graduation = True
-        db.commit()
-        make_graduation_quiz(db, trainee, passed=True)
-
-        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
-
-        notifs = db.query(Notification).filter(
-            Notification.employee_id == trainee.id,
-            Notification.type == "trainee_reset",
-        ).all()
-        assert len(notifs) == 1, "trainee_reset Notification should be written"
-
-        graduated_notifs = db.query(Notification).filter(
-            Notification.employee_id == trainee.id,
-            Notification.type == "trainee_graduated",
-        ).all()
-        assert graduated_notifs == [], "trainee_graduated should NOT be written for reset path"
-
-    def test_reset_warning_type_is_trainee_reset(self, db):
-        trainee = make_employee(db, role="trainee", name="Timmy Reset")
-        trainee.reset_on_graduation = True
-        db.commit()
-        make_graduation_quiz(db, trainee, passed=True)
-
-        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
-
-        assert len(warnings) == 1
-        assert warnings[0]["type"] == "trainee_reset"
-
-
-# ---------------------------------------------------------------------------
-# Continuation request nullification
-# ---------------------------------------------------------------------------
-
 class TestContinuationRequests:
     """
     When a trainee graduates (or resets), any open continuation requests

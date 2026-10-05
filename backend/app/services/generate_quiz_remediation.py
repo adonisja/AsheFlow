@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
 from app.models.graduation_quiz import GraduationQuiz
-from app.models.notification import Notification
 from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
+from app.services.notify import write_notification
 
 
 def generate_quiz_remediation(
@@ -90,12 +90,13 @@ def generate_quiz_remediation(
         Employee.company_id == company_id,
     ).all()
     for recipient in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=company_id,
             employee_id=recipient.id,
             type="quiz_remediation_scheduled",
             message=message,
-        ))
+        )
 
     db.flush()
     return remediation

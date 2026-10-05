@@ -40,6 +40,37 @@ from typing import Optional
 # barcode's digit run underneath the label cannot be swallowed as one long TBA.
 _TBA_RE = re.compile(r"\bTBA\d{12,15}\b", re.IGNORECASE)
 
+# The same, tolerant of the character confusions OCR actually makes on the
+# PREFIX. Measured on a real Amazon label photographed in the field: the engine
+# read `TBA326446450396` as `1BA3264464 50396` — the digits were perfect and the
+# strict pattern rejected the whole thing, so a TBA fully present in the image
+# came back "not found".
+#
+# Substitutions cover only the glyph pairs that genuinely collide in this font:
+# T/1/7/I/L, B/8, A/4. The DIGITS stay strict — a wrong digit is a wrong package,
+# and a barcode read (ADR-399 D1) is the tier that exists for certainty.
+_TBA_FUZZY_RE = re.compile(r"\b[T17IL][B8][A4](\d{12,15})\b", re.IGNORECASE)
+_TBM_FUZZY_RE = re.compile(r"\b[T17IL][B8]([MC])(\d{12,15})\b", re.IGNORECASE)
+
+
+def _find_tba(text: str) -> Optional[str]:
+    """Pull a TBA out of a line, tolerating OCR damage to the prefix.
+
+    Whitespace is stripped first: OCR routinely reports "TBA 326446450396" with
+    a gap the printed label does not have.
+    """
+    flat = re.sub(r"\s+", "", text)
+    strict = _TBA_RE.search(flat)
+    if strict:
+        return strict.group(0).upper()
+    m = _TBM_FUZZY_RE.search(flat)
+    if m:
+        return f"TB{m.group(1).upper()}{m.group(2)}"
+    f = _TBA_FUZZY_RE.search(flat)
+    if f:
+        return f"TBA{f.group(1)}"
+    return None
+
 # A street line starts with a house number. Requiring one keeps city/state and
 # the "SHIP TO:" chrome out — those lines have no leading digit.
 _STREET_RE = re.compile(r"^\d+[A-Za-z]?\s+[A-Za-z0-9].*")
@@ -70,8 +101,14 @@ class LabelRead:
         return self.tba is None or self.address_line is None
 
 
+# Leading OCR debris before a house number. Measured: Tesseract returned
+# "~a'] 104 W MEADOW WIND LN" — the address was read perfectly and the street
+# test rejected it only because of four junk characters in front.
+_LEADING_JUNK = re.compile(r"^[^A-Za-z0-9]*[A-Za-z]{0,2}[^A-Za-z0-9]*(?=\d)")
+
+
 def _clean(line: str) -> str:
-    return _NOISE.sub("", line).strip(" ,.")
+    return _LEADING_JUNK.sub("", _NOISE.sub("", line).strip(" ,.")).strip()
 
 
 def parse_label_lines(lines: list[tuple[str, float]]) -> LabelRead:
@@ -92,16 +129,16 @@ def parse_label_lines(lines: list[tuple[str, float]]) -> LabelRead:
     # when the TBA read cleanly.
     field_confs: list[float] = []
     for text, conf in lines:
-        m = _TBA_RE.search(text.replace(" ", ""))
-        if m and read.tba is None:
-            read.tba = m.group(0).upper()
+        found = _find_tba(text)
+        if found and read.tba is None:
+            read.tba = found
             field_confs.append(conf)
             break
 
     street_candidates: list[tuple[str, float]] = []
     for text, conf in lines:
         cleaned = _clean(text)
-        if not cleaned or _TBA_RE.search(cleaned.replace(" ", "")):
+        if not cleaned or _find_tba(cleaned) is not None:
             continue
         if _STREET_RE.match(cleaned):
             street_candidates.append((cleaned, conf))
