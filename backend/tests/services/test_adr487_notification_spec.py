@@ -255,17 +255,36 @@ class TestTheInvariantsTheRegistryExistsForFootnote:
 
 class TestTheCountsMatchTheApprovedRegistry:
     """Pins what was approved after four review passes, so a later edit that
-    changes the shape of the registry has to be deliberate."""
+    changes the shape of the registry has to be deliberate.
+
+    AMENDED 2026-10-05 (ADR-487 D4): 82 -> 85 entries, action 26 -> 29.
+
+    The three additions are a CORRECTION, not a change to what was approved.
+    `discord_integration_failed`, `email_delivery_failed` and
+    `identity_revocation_failed` were already being raised as notifications and
+    were missing from the registry, so `_resolve_raisable` refused all three and
+    the `except Exception` in `alert_admins_integration_down` swallowed the
+    refusal — an integration outage notified nobody and left one log line.
+
+    They escaped the four review passes for a structural reason: the type comes
+    from a KEYWORD-ONLY DEFAULT (`notif_type: str = DISCORD_INTEGRATION_FAILED`)
+    and every call site takes the default, so the literal appears nowhere that a
+    walk over `type=` keyword constants would find it. See
+    tests/services/test_adr487_integration_alert_types.py, which enumerates what
+    can reach write_notification rather than trusting the registry to be
+    complete.
+    """
 
     def test_entry_count(self):
-        assert len(SPEC) == 82
+        assert len(SPEC) == 85
         assert len(RETIRED) == 4
 
     def test_severity_distribution(self):
         counts: dict[str, int] = {}
         for s in SPEC.values():
             counts[s.severity.value] = counts.get(s.severity.value, 0) + 1
-        assert counts == {"urgent": 4, "action": 26, "info": 52}, counts
+        # +3 action: each of the three names something an admin must do by hand.
+        assert counts == {"urgent": 4, "action": 29, "info": 52}, counts
 
     def test_the_four_urgent_types_are_the_approved_ones(self):
         urgent = {t for t, s in SPEC.items() if s.severity is Severity.URGENT}

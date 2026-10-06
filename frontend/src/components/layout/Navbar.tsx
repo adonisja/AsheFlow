@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNotificationContext } from '../../contexts/NotificationContext';
+import type { Notification } from '../../contexts/NotificationContext';
+import { TONE_TEXT } from '../notifications/tone';
 import { NavLink, useNavigate, Link } from 'react-router-dom';
 import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,8 +10,8 @@ import {
 } from '../../config/navConfig';
 import axiosClient from '../../api/axiosClient';
 import {
-  LogOut, Menu, X, Truck, MapPin, AlertTriangle,
-  Bell, CheckCircle2, XCircle, Info, Search, UserCircle2,
+  LogOut, Menu, X, Truck, AlertTriangle,
+  Bell, Info, Search, UserCircle2,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -18,13 +20,33 @@ import Avatar from '../ui/Avatar';
 // Notification bell
 // ---------------------------------------------------------------------------
 
-function notifIcon(type: string) {
-  if (type.endsWith('_approved')) return <CheckCircle2 className="w-3.5 h-3.5 text-success shrink-0 mt-0.5" />;
-  if (type.endsWith('_rejected')) return <XCircle className="w-3.5 h-3.5 text-danger shrink-0 mt-0.5" />;
-  if (type === 'anchor_point_running_late') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
-  if (type.startsWith('anchor_point')) return <MapPin className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
-  if (type === 'timecard_adjustment' && import.meta.env.VITE_ADP_ENABLED === 'true') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
-  if (type.includes('critical') || type.includes('warning')) return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
+/** The server's icon, tinted by the server's tone (ADR-487 D4).
+ *
+ *  This was the FIFTH copy of the same type-string guessing chain — alongside
+ *  NotificationBanner, NotificationsHistory, and mobile's TYPE_META — and all
+ *  five were worded slightly differently, so one notification could render as
+ *  warning here and info two components away.
+ *
+ *  Two branches are not carried over, both dead:
+ *    - `timecard_adjustment && VITE_ADP_ENABLED` — the flag is false in every
+ *      .env, AND that string is never a notification type (every backend
+ *      occurrence is a table name or an audit action_type).
+ *    - `includes('critical')` — the guess that put an URGENT incident in the
+ *      same bucket as a routine notice, which is the gap ADR-487 opens with.
+ *
+ *  The fallback is for the PlatformAlert-vocabulary types that reach this
+ *  dropdown with no SPEC entry (ADR-324 D2 keeps the two apart), and for rows
+ *  predating the registry.
+ */
+function notifIcon(n: Pick<Notification, 'type' | 'icon' | 'tone'>) {
+  if (n.icon) {
+    return (
+      <span aria-hidden="true" className={`shrink-0 mt-0.5 text-sm ${TONE_TEXT[n.tone] ?? TONE_TEXT.neutral}`}>
+        {n.icon}
+      </span>
+    );
+  }
+  if (n.type.endsWith('_failed')) return <AlertTriangle className="w-3.5 h-3.5 text-danger shrink-0 mt-0.5" />;
   return <Info className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
 }
 
@@ -34,7 +56,11 @@ function NotificationDropdown({
   onMarkAllRead,
   onClose,
 }: {
-  notifications: { id: string; type: string; message: string }[];
+  // Structural rather than the full `Notification`, so the caller is not forced
+  // to supply fields this dropdown never reads. Widened by ADR-487 D4 with the
+  // three the icon now needs — `tsc -b` caught the mismatch.
+  notifications: (Pick<Notification, 'type' | 'icon' | 'tone'> &
+    { id: string; message: string })[];
   onMarkRead: (id: string) => void;
   onMarkAllRead: () => void;
   onClose: () => void;
@@ -68,7 +94,7 @@ function NotificationDropdown({
         <ul className="max-h-80 overflow-y-auto divide-y divide-border/40">
           {notifications.map(n => (
             <li key={n.id} className="flex items-start gap-3 px-4 py-3 hover:bg-accent/40 transition-colors">
-              {notifIcon(n.type)}
+              {notifIcon(n)}
               <p className="flex-1 text-xs text-foreground leading-snug">{n.message}</p>
               <button
                 onClick={() => onMarkRead(n.id)}

@@ -142,6 +142,38 @@ SPEC: dict[str, Spec] = {
         'Email Bounced', WARN, '📧'),   # Management + admin
     "fuel_log_reminder": Spec(ACTION, BANNER,
         'Fuel Log Due', ACTIVE, '⛽'),   # The driver
+    # ADDED 2026-10-05 (ADR-487 D4). These three were MISSED by the 82-row
+    # registry review for a structural reason worth recording: they are raised
+    # through a DEFAULT PARAMETER VALUE —
+    #
+    #     def alert_admins_integration_down(..., notif_type: str = DISCORD_INTEGRATION_FAILED)
+    #     write_notification(db, ..., type=notif_type)
+    #
+    # — so the review's AST walk over `type=` saw only the variable `notif_type`,
+    # never a literal. Every call site passes two positional args and takes the
+    # default, so the literal exists nowhere a grep for `type="..."` would find
+    # it.
+    #
+    # The consequence was not cosmetic: `_resolve_raisable` REFUSED all three,
+    # the raise was swallowed by the `except Exception` in
+    # alert_admins_integration_down, and `raise_platform_alert` on the line
+    # below it never ran either. So an integration outage notified nobody —
+    # neither the company's admins nor the super admin who can rotate the
+    # credential — and left one log line. Found by the D8 sweep, not by a test.
+    #
+    # ACTION, not INFO: each message names something the admin must now do
+    # manually. identity_revocation_failed is BAD rather than WARN because an
+    # offboarded employee who can still sign in (ADR-336 D2) is a security
+    # finding, not a degraded convenience.
+    #
+    # BANNER only, deliberately: DISCORD would try to deliver a
+    # "Discord is down" notice over Discord, and PUSH does not exist yet (D5).
+    "discord_integration_failed": Spec(ACTION, BANNER,
+        'Discord Is Down', WARN, '🔌'),   # Company admins
+    "email_delivery_failed": Spec(ACTION, BANNER,
+        'Email Delivery Failing', WARN, '📧'),   # Company admins
+    "identity_revocation_failed": Spec(ACTION, BANNER,
+        'Access Revocation Failed', BAD, '🛡️'),   # Company admins
     "inspection_failed": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Inspection Failed', BAD, '🔧'),   # Oversight + the driver
     "quiz_issued": Spec(ACTION, BANNER | PUSH | DISCORD,

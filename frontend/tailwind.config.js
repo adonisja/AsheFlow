@@ -93,6 +93,10 @@ export default {
         'scale-in': 'scaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
         'pulse-soft': 'pulseSoft 2.4s ease-in-out infinite',
         'float': 'float 6s ease-in-out infinite',
+        // ADR-487 D4b. Duration is set per-instance in NotificationTicker so it
+        // scales with content length; the value here is only a default. `linear`
+        // because a ticker that eases is a ticker that stalls mid-sentence.
+        'ticker': 'ticker 24s linear infinite',
       },
       keyframes: {
         fadeIn: { from: { opacity: '0' }, to: { opacity: '1' } },
@@ -111,6 +115,14 @@ export default {
         float: {
           '0%, 100%': { transform: 'translateY(0)' },
           '50%': { transform: 'translateY(-12px)' },
+        },
+        // -50% rather than -100%: the strip renders the line TWICE, so moving
+        // by half its width lands the duplicate exactly where the original
+        // started and the loop has no visible gap. Animating to -100% would
+        // scroll the whole thing off and snap back.
+        ticker: {
+          from: { transform: 'translateX(0)' },
+          to:   { transform: 'translateX(-50%)' },
         },
       },
     },

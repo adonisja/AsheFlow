@@ -14,7 +14,7 @@ from app.api.deps import RoleChecker, get_caller_employee, Pagination, _resolve_
 from app.core.security import verify_cognito_token
 from app.models.employee import Employee
 from app.models.notification import Notification
-from app.schemas.notification import NotificationResponse
+from app.schemas.notification import NotificationResponse, spec_fields
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -48,7 +48,7 @@ def get_notifications(
     if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     now = datetime.now(timezone.utc)
-    return (
+    rows = (
         db.query(Notification)
         .filter(
             Notification.employee_id == employee_id,
@@ -60,6 +60,11 @@ def get_notifications(
         .limit(limit)
         .all()
     )
+    # ADR-487 D4: severity/label/tone/icon are resolved from the registry per
+    # row, not stored. `from_row` rather than FastAPI's automatic
+    # from_attributes conversion, because those four fields have no columns
+    # behind them and automatic conversion would 500 on the missing attributes.
+    return [NotificationResponse.from_row(r) for r in rows]
 
 
 @router.patch("/{notification_id}/read")
@@ -242,6 +247,13 @@ async def stream_notifications(
             )
             new_rows = [r for r in rows if str(r.id) not in seen_ids]
             new_seen = seen_ids | {str(r.id) for r in rows}
+            # ADR-487 D4. This dict is hand-built because it goes to
+            # json.dumps, so it does NOT get the schema's fields for free —
+            # which is the whole reason `spec_fields` exists rather than the
+            # resolution being inlined in NotificationResponse. Two
+            # serialisation paths for one model is where a half-converted
+            # change fails only on the path nobody tested, and the client
+            # would then see a severity over REST and none over the stream.
             payload = [
                 {
                     "id": str(r.id),
@@ -252,6 +264,7 @@ async def stream_notifications(
                     "created_at": r.created_at.isoformat(),
                     "dispatch_date": r.dispatch_date.isoformat() if r.dispatch_date else None,
                     "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                    **spec_fields(r.type),
                 }
                 for r in new_rows
             ]

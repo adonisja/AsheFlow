@@ -3,6 +3,18 @@ import { fetchAuthSession } from 'aws-amplify/auth';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from './AuthContext';
 
+/** How urgently this notification needs to be seen (ADR-487 D1). */
+export type NotificationSeverity = 'urgent' | 'action' | 'notice' | 'info';
+
+/** What the message MEANS, not what colour to paint it (ADR-487 D4).
+ *
+ *  The server deliberately sends no colour: this surface owns Tailwind classes
+ *  and mobile owns a React Native theme object, and the two are not
+ *  interchangeable. A hex value from a Python file would land in one of the two
+ *  themes unreadable. Each surface maps tone -> its own token.
+ */
+export type NotificationTone = 'neutral' | 'good' | 'warn' | 'bad' | 'active';
+
 export interface Notification {
   id: string;
   employee_id: string;
@@ -12,6 +24,25 @@ export interface Notification {
   created_at: string;
   dispatch_date: string | null;
   expires_at: string | null;
+
+  /** Resolved from the server's registry per read, not stored on the row.
+   *  Present on BOTH transports — the REST list and the SSE stream — because
+   *  the two serialise separately on the server and a client that trusted one
+   *  but not the other would render a severity-less card for live arrivals. */
+  severity: NotificationSeverity;
+  label: string;
+  tone: NotificationTone;
+  icon: string;
+
+  /** Which channels this type routes to, e.g. ['banner'] or ['ticker'].
+   *
+   *  Sent rather than derived, because "does this scroll in the ticker" is not
+   *  a function of severity: 52 types are INFO and only 20 carry 'ticker'. The
+   *  rule is about the message's SUBJECT — INFO about the reader goes to the
+   *  banner, INFO about a third party or the system goes to the ticker — which
+   *  this surface cannot compute. Hardcoding the 20 would drift from the
+   *  server the first time a type is added. */
+  channels: string[];
 }
 
 interface NotificationContextType {
