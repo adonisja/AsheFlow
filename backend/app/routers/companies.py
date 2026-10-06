@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_platform_staff, get_caller_employee, RoleChecker
 from app.services.campaign_seeds import seed_campaigns_for
+from app.services.notice_seeds import seed_platform_notices
 from app.services.company_config import (
     _REQUIRED_FIELDS, PLATFORM_ONLY_FIELDS, PLATFORM_SEEDED_DEFAULTS,
     platform_settings_missing, platform_settings_ok,
@@ -422,6 +423,14 @@ def create_company(
     # beside the config for the same reason: a tenant that has to design a
     # driver survey from scratch before they can run one will not run one.
     seed_campaigns_for(db, company.id, created_by=None)
+
+    # ADR-488 D1. The platform notices ship the same way and for the same
+    # reason. Seeded here rather than created lazily on the first sweep tick,
+    # because a notice that appears only after a sweep has run is invisible to
+    # the admin configuring the company — and the anchors it needs
+    # (shift_end, dispatch_confirmation_cutoff) are exactly what they are in
+    # the settings screen to set.
+    seed_platform_notices(db, company.id)
 
     write_audit(
         db=db,

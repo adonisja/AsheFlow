@@ -136,12 +136,43 @@ def test_the_dm_failure_log_carries_no_identifiers():
         assert leaked not in log, f"the log line carries {leaked}: {log!r}"
 
 
-def test_it_is_scheduled_daily_in_the_afternoon():
-    """Not an 04:00 slot with the other sweeps. A warning that lands at 04:00 is
-    read at the depot -- the exact moment it is too late to install an app."""
-    entry = celery_app.conf.beat_schedule["warn-before-mfa-deadline"]
-    assert entry["task"] == "app.tasks.mfa_deadline_warnings.warn_before_mfa_deadline"
-    assert entry["schedule"].hour == {16}
+def test_it_still_lands_in_the_afternoon_in_the_tenants_own_zone():
+    """The PROPERTY survives; its MECHANISM moved (ADR-488).
+
+    ADR-470's rule is unchanged and still right: not an 04:00 slot with the
+    other sweeps, because a warning that lands at 04:00 is read at the depot --
+    the exact moment it is too late to install an app.
+
+    What was wrong was the ZONE, not the hour. The beat entry fired at 16:30
+    SERVER time, so a Los Angeles employee got their warning at 13:30 local and
+    an employee further west got it earlier still. It is now the
+    `mfa_deadline_warning` platform notice with anchor FIXED_LOCAL at 16:30,
+    resolved per tenant.
+
+    So this asserts the seed rather than the beat entry. A test pinning
+    `beat_schedule["warn-before-mfa-deadline"]` would now fail on a change that
+    PRESERVED everything it was protecting -- which is the mechanism-vs-property
+    trap, met for the third time in this body of work.
+    """
+    from datetime import time
+
+    from app.models.notice import Anchor
+    from app.services.notice_seeds import PLATFORM_NOTICES
+
+    seed = next(s for s in PLATFORM_NOTICES if s.seed_key == "mfa_deadline_warning")
+    assert seed.anchor == Anchor.FIXED_LOCAL, (
+        "the warning must fire on a wall-clock hour, not relative to a shift: "
+        "the deadline is days away, so the hour is what matters"
+    )
+    assert seed.at_local == time(16, 30), "ADR-470's afternoon hour changed"
+
+
+def test_the_server_hour_entry_is_gone():
+    """The half ADR-488 removed. A scheduled caller would reintroduce the bug:
+    one server hour for every timezone."""
+    assert "warn-before-mfa-deadline" not in celery_app.conf.beat_schedule, (
+        "the fixed-server-hour entry is back; retime the notice row instead"
+    )
 
 
 # ── D2: the dispatch view ───────────────────────────────────────────────────

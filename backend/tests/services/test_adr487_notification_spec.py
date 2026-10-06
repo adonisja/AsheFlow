@@ -276,7 +276,12 @@ class TestTheCountsMatchTheApprovedRegistry:
     """
 
     def test_entry_count(self):
-        assert len(SPEC) == 85
+        # 86 since ADR-488: the whole NOTICE tier is ONE declared type
+        # (`tenant_notice`), because a notice's label and body come from a
+        # `notice_templates` row rather than from SPEC. ADR-487 D4c's one narrow
+        # exception to "every type is declared": the TIER is declared, the
+        # INSTANCES are data.
+        assert len(SPEC) == 86
         assert len(RETIRED) == 4
 
     def test_severity_distribution(self):
@@ -284,7 +289,9 @@ class TestTheCountsMatchTheApprovedRegistry:
         for s in SPEC.values():
             counts[s.severity.value] = counts.get(s.severity.value, 0) + 1
         # +3 action: each of the three names something an admin must do by hand.
-        assert counts == {"urgent": 4, "action": 29, "info": 52}, counts
+        # +1 notice (ADR-488): the tier existed in the enum with zero types
+        # using it until the notice system gave it one.
+        assert counts == {"urgent": 4, "action": 29, "notice": 1, "info": 52}, counts
 
     def test_the_four_urgent_types_are_the_approved_ones(self):
         urgent = {t for t, s in SPEC.items() if s.severity is Severity.URGENT}

@@ -97,15 +97,6 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.device_sweep.sweep_stale_devices",
         "schedule": crontab(hour=1, minute=37),
     },
-    # ADR-470 D1. 16:30, not an early-morning slot with the other sweeps: this
-    # one produces a Discord DM a person is meant to READ and act on, and a
-    # warning that lands at 04:00 is read at the depot -- the exact moment it is
-    # too late to install an authenticator app. Afternoon means they see it
-    # while they still have a phone, signal and time.
-    "warn-before-mfa-deadline": {
-        "task": "app.tasks.mfa_deadline_warnings.warn_before_mfa_deadline",
-        "schedule": crontab(hour=16, minute=30),
-    },
     "check-role-directory-drift": {
         "task": "app.tasks.role_directory.check_role_directory_drift",
         "schedule": crontab(hour=5, minute=0),
@@ -171,11 +162,6 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.training_deadlines.check_training_submissions",
         "schedule": crontab(hour=0, minute=1),
     },
-    # 09:05 AM Eastern — remind dispatch that 09:10 finalization deadline is approaching
-    "dispatch-finalization-reminder": {
-        "task": "app.tasks.dispatch_alerts.alert_finalization_deadline",
-        "schedule": crontab(hour=9, minute=5),
-    },
     # 02:45 Eastern — ADR-485 D14. Rewrites roster names in campaign free text
     # seven days after a run closed. Overnight because it rewrites rows nobody
     # should be reading mid-edit, and 02:45 is free (03:15, 03:30 and 04:30
@@ -192,16 +178,6 @@ celery_app.conf.beat_schedule = {
     "open-campaign-runs": {
         "task": "app.tasks.campaign_runs.open_scheduled_runs",
         "schedule": crontab(hour=5, minute=30),
-    },
-    # 17:00 Eastern — first fuel/mileage log reminder for drivers who haven't submitted
-    "fuel-log-reminder-first": {
-        "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
-        "schedule": crontab(hour=17, minute=0),
-    },
-    # 18:30 Eastern — second pass for drivers still missing their fuel log (late returns)
-    "fuel-log-reminder-second": {
-        "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
-        "schedule": crontab(hour=18, minute=30),
     },
     # 01:00 AM Eastern Sunday — refresh the ADP pay period schedule. Runs ahead of
     # the employee/timecard syncs because mismatch detection resolves a pay period
@@ -278,10 +254,47 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",
         "schedule": crontab(hour=6, minute=0),
     },
-    # 12:00 PM Eastern - Run ADP mismatch detections for each company
+    # 00:05 — ADP mismatch detection. Moved off 12:00 server time by ADR-488
+    # D5a: a scan running mid-shift examines a day that is not over, and the
+    # hour meant nothing to any tenant outside the server's zone. This STAYS a
+    # task rather than becoming a notice because it db.add()s TimeCardAdjustment
+    # rows — it IS the scan, and as a notice an unconfigured anchor would
+    # silently skip the DETECTION rather than a message.
+    #
+    # Every 15 minutes — fire notices whose TENANT-LOCAL anchor has passed
+    # (ADR-488 D6). Replaces four fixed-server-hour entries whose timing meant
+    # nothing to any tenant outside the server's zone.
+    #
+    # 96 ticks/day, against resolve_pending_addresses and
+    # check_integration_health at 144 each — and the latter makes three
+    # outbound HTTP calls per tick where this makes zero. Per tick: two bulk
+    # reads and no per-tenant round trip.
+    #
+    # NOT merged into an existing sweep: they already run in parallel, and
+    # merging would serialise work that currently is not (ADR-487 D4d).
+    "fire-due-notices": {
+        "task": "app.tasks.notice_sweep.fire_due_notices",
+        "schedule": crontab(minute="*/15"),
+    },
+    # 00:03 — ADP mismatch detection. Moved off 12:00 server time by ADR-488
+    # D5a: a scan running mid-shift examines a day that is not over, and the
+    # hour meant nothing to any tenant outside the server's zone.
+    #
+    # This STAYS a task rather than becoming a notice because it db.add()s
+    # TimeCardAdjustment rows — it IS the scan, not a reminder that one
+    # happened, and as a notice an unconfigured anchor would silently skip the
+    # DETECTION rather than a message.
+    #
+    # The minute is not arbitrary. It clears check-training-submissions (00:01)
+    # and lands BEFORE escalate-adp-mismatch-statuses (00:05), which escalates
+    # the urgency of adjustments THIS task creates — detection after escalation
+    # means a weekend adjustment waits a full day for its first escalation.
+    # 00:05 was tried first and the collision gate refused it: escalation holds
+    # that minute with a stated reason (the pay-period close window), so the
+    # task without a stated dependency is the one that moves.
     "run-adp-vs-flex-mismatch-detection-daily": {
         "task": "app.tasks.adp_mismatch_detect.detect_timecard_mismatches",
-        "schedule": crontab(hour=12, minute=0)
+        "schedule": crontab(hour=0, minute=3),
     },
     # 12:00 AM Eastern Saturday and Sunday - Escalate ADP status if necessary
     "escalate-adp-mismatch-statuses": {

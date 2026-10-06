@@ -80,6 +80,22 @@ def _send_dm(discord_id: str, message: str) -> bool:
         return False
 
 
+# SUPERSEDED BY ADR-488 — no beat entry.
+#
+# `warn_before_mfa_deadline` fired on a fixed SERVER hour, which meant nothing to
+# any tenant outside the server's timezone. It is now the `mfa_deadline_warning`
+# platform notice, anchored to FIXED_LOCAL 16:30, resolved in the tenant's zone.
+#
+# The function is KEPT rather than deleted, for two reasons:
+#   * it is still invocable by hand, which is how an operator re-sends after a
+#     worker outage;
+#   * deleting the module would break imports that reference its constants —
+#     `notice_conditions._mfa_deadline_approaching` lifts BANDS and the window
+#     arithmetic from `mfa_deadline_warnings` rather than re-deriving them,
+#     including the ADR-377 rule that privileged roles have no grace at all.
+#
+# It has no scheduled caller. If you are adding one, you are reintroducing the
+# server-hour bug: add or retime a notice row instead.
 @celery_app.task(name="app.tasks.mfa_deadline_warnings.warn_before_mfa_deadline")
 def warn_before_mfa_deadline() -> dict:
     """DM field employees at 3 and 1 days remaining. Daily.

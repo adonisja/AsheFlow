@@ -142,6 +142,25 @@ SPEC: dict[str, Spec] = {
         'Email Bounced', WARN, '📧'),   # Management + admin
     "fuel_log_reminder": Spec(ACTION, BANNER,
         'Fuel Log Due', ACTIVE, '⛽'),   # The driver
+    # ADDED 2026-10-06 (ADR-488). The whole NOTICE tier is ONE declared type,
+    # because the label and body come from a `notice_templates` row rather than
+    # from here — ADR-487 D4c's one narrow exception to "every type is
+    # declared": the TIER is declared, the INSTANCES are data.
+    #
+    # TICKER only, and the three omissions are each deliberate:
+    #   - no BANNER: a recurring reminder occupying banner space every single
+    #     day is how a banner stops being read.
+    #   - no PUSH: a daily push saying "remember to sign out" is how a person
+    #     disables push for everything, URGENT included — it would defeat
+    #     ADR-487 D5 on the one tier that matters.
+    #   - no DISCORD: the same mistake on a channel the tenant does not control.
+    #
+    # The label here is a fallback only. The sweep passes the row's `label` and
+    # `body`, and the client prefers those; this one shows if a notice row is
+    # deleted while its notifications are still unread.
+    "tenant_notice": Spec(NOTICE, TICKER,
+        'Reminder', NEUTRAL, '🔔'),   # the notice's audience
+
     # ADDED 2026-10-05 (ADR-487 D4). These three were MISSED by the 82-row
     # registry review for a structural reason worth recording: they are raised
     # through a DEFAULT PARAMETER VALUE —

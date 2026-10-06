@@ -109,7 +109,11 @@ class Condition(StrEnum):
     UNFINALIZED_DISPATCH_EXISTS = "unfinalized_dispatch_exists"
     DRIVER_MISSING_FUEL_LOG = "driver_missing_fuel_log"   # field_ops.FuelMileageLog
     MFA_DEADLINE_WITHIN_WARNING = "mfa_deadline_within_warning"
-    TIMECARD_MISMATCH_SCAN = "timecard_mismatch_scan"
+    # No TIMECARD_MISMATCH_SCAN: ADR-488 D5a. `detect_timecard_mismatches`
+    # db.add()s TimeCardAdjustment rows — it IS the scan, not a reminder that
+    # one happened. As a notice, an unconfigured anchor would silently skip the
+    # DETECTION rather than a message. A notice reminds somebody that a time
+    # arrived; if skipping it would skip WORK, it is a task.
 
 
 #: Conditions a tenant may select when authoring. Everything else reads data

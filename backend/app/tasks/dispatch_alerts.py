@@ -33,6 +33,22 @@ from app.services.notify import write_notification
 from app.tasks.discord_delivery import send_discord
 
 
+# SUPERSEDED BY ADR-488 — no beat entry.
+#
+# `alert_finalization_deadline` fired on a fixed SERVER hour, which meant nothing to
+# any tenant outside the server's timezone. It is now the `dispatch_unfinalized`
+# platform notice, anchored to DISPATCH_CUTOFF − 5 min.
+#
+# The function is KEPT rather than deleted, for two reasons:
+#   * it is still invocable by hand, which is how an operator re-sends after a
+#     worker outage;
+#   * deleting the module would break imports that reference its constants —
+#     `notice_conditions._mfa_deadline_approaching` lifts BANDS and the window
+#     arithmetic from `mfa_deadline_warnings` rather than re-deriving them,
+#     including the ADR-377 rule that privileged roles have no grace at all.
+#
+# It has no scheduled caller. If you are adding one, you are reintroducing the
+# server-hour bug: add or retime a notice row instead.
 @celery_app.task(name="app.tasks.dispatch_alerts.alert_finalization_deadline")
 def alert_finalization_deadline() -> dict:
     """Runs at 09:05 AM daily.
