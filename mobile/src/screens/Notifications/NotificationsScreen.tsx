@@ -11,6 +11,11 @@ import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { useMyTruck } from '../../hooks/useMyTruck';
+import { NotificationTicker } from '@components/notifications/NotificationTicker';
+import {
+  isTicker, isUrgent, toneStyle, urgentStyle,
+  type NotificationSeverity, type NotificationTone,
+} from '@components/notifications/tone';
 
 type Notification = {
   id: string;
@@ -19,94 +24,46 @@ type Notification = {
   is_read: boolean;
   created_at: string;
   dispatch_date: string | null;
+
+  /** Resolved from the server's registry per read, not stored (ADR-487 D4).
+   *
+   *  Optional because a row delivered by an older server build has none, and
+   *  because this surface has no codegen — `types.ts` is hand-maintained, so a
+   *  field the server sends and this file does not declare is invisible to TS.
+   *  Every consumer below falls back, so an older build degrades to the
+   *  previous behaviour rather than rendering blank. */
+  severity?: NotificationSeverity;
+  label?: string;
+  tone?: NotificationTone;
+  icon?: string;
+  channels?: string[];
 };
 
 type ConfirmationStatus = 'pending' | 'confirmed' | 'declined' | null;
 
-// Human-readable label + icon per notification type
-const TYPE_META: Record<string, { label: string; icon: string }> = {
-  dispatch_assignment:            { label: 'Assignment',         icon: '📋' },
-  dispatch_assignment_info:       { label: 'Assignment Update',  icon: '📋' },
-  trainer_decline_reassignment:   { label: 'Reassignment',       icon: '🔀' },
-  trainee_unassigned:             { label: 'Unassigned',         icon: '⚠️' },
-  graduation:                     { label: 'Graduation',         icon: '🎓' },
-  trainee_graduated:              { label: 'Graduation',         icon: '🎓' },
-  trainee_reset:                  { label: 'Training Reset',     icon: '🔄' },
-  schedule_change:                { label: 'Schedule Change',    icon: '📅' },
-  schedule_change_approved:       { label: 'Schedule Approved',  icon: '✅' },
-  schedule_change_denied:         { label: 'Schedule Denied',    icon: '❌' },
-  schedule_change_rejected:       { label: 'Schedule Denied',    icon: '❌' },
-  schedule_change_request:        { label: 'Schedule Request',   icon: '📅' },
-  incident_info:                  { label: 'Incident',           icon: '🚨' },
-  incident_warning:               { label: 'Incident Warning',   icon: '⚠️' },
-  incident_critical:              { label: 'Critical Incident',  icon: '🚨' },
-  incident_submitted:             { label: 'Incident Filed',     icon: '📋' },
-  incident_resolved:              { label: 'Incident Resolved',  icon: '✅' },
-  anchor_point_submitted:         { label: 'Anchor Point',       icon: '📍' },
-  anchor_point_arrived:           { label: 'AP Arrival',         icon: '📍' },
-  anchor_point_departed:          { label: 'AP Departure',       icon: '📍' },
-  anchor_point_running_late:      { label: 'Running Late',       icon: '⏰' },
-  inspection_failed:              { label: 'Inspection Failed',  icon: '🚨' },
-  rts_submitted:                  { label: 'RTS Submitted',      icon: '🏁' },
-  rts_approved:                   { label: 'RTS Approved',       icon: '✅' },
-  rts_rejected:                   { label: 'RTS Rejected',       icon: '❌' },
-  rts_revised:                    { label: 'RTS Revised',        icon: '🔄' },
-  training_phase_closed:          { label: 'Phase Complete',     icon: '📚' },
-  phase4_failed:                  { label: 'Phase 4 Result',     icon: '📋' },
-  underperforming_trainer:        { label: 'Trainer Alert',      icon: '⚠️' },
-  exemplary_trainer:              { label: 'Trainer Noted',      icon: '⭐' },
-  ban_override_reassignment:      { label: 'Override Notice',    icon: '🔀' },
-  offday_approved:                { label: 'Day Off Approved',   icon: '✅' },
-  offday_rejected:                { label: 'Day Off Denied',     icon: '❌' },
-  pto_approved:                   { label: 'PTO Approved',       icon: '✅' },
-  pto_rejected:                   { label: 'PTO Denied',         icon: '❌' },
-  feedback_submitted:             { label: 'Feedback',           icon: '💬' },
-  credentials_sent:               { label: 'Credentials',        icon: '🔑' },
-  truck_transfer:                 { label: 'Truck Transfer',     icon: '🔀' },
-  role_change:                    { label: 'Role Change',        icon: '⭐' },
-  quiz_issued:                    { label: 'Quiz Ready',         icon: '📝' },
-  quiz_submitted:                 { label: 'Quiz Submitted',     icon: '📝' },
-  quiz_result_confirmed:          { label: 'Quiz Result',        icon: '📋' },
-  trainee_reassign_warning:       { label: 'Reassign Warning',   icon: '⚠️' },
-  continuation_request:           { label: 'Cont. Request',      icon: '🔁' },
-  assignment_change_request:      { label: 'Reassign Request',   icon: '📋' },
-  assignment_change_approved:     { label: 'Reassign Approved',  icon: '✅' },
-  assignment_change_rejected:     { label: 'Reassign Denied',    icon: '❌' },
-  // ADR-485 D17. The driver survey is a campaign now. `campaign_schedule_ended`
-  // is the only Notification type campaigns emit today -- opening a run does
-  // not notify anybody yet, which is why the Campaigns tab shows for every
-  // field role rather than appearing only when something is due.
-  campaign_schedule_ended:        { label: 'Campaign Ended',     icon: '📋' },
-};
-
-function typeMeta(type: string): { label: string; icon: string } {
-  if (TYPE_META[type]) return TYPE_META[type];
-  // Convert snake_case to Title Case as fallback
-  const label = type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  return { label, icon: '🔔' };
+/**
+ * Label and icon, from the SERVER (ADR-487 D4).
+ *
+ * This replaced two hardcoded tables that lived here: a 52-entry `TYPE_META`
+ * and a `typeColor` chain of 20 string tests ending in
+ * `type.includes('approved')`. Between them they covered 52 of the registry's
+ * 86 types — the other 34 fell to a default by accident rather than decision —
+ * and they DISAGREED with web for the same row from the same endpoint:
+ * `incident_critical` was `c.danger` here and a warning tint there.
+ *
+ * The fallbacks are not decoration. Three types reaching this screen are
+ * PlatformAlert vocabulary with no registry entry (ADR-324 D2 keeps the two
+ * apart because a super admin has no Employee row), and a row written before
+ * ADR-487 shipped has no server fields at all. Both render as a neutral bell
+ * with a title-cased type, which is exactly what the old default did.
+ */
+function labelFor(n: Notification): string {
+  if (n.label) return n.label;
+  return n.type.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
 }
 
-function typeColor(type: string, c: ThemeColors): string {
-  if (type === 'dispatch_assignment' || type === 'dispatch_assignment_info') return c.primary;
-  if (type === 'credentials_sent')                             return c.info;
-  if (type === 'truck_transfer')                               return c.warning;
-  if (type === 'trainer_decline_reassignment')                 return c.warning;
-  if (type === 'trainee_unassigned')                           return c.danger;
-  if (type === 'trainee_graduated' || type === 'graduation')  return c.success;
-  if (type === 'trainee_reset')                                return c.info;
-  if (type === 'incident' || type === 'incident_resolved')     return c.danger;
-  if (type === 'rts_approved')                                 return c.success;
-  if (type === 'rts_rejected')                                 return c.danger;
-  if (type === 'rts_submitted')                                return c.warning;
-  if (type === 'training_phase_closed')                        return c.success;
-  if (type === 'phase4_failed')                                return c.danger;
-  if (type === 'underperforming_trainer')                      return c.danger;
-  if (type === 'exemplary_trainer')                            return c.success;
-  if (type.includes('approved') || type.includes('exemplary')) return c.success;
-  if (type.includes('rejected') || type.includes('denied') || type.includes('failed')) return c.danger;
-  if (type.includes('schedule'))                               return c.info;
-  if (type.includes('anchor_point'))                           return c.gold;
-  return c.info;
+function iconFor(n: Notification): string {
+  return n.icon || '🔔';
 }
 
 function stripMarkdown(text: string): string {
@@ -573,11 +530,35 @@ export default function NotificationsScreen() {
   }, []);
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
+
+  /* ADR-487 D4 — route by what the SERVER says, three groups:
+   *
+   *   urgent  — its own region, pinned ABOVE the scroll (D4a)
+   *   ticker  — events with no consequence for the reader (D4b)
+   *   inbox   — everything else: cards, as today
+   *
+   * Severity is NOT the ticker test. 52 types are INFO and only 20 carry
+   * 'ticker'; `pto_approved` is INFO and must not scroll past, because it is a
+   * decision about the reader's own time off. That is why the server sends
+   * `channels`.
+   *
+   * ACTION stays in the inbox rather than being hoisted: a dispatch_assignment
+   * awaiting confirm/decline already has its own CTA on the card, and the modal
+   * is the blocking surface for it. URGENT is different — it needs no answer
+   * from the reader, it needs to be impossible to miss. */
+  const urgent = notifications.filter(n => isUrgent(n.severity));
+  const rest   = notifications.filter(n => !isUrgent(n.severity));
+  const ticker = rest.filter(n => isTicker(n.channels));
+  const inbox  = rest.filter(n => !isTicker(n.channels));
+
   const s = styles(c);
 
   const renderItem = ({ item }: { item: Notification }) => {
-    const meta        = typeMeta(item.type);
-    const accent      = typeColor(item.type, c);
+    // The server's tone, mapped to THIS surface's theme values. Web maps the
+    // same tone to Tailwind classes — which is why the server sends a semantic
+    // role and not a colour.
+    const t           = toneStyle(item.tone ?? 'neutral', c);
+    const accent      = t.text;
     const isDispatch  = item.type === 'dispatch_assignment';
     const isInfoOnly  = item.type === 'dispatch_assignment_info';
     const unread      = !item.is_read;
@@ -600,7 +581,7 @@ export default function NotificationsScreen() {
         <View style={s.cardInner}>
           {/* Icon */}
           <View style={[s.iconBubble, { backgroundColor: accent + (unread ? '20' : '12') }]}>
-            <Text style={s.iconText}>{meta.icon}</Text>
+            <Text style={s.iconText}>{iconFor(item)}</Text>
           </View>
 
           {/* Body */}
@@ -608,7 +589,7 @@ export default function NotificationsScreen() {
             {/* Top row: label + time */}
             <View style={s.topRow}>
               <View style={[s.typePill, { backgroundColor: accent + '18' }]}>
-                <Text style={[s.typeLabel, { color: accent }]}>{meta.label}</Text>
+                <Text style={[s.typeLabel, { color: accent }]}>{labelFor(item)}</Text>
               </View>
               <Text style={[s.timeText, { color: c.mutedForeground }]}>{formatRelative(item.created_at)}</Text>
             </View>
@@ -683,22 +664,84 @@ export default function NotificationsScreen() {
       {loading ? (
         <View style={s.center}><ActivityIndicator color={c.primary} size="large" /></View>
       ) : (
-        <FlatList
-          data={notifications}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={s.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />}
-          ListEmptyComponent={
-            <View style={s.emptyCard}>
-              <View style={[s.emptyIcon, { backgroundColor: c.surfaceMuted }]}>
-                <Text style={{ fontSize: 32 }}>🔔</Text>
-              </View>
-              <Text style={[s.emptyTitle, { color: c.foreground }]}>All caught up</Text>
-              <Text style={[s.emptySub, { color: c.mutedForeground }]}>No notifications yet</Text>
+        <>
+          {/* URGENT — OUTSIDE the FlatList, so it cannot be scrolled away.
+              ADR-487 D4a: the web cap works by scrolling its contents and a
+              FlatList does the same, so "render it above" means outside the
+              scrolling element, not merely first in its data. A sibling of the
+              list, not its ListHeaderComponent, which scrolls with the rows.
+
+              Not a live region: it is a card the reader is meant to ACT on,
+              not an announcement to interrupt them with. */}
+          {urgent.length > 0 && (
+            <View style={s.urgentRegion}>
+              {urgent.map(item => {
+                const u = urgentStyle(c);
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[s.urgentCard, {
+                      backgroundColor: u.bg,
+                      borderColor: u.border,
+                      borderLeftWidth: u.barWidth,
+                      borderLeftColor: u.border,
+                    }]}
+                    onPress={() => handleTap(item)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={s.urgentIcon}>{iconFor(item)}</Text>
+                    <View style={s.urgentBody}>
+                      <Text style={[s.urgentLabel, { color: u.text }]}>
+                        {labelFor(item)}
+                      </Text>
+                      <Text style={[s.urgentMessage, { color: c.foreground }]}>
+                        {stripMarkdown(item.message)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-          }
-        />
+          )}
+
+          <FlatList
+            data={inbox}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            contentContainerStyle={s.list}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />}
+            /* The ticker is the LOWEST-consequence group, so it is the one that
+               may scroll out of view. Long-press clears the strip: these are
+               acknowledgements rather than decisions, and a dismiss control per
+               item would be more chrome than content on a 32pt row. */
+            ListFooterComponent={
+              ticker.length > 0
+                ? <View style={s.tickerSlot}>
+                    <NotificationTicker
+                      items={ticker.map(n => ({
+                        id: n.id, message: stripMarkdown(n.message),
+                        icon: n.icon, label: n.label,
+                      }))}
+                      onDismissAll={() => { void markAllRead(); }}
+                    />
+                  </View>
+                : null
+            }
+            ListEmptyComponent={
+              /* Only when there is NOTHING at all. "All caught up" beneath an
+                 injury alert or a scrolling ticker would be a lie. */
+              urgent.length === 0 && ticker.length === 0 ? (
+                <View style={s.emptyCard}>
+                  <View style={[s.emptyIcon, { backgroundColor: c.surfaceMuted }]}>
+                    <Text style={{ fontSize: 32 }}>🔔</Text>
+                  </View>
+                  <Text style={[s.emptyTitle, { color: c.foreground }]}>All caught up</Text>
+                  <Text style={[s.emptySub, { color: c.mutedForeground }]}>No notifications yet</Text>
+                </View>
+              ) : null
+            }
+          />
+        </>
       )}
 
       <DispatchConfirmationModal
@@ -761,4 +804,37 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   emptyIcon:    { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center' },
   emptyTitle:   { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
   emptySub:     { fontSize: fontSize.sm },
+
+  // ADR-487 D4a — the URGENT region. Outside the FlatList, so it cannot be
+  // scrolled away. Colours come from `urgentStyle`, not from here: the shape is
+  // layout and the palette is the server's tone mapped to this theme.
+  urgentRegion: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+  },
+  urgentCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    // borderLeftWidth is set inline from urgentStyle().barWidth — a thick bar
+    // rather than only a tint, because ADR-487 D4a rejected "the registry tone
+    // alone": colour alone fails for a dispatcher whose eyes are on a truck
+    // list, and fails outright for anyone with a colour-vision deficiency.
+  },
+  urgentIcon:    { fontSize: fontSize.lg, marginTop: 1 },
+  urgentBody:    { flex: 1, gap: 2 },
+  urgentLabel:   { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  urgentMessage: { fontSize: fontSize.sm },
+
+  // The ticker sits at the bottom of the list, inside the scroll: it is the
+  // lowest-consequence group, so it is the one that may scroll out of view.
+  tickerSlot: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+  },
 });
