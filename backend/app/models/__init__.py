@@ -49,6 +49,7 @@ from app.models.campaign import (  # ADR-485
     AttributionRequest, Campaign, CampaignAnswer, CampaignQuestion,
     CampaignResponse, CampaignRun, CampaignSchedule,
 )
+from app.models.notice import NoticeTemplate, NoticeSchedule  # ADR-488
 from app.models.delivery_stop import DeliveryStop
 from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment, DamagedPackage
 from app.models.shift_roll_call import ShiftRollCall
