@@ -46,6 +46,8 @@ import pathlib
 
 import pytest
 
+from tests.conftest import code_only
+
 from app.services import integration_alerts as IA
 from app.services.notification_spec import RETIRED, SPEC, Severity
 from app.services.notify import _resolve_raisable
@@ -180,13 +182,80 @@ class TestTheDefaultParameterIsStillTheGap:
         )
 
 
-class TestTheSwallowingExceptIsStillThere:
-    """Not a complaint — the `except` is correct (ADR-335: an alerting bug must
-    not become the thing that breaks the request). It is recorded because it is
-    the reason the defect was invisible, so anyone reading this knows the log
-    line is the only signal."""
+class TestTheTwoAudiencesFailIndependently:
+    """The coupling that made the defect total rather than partial.
 
-    def test_the_function_swallows_and_logs(self):
+    `raise_platform_alert` once sat BELOW the notification loop in the SAME
+    `try`, so the registry's refusal on the first statement meant it was never
+    reached — and the super admin, the only person who can rotate a revoked
+    credential, heard nothing. ADR-324 D2 makes the audiences irreducible (a
+    super admin has no Employee row), so a failure to reach one must not
+    suppress the other.
+
+    Fixed by splitting into two independent blocks with the platform alert
+    FIRST. The ordering is load-bearing: it is the half that reaches the person
+    who can fix the thing, so it is the half that must survive anything going
+    wrong in the other.
+    """
+
+    def test_the_platform_alert_is_outside_the_try(self):
+        """Inside it, any failure above it still skips it — which is the
+        original defect wearing a different shape.
+
+        Parsed, not string-compared. The previous version of this test asserted
+        `src.index("write_notification") < src.index("raise_platform_alert")`
+        and PASSED after the order was inverted, because `write_notification`
+        appears earlier in the DOCSTRING than `raise_platform_alert` does in the
+        code. A semantic inversion slipped through a green test — the tenth
+        prose-not-code match in this body of work, and the first to hide a real
+        behaviour change rather than merely fail noisily.
+        """
+        tree = ast.parse(inspect.getsource(IA.alert_admins_integration_down).lstrip())
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+
+        def _calls(node):
+            return {
+                c.func.id if isinstance(c.func, ast.Name) else getattr(c.func, "attr", "")
+                for c in ast.walk(node) if isinstance(c, ast.Call)
+            }
+
+        tries = [n for n in fn.body if isinstance(n, ast.Try)]
+        assert tries, "the notification half must still be guarded"
+        guarded = set().union(*(_calls(t) for t in tries))
+        assert "write_notification" in guarded, (
+            "the notification loop lost its guard — an alerting bug would now "
+            "break the request that is already handling a failure"
+        )
+        assert "raise_platform_alert" not in guarded, (
+            "the platform alert is inside a try whose earlier statements can "
+            "skip it; that is the original ADR-487 defect in a new shape"
+        )
+
+    def test_the_platform_alert_comes_first_in_the_code(self):
+        """By statement position in the AST, not by substring index."""
+        tree = ast.parse(inspect.getsource(IA.alert_admins_integration_down).lstrip())
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+
+        def _line_of(name):
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Call):
+                    nm = n.func.id if isinstance(n.func, ast.Name) else getattr(n.func, "attr", "")
+                    if nm == name:
+                        return n.lineno
+            return None
+
+        pa, wn = _line_of("raise_platform_alert"), _line_of("write_notification")
+        assert pa is not None and wn is not None
+        assert pa < wn, (
+            "the platform alert must run BEFORE the notification loop: it is "
+            "the half that reaches the only person who can fix the credential"
+        )
+
+    def test_the_notification_half_still_swallows_and_logs(self):
+        """Not a complaint — the `except` is correct (ADR-335: an alerting bug
+        must not become the thing that breaks the request). Recorded because it
+        is why the defect was invisible, so a reader knows the log line is the
+        only signal."""
         src = inspect.getsource(IA.alert_admins_integration_down)
         assert "except Exception:" in src
         assert "logger.exception" in src, (
@@ -194,14 +263,22 @@ class TestTheSwallowingExceptIsStillThere:
             "only trace an alerting failure leaves"
         )
 
-    def test_the_platform_alert_is_raised_before_the_return(self):
-        """It sits BELOW write_notification in the same try, which is why the
-        refusal took it out too. Asserting the ordering so a future edit that
-        moves the notification loop after it does not silently re-create a
-        single point of failure for both audiences."""
+    def test_the_log_line_says_the_platform_alert_survived(self):
+        """The message is the operational difference the split bought: this now
+        means "the admins were not told", not "nobody was told"."""
         src = inspect.getsource(IA.alert_admins_integration_down)
-        assert "raise_platform_alert" in src
-        assert src.index("write_notification") < src.index("raise_platform_alert"), (
-            "ordering changed — re-check that a failure in the first does not "
-            "prevent the second"
+        block = src[src.index("except Exception:"):]
+        assert "platform alert was still raised" in block, (
+            "the failure log does not distinguish a partial failure from a "
+            "total one, which is the whole point of splitting the blocks"
+        )
+
+    def test_the_platform_alert_is_not_double_guarded(self):
+        """`raise_platform_alert` has its own try and is documented 'never
+        raises'. Wrapping it again reads as though it could throw and invites
+        someone to rely on that."""
+        src = code_only(IA.raise_platform_alert)
+        assert "except Exception:" in src, (
+            "raise_platform_alert no longer guards itself, so the call site "
+            "above it now DOES need a try — fix one or the other"
         )
