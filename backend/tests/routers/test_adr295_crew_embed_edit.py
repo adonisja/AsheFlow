@@ -16,6 +16,7 @@ persistence and the edit path were missing.
 dispatch.py is proprietary; CI copies it in before pytest, so there is
 deliberately NO skip guard.
 """
+import ast
 import inspect
 
 from app.routers import dispatch
@@ -109,32 +110,54 @@ class TestEditReplacesCorrection:
         i = UPDATE.index("if not truck.discord_channel_id:")
         assert "return" in UPDATE[i : i + 60]
 
-    def test_the_roster_is_not_queried_inside_the_thread(self):
-        """The background thread must not touch the request's Session — it is
-        closed by the time the thread runs. Only the HTTP POST may be deferred.
+    def test_the_roster_is_read_before_the_send_is_handed_off(self):
+        """The deferred send must not touch the request's Session.
 
-        Parsed, not string-compared. A source-order assertion
-        (`index("db.query") < index("threading.Thread")`) passes even when the
-        query has been moved INSIDE _run(), because _run is *defined* above the
-        Thread(...) line — verified by planting exactly that and watching the
-        ordering test stay green."""
-        import ast
-        tree = ast.parse(inspect.getsource(dispatch._fire_crew_embed_update).lstrip())
-        run = next(
+        ADR-487 D7 replaced the daemon thread with a Celery task, and the
+        original property survives the change intact — it just has a different
+        reason. Under a thread the session was CLOSED by the time _run fired;
+        under a task the worker is a different process entirely and has no
+        access to it at all. Either way the roster has to be read here and
+        carried in the payload.
+
+        This test used to assert the MECHANISM (`threading.Thread(` with
+        `daemon=True`) and therefore failed on a change that preserved
+        everything it was protecting. Rewritten to assert the property: no
+        `db.` call may appear after the hand-off.
+        """
+        src = inspect.getsource(dispatch._fire_crew_embed_update)
+        tree = ast.parse(src.lstrip())
+        handoff = next(
             n for n in ast.walk(tree)
-            if isinstance(n, ast.FunctionDef) and n.name == "_run"
-        )
-        calls = [
-            n.func.attr for n in ast.walk(run)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "delay"
+        )
+        later_db_calls = [
+            n.func.attr for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "db"
+            and n.lineno > handoff.lineno
         ]
-        assert "query" not in calls, "the roster query must not run on the thread"
+        assert not later_db_calls, (
+            "a session call after the hand-off runs in a worker with no session: "
+            f"{later_db_calls}"
+        )
+        assert "crew_payload" in src, "the roster must be carried, not re-read"
 
-    def test_it_is_fire_and_forget(self):
-        assert "threading.Thread(" in UPDATE and "daemon=True" in UPDATE
+    def test_the_send_is_handed_off_not_awaited(self):
+        """Still fire-and-forget — the assignment is already committed and the
+        operator is not waiting on Discord. The mechanism is now a task, which
+        adds the retry and response classification the thread never had."""
+        assert "send_discord.delay(" in UPDATE
+        assert "threading.Thread(" not in UPDATE, (
+            "ADR-487 D7 replaced the daemon thread: no retry, no response check, "
+            "and daemon=True drops it when the container stops"
+        )
 
-    def test_failures_are_logged_not_raised(self):
-        assert "logger.warning(" in UPDATE
+    def test_failures_do_not_raise_into_the_caller(self):
+        """`.delay()` only enqueues. Every failure mode — a refusal, an
+        exhausted retry — is classified inside the task, so nothing propagates
+        back to a request that has already committed its work."""
         assert "raise" not in UPDATE
 
 

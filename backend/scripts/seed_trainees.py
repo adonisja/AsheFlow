@@ -1,4 +1,8 @@
-"""Seed 8 simulation trainee employees and set reset_on_graduation=True for Timmy Trainee.
+"""Seed 8 simulation trainee employees.
+
+reset_on_graduation was removed in ADR-487 D11c: it existed for one named
+simulation account, and graduation is now unconditional — a simulation trainee
+graduates to walker like anybody else.
 
 Idempotent — skips any discord_id that already exists.
 Run from inside the container:
@@ -12,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.database import SessionLocal
 from app.models.employee import Employee
 
-TIMMY_ID = "d16be5f0-c021-70de-6a50-cc22a3880062"
 
 NEW_TRAINEES = [
     {"name": "Alex Rivera",    "discord_id": "seed_trainee_001"},
@@ -29,17 +32,6 @@ NEW_TRAINEES = [
 def main():
     db = SessionLocal()
     try:
-        # Set Timmy's reset flag
-        timmy = db.query(Employee).filter(Employee.id == TIMMY_ID).first()
-        if timmy:
-            if not timmy.reset_on_graduation:
-                timmy.reset_on_graduation = True
-                print(f"Set reset_on_graduation=True for {timmy.name}")
-            else:
-                print(f"{timmy.name} already has reset_on_graduation=True")
-        else:
-            print(f"WARNING: Timmy Trainee ({TIMMY_ID}) not found — skipping reset flag.")
-
         # Seed new trainees
         added = 0
         skipped = 0
@@ -58,7 +50,6 @@ def main():
                 role="trainee",
                 is_active=True,
                 account_status="active",
-                reset_on_graduation=False,
             )
             db.add(emp)
             print(f"  ADD  {data['name']}")

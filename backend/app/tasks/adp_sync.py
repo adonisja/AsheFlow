@@ -22,6 +22,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.services.audit import write_audit
 from app.models.notification import Notification
+from app.services.notify import Audience, fan_out
 
 logger = logging.getLogger(__name__)
 
@@ -129,21 +130,37 @@ def sync_adp_employees() -> dict:
                             after = {"is_active": False, "account_status": "inactive"}
                         )
 
-                        admin_or_mangers = db.query(Employee).filter(
-                            Employee.role.in_(["admin", "manager"]),
-                            Employee.company_id == integration.company_id
-                        ).all()
-
-                        for person in admin_or_mangers:
-                            db.add(Notification(
-                                company_id = integration.company_id,
-                                employee_id = person.id,
-                                type = "employee_offboarding",
-                                message =(
-                                    f"Offboarded terminated employee {employee.name} "
-                                    f"completed at {datetime.now().strftime('%A %b %d')}."
-                                )
-                            ))
+                        # ADR-487 D2 fixed TWO defects in this one block.
+                        #
+                        # 1. `role.in_(["admin", "manager"])` — the role is
+                        #    `management`. "management" appears 185 times in the
+                        #    backend, "manager" twice, both in filters like this
+                        #    one. Employee.role is an unconstrained String(50),
+                        #    so nothing rejected it: the query matched admins
+                        #    only and every management user was silently
+                        #    excluded. Audience.MANAGEMENT makes it unexpressible.
+                        #
+                        # 2. `datetime.now()` is naive — the SERVER's clock,
+                        #    rendered for a tenant who may be hours away. A
+                        #    Pacific tenant offboarded at 23:30 was told
+                        #    "Monday Oct 05" for something that happened Sunday.
+                        #    `task_today(tz)` is already used nine lines above
+                        #    and resolves the company's own date (ADR-486).
+                        #
+                        # check_no_naive_utc_relabel passes on #2: it looks for a
+                        # naive datetime RELABELLED as UTC, not one formatted for
+                        # a human.
+                        offboard_date = task_today(tz_map.get(integration.company_id))
+                        fan_out(
+                            db,
+                            company_id=integration.company_id,
+                            audience=Audience.MANAGEMENT,
+                            type="employee_offboarding",
+                            message=(
+                                f"Offboarded terminated employee {employee.name} "
+                                f"completed at {offboard_date.strftime('%A %b %d')}."
+                            ),
+                        )
                         db.commit()
 
                     elif not employee:

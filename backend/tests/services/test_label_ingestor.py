@@ -153,3 +153,53 @@ class TestTextractBoundary:
     def test_confidence_reflects_the_address_when_no_tba_was_found(self):
         r = parse_label_lines([("1 MAIN ST", 40.0)])
         assert r.confidence == pytest.approx(0.4, abs=0.01)
+
+
+class TestOCRDamageFromARealFieldPhoto:
+    """Pins the failures a real photographed label produced (2026-09-13).
+
+    A walker photographed a package (IMG_3942) and the reader returned nothing
+    usable. The OCR was not at fault — it read both fields correctly — and the
+    PARSER discarded them, twice over. These cases lock in both repairs.
+    """
+
+    def test_a_T_misread_as_1_still_yields_the_tba(self):
+        """`TBA326446450396` came back as `1BA3264464 50396`.
+
+        Two separate defects in one string: the T read as a 1, and a space
+        appeared mid-number. The digits were perfect. The strict pattern
+        rejected the whole thing, so a TBA fully present in the image was
+        reported as not found.
+        """
+        r = parse_label_lines([("1BA3264464 50396", 88.0)])
+        assert r.tba == "TBA326446450396"
+
+    @pytest.mark.parametrize("prefix", ["TBA", "1BA", "7BA", "IBA", "LBA", "1B4", "T8A"])
+    def test_every_plausible_prefix_confusion_normalises(self, prefix):
+        """Only glyphs that genuinely collide in this font are substituted."""
+        r = parse_label_lines([(f"{prefix}326446450396", 90.0)])
+        assert r.tba == "TBA326446450396"
+
+    def test_the_digits_stay_strict(self):
+        """A damaged DIGIT must not be silently repaired.
+
+        A wrong digit is a wrong package; the barcode tier (ADR-399 D1) is what
+        exists for certainty. Only the prefix is forgiven.
+        """
+        r = parse_label_lines([("TBA32644645O396", 90.0)])   # letter O, not zero
+        assert r.tba is None
+
+    def test_leading_ocr_debris_does_not_hide_the_address(self):
+        """`~a'] 104 W MEADOW WIND LN` — read perfectly, rejected for four
+        junk characters in front of the house number."""
+        r = parse_label_lines([("~a'] 104 W MEADOW WIND LN", 92.0)])
+        assert r.address_line == "104 W MEADOW WIND LN"
+
+    def test_both_fields_recover_from_the_same_damaged_read(self):
+        r = parse_label_lines([
+            ("~a'] 104 W MEADOW WIND LN", 92.0),
+            ("1BA3264464 50396", 88.0),
+        ])
+        assert r.tba == "TBA326446450396"
+        assert r.address_line == "104 W MEADOW WIND LN"
+        assert r.needs_manual_entry is False

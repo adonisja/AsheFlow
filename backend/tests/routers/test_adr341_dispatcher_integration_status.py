@@ -138,22 +138,67 @@ def test_the_status_fetch_is_best_effort():
 
 # ── D5: the notification list ────────────────────────────────────────────────
 
-def test_failure_notifications_are_matched_before_the_suffix_branches():
-    """The chain is first-match-wins, so a future `..._failed_rejected` would
-    take the _rejected branch and render as a routine denial. The ordering is
-    load-bearing."""
+def test_the_suffix_ordering_constraint_no_longer_applies():
+    """ADR-487 D4 removed the branch this ordering protected.
+
+    The original rule was real: the icon chain was first-match-wins, so a
+    hypothetical `..._failed_rejected` would have taken the `_rejected` branch
+    and rendered as a routine denial. `_failed` therefore had to be matched
+    first.
+
+    The chain is gone — every declared type now takes its icon and tone from
+    the server's registry, so there is no ordering to get wrong. Asserting the
+    ABSENCE rather than deleting the test, because the constraint silently
+    coming back is exactly what a reader of ADR-341 would want to know about.
+    """
     code = _strip_comments(_read("pages/NotificationsHistory.tsx"))
-    failed = code.index("type.endsWith('_failed')")
-    rejected = code.index("type.endsWith('_rejected')")
-    assert failed < rejected, "_failed is matched after _rejected"
+    assert "endsWith('_rejected')" not in code, (
+        "the suffix-guessing chain is back; if it is needed again, _failed must "
+        "be matched BEFORE _rejected (ADR-341 D5) — the ordering is load-bearing"
+    )
 
 
 def test_revocation_failure_is_danger_not_warning():
     """An offboarded employee who can still sign in (ADR-336 D2) is a different
-    severity from an email that did not send."""
+    severity from an email that did not send.
+
+    The PROPERTY is unchanged; its MECHANISM moved. ADR-341 pinned it as a
+    `text-danger` literal beside the type string in the TSX. ADR-487 D4 made
+    tone a server field, so the chain is now:
+
+        registry: identity_revocation_failed -> Tone.BAD
+        tone.ts:  bad -> 'text-danger'
+
+    Asserting at both ends rather than on adjacency in one file — the original
+    `code.index(type) + 220` window is what broke, and it would break again on
+    any reformatting even while the behaviour held.
+    """
+    from app.schemas.notification import spec_fields
+    from app.services.notification_spec import Tone
+
+    assert spec_fields("identity_revocation_failed")["tone"] == Tone.BAD.value, (
+        "the registry no longer classes a failed revocation as its worst tone"
+    )
+
+    tone_map = _strip_comments(_read("components/notifications/tone.ts"))
+    i = tone_map.index("TONE_TEXT")
+    body = tone_map[i:tone_map.index("};", i)]
+    assert "bad: 'text-danger'" in body, (
+        "the `bad` tone no longer maps to danger, so a failed revocation would "
+        "render at the wrong severity"
+    )
+
+
+def test_the_fallback_still_renders_revocation_as_danger():
+    """The non-registry path. Three alert types reaching this page are
+    PlatformAlert vocabulary with no SPEC entry, and a row predating the
+    registry has no server tone either — so the hand-written fallback is still
+    live code, and this type is the one in it that must be DANGER."""
     code = _strip_comments(_read("pages/NotificationsHistory.tsx"))
-    i = code.index("identity_revocation_failed")
-    assert "text-danger" in code[i:i + 220]
+    i = code.index("n.type === 'identity_revocation_failed'")
+    assert "text-danger" in code[i:i + 160], (
+        "the fallback branch renders a failed revocation at a lesser severity"
+    )
 
 
 def test_the_alert_types_have_human_labels():

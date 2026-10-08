@@ -1,8 +1,6 @@
 import boto3
 import logging
-import os
 import secrets
-import threading
 from datetime import datetime, timezone, timedelta
 from typing import List, Union
 from uuid import UUID
@@ -10,7 +8,6 @@ from botocore.exceptions import ClientError
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-import requests as http_requests
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -23,7 +20,6 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
-from app.models.notification import Notification
 from app.schemas.employee import (
     _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse,
     EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse,
@@ -39,6 +35,8 @@ from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
     IDENTITY_REVOCATION_FAILED, IDENTITY_REVOCATION_MESSAGE,
 )
+from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -60,21 +58,10 @@ identity_router = APIRouter(prefix="/employees", tags=["employees"])
 
 
 def _fire_discord_dm(discord_id: str, message: str) -> None:
-    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-    secret  = os.environ.get("INTERNAL_SECRET", "")
-
-    def _run():
-        try:
-            http_requests.post(
-                f"{bot_url}/internal/dm",
-                json={"discord_id": discord_id, "message": message},
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("promote DM failed for discord_id=%s: %s", discord_id, exc)
-
-    threading.Thread(target=_run, daemon=True).start()
+    # ADR-487 D7: the send is a Celery task, not a daemon thread. Retry,
+    # backoff, jitter and response classification live there; this builds
+    # the payload and hands it over.
+    send_discord.delay("dm", {"discord_id": discord_id, "message": message})
 
 
 def _fire_role_sync(discord_id: str, company_id: str, action: str) -> None:
@@ -82,21 +69,17 @@ def _fire_role_sync(discord_id: str, company_id: str, action: str) -> None:
 
     action: "grant_trainer" | "revoke_trainer"
     """
-    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-    secret  = os.environ.get("INTERNAL_SECRET", "")
-
-    def _run():
-        try:
-            http_requests.post(
-                f"{bot_url}/internal/role-sync",
-                json={"discord_id": discord_id, "company_id": company_id, "action": action},
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("role-sync failed discord_id=%s action=%s: %s", discord_id, action, exc)
-
-    threading.Thread(target=_run, daemon=True).start()
+    # ADR-487 D7: a Celery task, not a daemon thread — retry, backoff and
+    # response classification live there.
+    #
+    # An access change, not a notification: a role-sync that silently failed
+    # leaves a trainer without the Discord role that gates their commands, so a
+    # terminal failure records an audit row rather than a delivery_failed_at.
+    send_discord.delay(
+        "role-sync",
+        {"discord_id": discord_id, "company_id": company_id, "action": action},
+        company_id=str(company_id),
+    )
 
 # Cognito group name per role — must match your User Pool group names exactly
 # ADR-256/264 added captain, field_supervisor and driver_trainee. A role missing
@@ -1709,16 +1692,15 @@ def _apply_role_transition(
                         )
 
     verb = "promoted" if is_promotion else "changed"
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=db_employee.company_id,
         employee_id=db_employee.id,
         type="role_change",
-        message=(
-            f"Congratulations! You have been promoted from {old_role} to {new_role} by {caller.name}."
+        message=f"Congratulations! You have been promoted from {old_role} to {new_role} by {caller.name}."
             if is_promotion
-            else f"Your role has been updated from {old_role} to {new_role} by {caller.name}."
-        ),
-    ))
+            else f"Your role has been updated from {old_role} to {new_role} by {caller.name}.",
+    )
     write_audit(
         db,
         actor_id=str(caller.id),

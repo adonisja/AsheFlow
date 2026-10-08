@@ -10,9 +10,9 @@ from app.api.deps import RoleChecker, get_current_user, get_caller_employee
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.schemas.continuation_request import ContinuationRequestCreate, ContinuationRequestResponse, PriorityUpdate
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/continuation-requests", tags=["continuation-requests"])
 
@@ -97,12 +97,15 @@ def submit_continuation_request(
     db.flush()
 
     # Notify the trainer — shows on their dashboard notification feed
-    db.add(Notification(
-        employee_id=payload.trainer_id,
+    # ADR-487 D2/D10: ACTION, and the message should carry {Accept}/{Decline}
+    # once SPEC.actions lands — the endpoints already exist below.
+    write_notification(
+        db,
         company_id=caller.company_id,
+        employee_id=payload.trainer_id,
         type="continuation_request",
         message=f"{trainee.name} has requested to continue training with you on their next assigned day.",
-    ))
+    )
 
     db.commit()
     # Silent 201 — no body content returned to the trainee

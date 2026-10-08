@@ -29,8 +29,8 @@ from app.celery_app import celery_app
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.services.derive_block_key import derive_block_key, ParsedBlock, strip_address_noise
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -319,13 +319,14 @@ def _notify_dispatch(company_id: UUID, message: str, db) -> None:
     )
     now = datetime.now(timezone.utc)
     for emp in employees:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=company_id,
             employee_id=emp.id,
             type="manifest_enrichment",
             message=message,
             created_at=now,
-        ))
+        )
     db.commit()
 
 

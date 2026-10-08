@@ -34,8 +34,7 @@ def _emp(db, *, name, username, invited_days_ago, status="pending_verification")
         id=uuid.uuid4(), company_id=SEED_COMPANY_ID, name=name, role="trainee",
         is_active=False, account_status=status,
         invited_at=NOW - timedelta(days=invited_days_ago),
-        username=username, email=f"{name.lower().replace(' ', '.')}@x.com",
-        reset_on_graduation=False, hr_system_id_adp=uuid.uuid4(),
+        username=username, email=f"{name.lower().replace(' ', '.')}@x.com", hr_system_id_adp=uuid.uuid4(),
         hr_system_id_adp_verified=False,
     )
     db.add(e)

@@ -15,11 +15,11 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
-from app.models.notification import Notification
 from app.schemas.incident import (
     IncidentCreate, IncidentResponse, IncidentListItem,
     VALID_CATEGORIES, VALID_SEVERITIES, CATEGORY_DEFAULT_SEVERITY,
 )
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -89,12 +89,13 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
     ).all()
 
     for emp in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=incident.company_id,
             employee_id=emp.id,
             type=notif_type,
             message=message,
-        ))
+        )
 
     # LA-5: escalation path for critical injury — generates a second, distinct
     # notification type so consumers (push gateway, on-call pager) can route
@@ -106,12 +107,13 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
             f"{incident.description[:120]}{'…' if len(incident.description) > 120 else ''}"
         )
         for emp in recipients:
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=incident.company_id,
                 employee_id=emp.id,
                 type="incident_critical_injury",
                 message=escalation_message,
-            ))
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -190,15 +192,14 @@ def submit_incident(
 
     # Self-notification: reporter gets a record of their own submission
     category_label = incident.category.replace("_", " ").title()
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=reporter.company_id,
         employee_id=reporter.id,
         type="incident_submitted",
-        message=(
-            f"Your {category_label} incident report for "
-            f"{incident.date.strftime('%a, %b %d')} has been submitted and is under review."
-        ),
-    ))
+        message=f"Your {category_label} incident report for "
+            f"{incident.date.strftime('%a, %b %d')} has been submitted and is under review.",
+    )
 
     db.commit()
     db.refresh(incident)
@@ -364,12 +365,13 @@ def resolve_incident(
     incident.resolved_at = datetime.now(timezone.utc)
 
     # Notify reporter
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=resolver.company_id,
         employee_id=incident.reporter_id,
         type="incident_resolved",
         message=f"Your {incident.category.replace('_', ' ')} incident report from {incident.date.strftime('%a, %b %d')} has been reviewed and marked resolved.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(resolver.id),

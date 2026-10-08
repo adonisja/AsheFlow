@@ -1,13 +1,12 @@
-import os
 import logging
-import requests
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.models.employee import Employee
 from app.models.graduation_quiz import GraduationQuiz
-from app.models.notification import Notification
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord, TrainingTask
+from app.services.notify import write_notification
+from app.tasks.discord_delivery import send_discord
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +19,11 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
     Assignment count threshold is removed — Phase 4 observation already implies
     sufficient dispatch days; the quiz is the explicit sign-off.
 
-    Graduates eligible trainees to walker. If reset_on_graduation is True,
-    the training cycle is reset to Phase 1 instead (simulation accounts).
+    Graduates eligible trainees to walker.
+
+    (ADR-487 D11c removed `reset_on_graduation`: it existed for one named
+    simulation account, and ADR-047 D2 — which added it — says so three times.
+    Graduation is now unconditional: pass the quiz, become a walker.)
 
     Nullifies open continuation requests and fires Notifications to
     management/admin/dispatch on any outcome.
@@ -82,57 +84,33 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
         if latest_quiz is None:
             continue
 
-        if trainee.reset_on_graduation:
-            # Simulation / demo reset path — wipe training records and restart
-            training_records = db.query(TrainingRecord).filter(
-                TrainingRecord.trainee_id == trainee.id,
-            ).all()
-            for rec in training_records:
-                db.query(TrainingTask).filter(
-                    TrainingTask.training_record_id == rec.id,
-                ).delete(synchronize_session=False)
-                db.delete(rec)
-
-            # Also reset graduation quiz rows so the cycle can repeat cleanly
-            db.query(GraduationQuiz).filter(
-                GraduationQuiz.trainee_id == trainee.id,
-            ).delete(synchronize_session=False)
-
-            message_mgmt = (
-                f"{trainee.name} passed the graduation quiz. "
-                f"reset_on_graduation=True — training cycle reset to Phase 1 (not promoted to walker)."
-            )
-            message_self = (
-                f"You passed the graduation quiz! "
-                f"Your training cycle has been reset to Phase 1 for the next round."
-            )
-            outcome_type = "trainee_reset"
-        else:
-            trainee.role = "walker"
-            message_mgmt = (
-                f"{trainee.name} passed the graduation quiz "
-                f"and was automatically promoted from Trainee to Walker on {target_date}."
-            )
-            message_self = (
-                f"Congratulations! You passed the graduation quiz "
-                f"and have been promoted to Walker effective {target_date}."
-            )
-            outcome_type = "trainee_graduated"
+        trainee.role = "walker"
+        message_mgmt = (
+            f"{trainee.name} passed the graduation quiz "
+            f"and was automatically promoted from Trainee to Walker on {target_date}."
+        )
+        message_self = (
+            f"Congratulations! You passed the graduation quiz "
+            f"and have been promoted to Walker effective {target_date}."
+        )
+        outcome_type = "trainee_graduated"
 
         for recipient in recipients:
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=trainee.company_id,
                 employee_id=recipient.id,
                 type=outcome_type,
                 message=message_mgmt,
-            ))
+            )
 
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=trainee.company_id,
             employee_id=trainee.id,
             type=outcome_type,
             message=message_self,
-        ))
+        )
 
         open_requests = db.query(TrainerContinuationRequest).filter(
             TrainerContinuationRequest.trainee_id == trainee.id,
@@ -146,28 +124,20 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
             "type": outcome_type,
             "message": (
                 f"Trainee {trainee.name} passed the graduation quiz "
-                + ("— training cycle reset to Phase 1."
-                   if trainee.reset_on_graduation
-                   else "— automatically promoted to Walker.")
+                f"— automatically promoted to Walker."
             ),
         })
 
         if trainee.discord_id:
-            if trainee.reset_on_graduation:
-                dm_message = (
-                    f"Hi **{trainee.name}**! You passed the graduation quiz. "
-                    f"Your training cycle has been reset to Phase 1 — a trainer will be assigned for your next round."
-                )
-            else:
-                dm_message = (
-                    f"Congratulations **{trainee.name}**! You passed the graduation quiz "
-                    f"and have been **promoted to Walker** effective {target_date}.\n\n"
-                    f"As a Walker you can now:\n"
-                    f"• Set favorite crew members (trainers & other walkers)\n"
-                    f"• Block crew members you'd prefer not to work with\n"
-                    f"• Submit truck reassignment requests\n\n"
-                    f"Welcome to the team!"
-                )
+            dm_message = (
+                f"Congratulations **{trainee.name}**! You passed the graduation quiz "
+                f"and have been **promoted to Walker** effective {target_date}.\n\n"
+                f"As a Walker you can now:\n"
+                f"• Set favorite crew members (trainers & other walkers)\n"
+                f"• Block crew members you'd prefer not to work with\n"
+                f"• Submit truck reassignment requests\n\n"
+                f"Welcome to the team!"
+            )
             _graduation_dms.append((trainee.discord_id, dm_message))
 
     if warnings:
@@ -179,19 +149,6 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
 
 
 def _send_graduation_dm(discord_id: str, message: str) -> None:
-    import threading
-
-    def _fire():
-        bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-        secret = os.environ.get("INTERNAL_SECRET", "")
-        try:
-            requests.post(
-                f"{bot_url}/internal/dm",
-                json={"discord_id": discord_id, "message": message},
-                headers={"X-Internal-Secret": secret},
-                timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("Graduation DM failed for discord_id=%s: %s", discord_id, exc)
-
-    threading.Thread(target=_fire, daemon=True).start()
+    # ADR-487 D7: a Celery task, not a daemon thread. This one ran inside a
+    # nightly task, where a dropped thread at container stop was invisible.
+    send_discord.delay("dm", {"discord_id": discord_id, "message": message})

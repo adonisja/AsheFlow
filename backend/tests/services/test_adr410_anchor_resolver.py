@@ -1,8 +1,8 @@
 """ADR-410 — the anchor point identifies the truck.
 
-Every coordinate here is from the verified NYCD export of 2026-09-09, not
-invented. The two pairs that matter are the close ones: Morgan and Titan sit
-34 m apart, Atlas and Falcon 73 m. Any nearest-neighbour match wide enough to
+Every coordinate here is the 2026-09-09 export's anchor under the ADR-489 D2
+transform: real relative geometry, not a real location. The two pairs that matter are the close ones: Morgan and Titan sit
+39 m apart, Atlas and Falcon 79 m. Any nearest-neighbour match wide enough to
 absorb GPS noise is also wide enough to return the wrong truck for those pairs,
 which is why D3 matches exactly on a 5dp key.
 """

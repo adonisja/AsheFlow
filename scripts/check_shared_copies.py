@@ -107,6 +107,17 @@ PAIRS = [
 _KNOWN_NOT_COPIES = {
     "errorText.ts",   # web 54 lines / mobile 29 — different error shapes
     "types.ts",       # web is the full API surface; mobile declares what it reads
+    # ADR-487 D4. Same tone NAMES, deliberately different VALUES: web returns
+    # Tailwind class strings, mobile returns colour values off the active RN
+    # theme. That difference is the whole reason the server sends a semantic
+    # role rather than a colour — a hex from a Python file could not serve both
+    # and would land in one of the two themes unreadable.
+    #
+    # `classify.ts` beside it IS a real pair and is in PAIRS: the actionability
+    # rule is identical logic and must not drift. The distinction is worth
+    # holding — "both surfaces need this concept" is not the same claim as
+    # "both surfaces need these bytes".
+    "tone.ts",
 }
 
 

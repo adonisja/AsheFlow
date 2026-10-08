@@ -43,7 +43,6 @@ from app.services.company_config import get_discord_config
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
-from app.models.notification import Notification
 from app.models.field_ops import Departure
 from app.models.company import CompanyConfig
 from app.models.dispatch_confirmation import DispatchConfirmation
@@ -55,6 +54,7 @@ from app.schemas.anchor_point import (
     AnchorPointDepartUpdate,
     AnchorPointResponse,
 )
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/anchor-points", tags=["anchor-points"])
 
@@ -109,7 +109,13 @@ def _crew_employee_ids(db: Session, truck_id: UUID, target_date: date, company_i
 
 def _notify(db: Session, employee_ids: List[UUID], notif_type: str, message: str, company_id: UUID) -> None:
     for eid in employee_ids:
-        db.add(Notification(company_id=company_id, employee_id=eid, type=notif_type, message=message))
+        write_notification(
+            db,
+            company_id=company_id,
+            employee_id=eid,
+            type=notif_type,
+            message=message,
+        )
 
 
 async def _post_embed_to_discord(channel_id: int, company_id: UUID, payload: dict) -> None:

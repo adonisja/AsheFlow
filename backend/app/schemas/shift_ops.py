@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 from uuid import UUID
-from typing import Optional, List, Dict, Any
+from typing import Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -90,7 +90,19 @@ class RTSReportCreate(BaseModel):
 
 
 class RTSReportReview(BaseModel):
-    status: str  # "approved" | "rejected"
+    # ADR-487 D1 / ADR-115 D9. A Literal, not a str with the values in a comment.
+    #
+    # This field is interpolated into a NOTIFICATION TYPE at
+    # shift_ops.py:696 — `type=f"rts_{payload.status}"` — so an unconstrained
+    # string here is a request-controlled type name. The router does check the
+    # value (shift_ops.py:647), which is why the set is closed in practice, but
+    # a constraint that lives in an `if` rather than the type is one a new caller
+    # or a refactor can bypass without noticing.
+    #
+    # Pydantic now rejects anything else with a 422 before the handler runs, and
+    # the two types this can produce — rts_approved, rts_rejected — are both
+    # declared in notification_spec.SPEC.
+    status: Literal["approved", "rejected"]
     dispatch_notes: Optional[str] = Field(None, max_length=500)
 
 

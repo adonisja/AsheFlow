@@ -17,8 +17,9 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.platform_alert import PlatformAlert
+from app.services.notify import write_notification
+from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,52 @@ def alert_admins_integration_down(
 
     Never raises. This runs on paths that are ALREADY handling a failure; an
     alerting bug must not become the thing that breaks the request.
+
+    TWO AUDIENCES, TWO INDEPENDENT TRY BLOCKS (ADR-487 follow-up)
+    ============================================================
+
+    The two halves below were once a single `try`, and that coupling had already
+    cost a real outage. Three facts, none a bug alone:
+
+      1. `write_notification` REFUSES an undeclared type (ADR-487 D1) — correct,
+         it catches a typo at the call site.
+      2. This function swallows every exception — correct, see above.
+      3. The notification loop ran BEFORE the platform alert, inside the same
+         `try`.
+
+    Together: three integration types were missing from the registry, the
+    refusal fired on the FIRST statement, and `raise_platform_alert` was never
+    reached. So an outage notified **neither** the company's admins nor the
+    super admin who can rotate the credential, and left one log line.
+
+    The audiences are independent by design — ADR-324 D2 says a super admin has
+    no Employee row and cannot be reached by a Notification at all — so a
+    failure to reach one must not suppress the other. Hence two blocks.
+
+    **The platform alert goes FIRST**, which is the load-bearing part rather
+    than an aesthetic choice. It is the half that reaches the only person who
+    can actually fix a revoked credential, so it is the half that must survive
+    anything going wrong in the other. Reversing these two statements restores
+    the original defect under a different shape.
     """
+    # ── Audience 1: the super admin, who owns the credential ─────────────────
+    #
+    # ADR-335 D4 — raised here rather than at each call site so a future
+    # integration cannot alert one audience and forget the other.
+    #
+    # Deliberately different dedup from the notification below: the Notification
+    # dedups on UNREAD (an inbox), the PlatformAlert on the OPEN INCIDENT (a
+    # condition). That difference is why ADR-324 rejected bolting this onto
+    # Notification.
+    #
+    # No `try` of its own here: `raise_platform_alert` already has one and is
+    # documented "never raises". Wrapping it again would be a second guard over
+    # a guarded call, which reads as though it could throw and invites someone
+    # to rely on that.
+    raise_platform_alert(db, alert_type=notif_type, company_id=company_id,
+                         message=message)
+
+    # ── Audience 2: this company's admins, who must know crews are in-app ────
     try:
         admins = (
             db.query(Employee)
@@ -229,27 +275,14 @@ def alert_admins_integration_down(
             if existing is not None:
                 continue
 
-            db.add(
-                Notification(
-                    company_id=company_id,
-                    employee_id=admin.id,
-                    type=notif_type,
-                    message=message,
-                )
+            write_notification(
+                db,
+                company_id=company_id,
+                employee_id=admin.id,
+                type=notif_type,
+                message=message,
             )
             added += 1
-
-        # ADR-335 D4 — both audiences from one call, for different reasons.
-        # Company admins must know their crews are on in-app only; super admins
-        # are the only people who can rotate the credential. Raised here rather
-        # than at each call site so a future integration cannot alert one
-        # audience and forget the other.
-        #
-        # Deliberately different dedup: the Notification dedups on UNREAD (an
-        # inbox), the PlatformAlert on the OPEN INCIDENT (a condition). That
-        # difference is why ADR-324 rejected bolting this onto Notification.
-        raise_platform_alert(db, alert_type=notif_type, company_id=company_id,
-                             message=message)
 
         if added:
             logger.warning(
@@ -259,8 +292,13 @@ def alert_admins_integration_down(
         return added
 
     except Exception:
+        # The platform alert above is already on the session, so the person who
+        # can fix this still hears about it. That is the whole point of the
+        # split: this log line now means "the admins were not told", not
+        # "nobody was told".
         logger.exception(
-            "integration alert: could not notify admins of company=%s type=%s",
+            "integration alert: could not notify admins of company=%s type=%s "
+            "(the platform alert was still raised)",
             company_id, notif_type,
         )
         return 0

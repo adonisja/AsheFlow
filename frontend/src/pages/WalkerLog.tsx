@@ -39,6 +39,7 @@ import {
   findDeletedSubmissions,
 } from '../utils/collectionSubmit';
 import type { CheckResult, LeaderboardEntry } from '../utils/collectionSubmit';
+import { fetchMyCampaigns, type MyCampaign } from '../utils/myCampaigns';
 import { buildWorkbook } from '../utils/walkerLogXlsx';
 
 /** Manual walker/route tracker — a research instrument, not an operational page.
@@ -211,6 +212,25 @@ export default function WalkerLog({ dataset = 'routes' }: {
       /* private window or storage disabled — the field still works this session */
     }
   }, [tokenKey]);
+
+  /** Campaigns this company was issued, offered instead of a paste (ADR-485 D9).
+   *
+   *  Empty for a signed-out visitor on the public page, which is the normal case
+   *  and not an error -- `fetchMyCampaigns` resolves to [] rather than throwing,
+   *  so the paste field below is untouched and remains the path for anyone
+   *  outside the tenant.
+   *
+   *  Filtered to THIS page's dataset: the address page must not offer a route
+   *  campaign's link, which is the ADR-439 D8 mistake that made the token key
+   *  per-dataset in the first place. */
+  const [myCampaigns, setMyCampaigns] = useState<MyCampaign[]>([]);
+  useEffect(() => {
+    let live = true;
+    void fetchMyCampaigns().then((rows) => {
+      if (live) setMyCampaigns(rows.filter((c) => c.dataset === dataset));
+    });
+    return () => { live = false; };
+  }, [dataset]);
   const [sending, setSending] = useState(false);
   /** Door keys the campaign has already received, as reported by the server on
    *  this device's own submissions. Seeded from localStorage so the warning
@@ -1379,6 +1399,29 @@ export default function WalkerLog({ dataset = 'routes' }: {
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Collection link
                 </label>
+                {/* ADR-485 D9. Offered ABOVE the paste field, never replacing it: a
+                    collector may be signed out, or working a campaign issued to another
+                    company, and both are legitimate. Absent rather than empty when there is
+                    nothing to offer -- an empty "your campaigns" box tells a public visitor
+                    about a feature that is not for them. */}
+                {myCampaigns.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {myCampaigns.map((c) => (
+                      <button
+                        key={c.token}
+                        type="button"
+                        onClick={() => setCollectToken(c.token)}
+                        className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+                          collectToken === c.token
+                            ? 'border-primary bg-primary/10 text-primary font-semibold'
+                            : 'border-border text-muted-foreground hover:bg-muted'
+                        }`}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <input
                   value={collectToken}
                   onChange={(e) => setCollectToken(e.target.value)}

@@ -17,8 +17,8 @@ from app.models.employee import Employee
 from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.services.adp import patch_adp_timecard
-from app.models.notification import Notification
 from app.services.adp_exceptions import ADPAuthError, ADPClientError, ADPServerError
+from app.services.notify import write_notification
 
 
 logger = logging.getLogger(__name__)
@@ -261,15 +261,14 @@ async def employee_signoff(
         Employee.is_active == True
     ).all()
     for person in managers_and_admins:
-        db.add(Notification(
-            company_id = caller.company_id,
-            employee_id = person.id,
-            type = "timecard_pending_manager",
-            message = (
-                f"{caller.name.title()} has signed off on a timecard adjustment for "
-                f"{adjustment.work_date}. Manager approval required."
-            )
-        ))
+        write_notification(
+            db,
+            company_id=caller.company_id,
+            employee_id=person.id,
+            type="timecard_pending_manager",
+            message=f"{caller.name.title()} has signed off on a timecard adjustment for "
+                f"{adjustment.work_date}. Manager approval required.",
+        )
     db.commit()
 
     return {"detail": "Employee successfully signed off on adjustment"}
@@ -368,12 +367,13 @@ async def manager_sign_off(
             Employee.is_active == True
         ).all()
         for person in managers_and_admins:
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=caller.company_id,
                 employee_id=person.id,
                 type="timecard_update_failed",
                 message=notif_message,
-            ))
+            )
 
     except ADPServerError as e:
         logger.warning(
@@ -404,12 +404,13 @@ async def manager_sign_off(
             f"Your timecard adjustment for {adjustment.work_date} was approved but "
             f"could not be submitted to ADP. Your manager has been notified."
         )
-    db.add(Notification(
-        company_id = caller.company_id,
-        employee_id = adjustment.employee_id,
-        type = "timecard_applied",
-        message = notif_message
-    ))
+    write_notification(
+        db,
+        company_id=caller.company_id,
+        employee_id=adjustment.employee_id,
+        type="timecard_applied",
+        message=notif_message,
+    )
     db.commit()
 
     return {"detail": "Adjustment Approved", "status": adjustment.status}
@@ -454,34 +455,38 @@ def reject_adjustment(
         after={"status": adjustment.status}
     )
 
+    # ADR-487 D1. TWO TYPES, not one branched.
+    #
+    # This fork is on WHO acted, so the two sides are different events: an
+    # employee disputing is an ACTION a manager must take, and a manager
+    # rejecting is news the employee receives. Under one type either the
+    # managers' "Please review" arrives as INFO, or the employee's notice
+    # arrives as ACTION — and ACTION drives the always-visible treatment, so
+    # getting it wrong is not cosmetic.
     if previous_status == "pending_employee":
-        # Employee disputed — notify managers/admins
-        managers_and_admins = db.query(Employee).filter(
-            Employee.company_id == caller.company_id,
-            Employee.role.in_(["admin", "management"]),
-            Employee.is_active == True
-        ).all()
-        for person in managers_and_admins:
-            db.add(Notification(
-                company_id = caller.company_id,
-                employee_id = person.id,
-                type = "timecard_rejected",
-                message = (
-                    f"{caller.name.title()} has disputed their timecard adjustment for "
-                    f"{adjustment.work_date}. Please review."
-                )
-            ))
+        # The EMPLOYEE disputed — managers must review. ACTION.
+        fan_out(
+            db,
+            company_id=caller.company_id,
+            audience=Audience.MANAGEMENT,
+            type="timecard_disputed",
+            message=(
+                f"{caller.name.title()} has disputed their timecard adjustment for "
+                f"{adjustment.work_date}. Please review."
+            ),
+        )
     else:
-        # Manager rejected — notify the employee
-        db.add(Notification(
-            company_id = caller.company_id,
-            employee_id = adjustment.employee_id,
-            type = "timecard_rejected",
-            message = (
+        # The MANAGER rejected — the employee is told. INFO.
+        write_notification(
+            db,
+            company_id=caller.company_id,
+            employee_id=adjustment.employee_id,
+            type="timecard_rejected",
+            message=(
                 f"Your timecard adjustment for {adjustment.work_date} has been rejected "
                 f"by your manager. Please contact your manager for details."
-            )
-        ))
+            ),
+        )
     db.commit()
 
     return {"detail": "Adjustment Rejected", "status": adjustment.status}

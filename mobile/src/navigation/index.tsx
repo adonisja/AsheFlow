@@ -27,7 +27,7 @@ import AnchorPointTab           from '@screens/AnchorPoints/AnchorPointTab';
 import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
 import ScheduleChangesScreen    from '@screens/ScheduleChanges/ScheduleChangesScreen';
 import WalkerDashboard          from '@screens/Walker/WalkerDashboard';
-import DriverSurveyScreen       from '@screens/DriverSurvey/DriverSurveyScreen';
+import CampaignsScreen          from '@screens/Campaigns/CampaignsScreen';
 import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
 import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
 import CrewMemberDetailScreen   from '@screens/Trainer/CrewMemberDetailScreen';
@@ -43,7 +43,7 @@ import { TAB_GATES } from './roles';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
-  WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
+  WALKER_ROLES, ROUTE_SORT_ROLES, CAMPAIGN_ROLES,
   GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES, TRUCK_BUILDINGS_ROLES,
   TOTE_ADDRESS_ROLES,
   WORKFORCE_ROUTE_ROLES,
@@ -138,7 +138,7 @@ const ALL_TABS: TabDef[] = [
   //
   // A walker's own numbers live in Account (My Stats + Scorecard), not here.
   { key: 'Walker',          label: 'Walker',           icon: '🚶', component: WalkerDashboard, ...TAB_GATES['Walker'] },
-  { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', component: DriverSurveyScreen, ...TAB_GATES['DriverSurvey'] },
+  { key: 'Campaigns',      label: 'Campaigns',        icon: '📋', component: CampaignsScreen, ...TAB_GATES['Campaigns'] },
   { key: 'Schedule',        label: 'Schedule',         icon: '📅', component: ScheduleScreen, ...TAB_GATES['Schedule'] },
   { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', component: ScheduleChangesScreen, ...TAB_GATES['SchChanges'] },
   { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', component: IncidentsScreen, ...TAB_GATES['Incidents'] },

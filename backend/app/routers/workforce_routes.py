@@ -711,16 +711,33 @@ def add_tote_address(
         block_key=resolved.block_key,
         lat=resolved.lat,
         lng=resolved.lng,
-        # Cross streets are deliberately NOT set here. ResolvedAddress does not
+        # ADR-408 D2. Store the segment instead of discarding it.
+        #
+        # This value was computed on the line above and thrown away for as long
+        # as this endpoint has existed, because ToteAddress had no column for
+        # it. That omission is what left workforce mode sorting on a graph with
+        # no cost-1 edges.
+        segment_id=resolved.segment_id,
+        # Cross streets are STILL deliberately not set. ResolvedAddress does not
         # carry them (verified — it has lat/lng/normalised_address/block_key/
         # segment_id/geocoded and nothing else), so a getattr fallback would
         # write None forever while looking like a populated field.
         #
-        # Consequence, stated rather than hidden: route_sort's cross-street
-        # adjacency edges (cost 1) do not form in workforce mode, and the graph
-        # falls back to same-street (2) and parallel (3) edges. Those are the
-        # edges ADR-238 measured as the correct constraint anyway; a sparser
-        # graph here means tighter routes, not broken ones.
+        # ADR-408 D1: cross streets are the WEAKER proxy for adjacency and are
+        # not being backfilled. Two segments sharing a LION node is a physical
+        # fact about the grid; a cross-street string match approximates it.
+        #
+        # Storing `segment_id` does NOT change this. Verified against the code
+        # rather than assumed: `_build_adjacency_graph(block_to_totes)` takes no
+        # adjacency argument and never sees a segment — `segment_adjacency`
+        # reaches `_detect_misroutes` alone. So route_sort's cost-1 edges still
+        # do not form in workforce mode and the graph still falls back to
+        # same-street (2) and parallel (3) edges.
+        #
+        # That is the intended state, not a gap: ADR-238 D4a measured
+        # segment-derived routing as WORSE twice (mean degree 6.09 vs ~3.5 —
+        # more reach per step, so a route covers more blocks for the same load).
+        # ADR-291 D9/D10 re-litigated it for workforce mode and upheld it.
         entry_sequence=next_seq,
         entered_by=caller.id,
         entered_by_name=(caller.name or "")[:100],
@@ -1052,6 +1069,40 @@ def commit_workforce_sort(
             detail="No tote addresses entered for this truck and date.",
         )
 
+    # ADR-408 D2. The LION node graph, now that tote addresses carry a segment
+    # to look it up with.
+    #
+    # D2 ONLY. D3 (projecting segment adjacency onto the block graph to build
+    # cost-1 edges) is NOT implemented here and is blocked: ADR-412 D5 measured
+    # every avenue block at zero node neighbours, because the segment table
+    # holds `11_Avenue_btw_W_29_St_W_30_St` while derive_block_key produces
+    # `11_Ave_300` — two key shapes with no overlap.
+    #
+    # This call is unaffected by that, because it is NODE-keyed rather than
+    # block-keyed: it returns {node_id: {adjacent node_ids}} and never touches a
+    # block_key. What it feeds is MISROUTE DETECTION, which workforce mode
+    # previously had none of — `node_adj` was built only from the sort's own
+    # topology, and with no segment ids there was nothing to build it from.
+    #
+    # `StreetSegment` is a GLOBAL, tenant-independent street library (ADR-236):
+    # street topology is a public fact about the city, not company data. It is
+    # read here through the segment ids on THIS truck's tote addresses, never
+    # enumerated — the dim 1 distinction ADR-408 flags, because an unfiltered
+    # read of the table into a response would expose which streets other
+    # tenants work.
+    #
+    # Best-effort exactly as full mode does it at walker_routes.py: topology is
+    # an optimisation, not a dependency. An empty map, a row with no segment, or
+    # a DB hiccup degrades to block-key edges alone — the behaviour before this
+    # change — rather than failing a sort the captain is standing in front of.
+    segment_adjacency = None
+    try:
+        from app.services.segment_map import load_node_adjacency
+        _seg_ids = {p.segment_id for p in built.packages if p.segment_id}
+        segment_adjacency = load_node_adjacency(db, _seg_ids) or None
+    except Exception:  # noqa: BLE001 — topology is an optimisation, not a dependency
+        segment_adjacency = None
+
     result = run_sort(
         request=SortRequest(
             truck_assignment_id=ta.id,
@@ -1061,6 +1112,7 @@ def commit_workforce_sort(
         address_workloads={},
         block_workloads={},
         difficulty_flags={},
+        segment_adjacency=segment_adjacency,
     )
 
     # D7: a route over its lock is allowed but must be recorded. Computed from

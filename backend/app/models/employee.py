@@ -128,7 +128,6 @@ class Employee(Base):
     # ADR-221: stamped on deactivation. The tombstone survives so the 6-month
     # name-redaction clock has a departure time to measure against.
     deactivated_at       = Column(DateTime(timezone=True), nullable=True)
-    reset_on_graduation  = Column(Boolean,            nullable=False, default=False)
 
     # ── External HR system IDs ────────────────────────────────────────────────
     # Each HR platform gets its own column: hr_system_id_<source>.

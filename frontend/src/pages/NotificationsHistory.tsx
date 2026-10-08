@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { formatDate } from '../utils/date';
 import {
-  Bell, CheckCircle2, XCircle, AlertTriangle, Info, MapPin,
+  Bell, CheckCircle2, AlertTriangle, Info,
   RefreshCw, Trash2, Check, ShieldAlert,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type { Notification } from '../contexts/NotificationContext';
+import { TONE_TEXT } from '../components/notifications/tone';
 
 interface HistoryNotification extends Notification {
   expires_at: string | null;
@@ -23,33 +24,45 @@ const FAILURE_LABELS: Record<string, string> = {
   identity_revocation_failed: 'Access revocation failed',
 };
 
-function iconForType(type: string) {
-  // ADR-341 D5 — BEFORE the suffix checks below. This chain is first-match-wins,
-  // so a future `..._failed_rejected` would otherwise take the _rejected branch
-  // and render as a routine denial. The ordering is load-bearing.
-  //
-  // identity_revocation_failed is DANGER, not warning: an offboarded employee
-  // who can still sign in (ADR-336 D2) is a different severity from an email
-  // that did not send.
-  if (type === 'identity_revocation_failed')
+/** The server's icon and tone, with the old guessing chain as the fallback.
+ *
+ *  ADR-487 D4 made `icon`, `label` and `tone` part of the response, resolved
+ *  from the registry per read. This page hits the SAME endpoint as the banner,
+ *  so before this it derived its own: `type.replace(/_/g, ' ')` title-cased,
+ *  which rendered `rts_rejected` as "Rts Rejected" here and "RTS Rejected" in
+ *  the banner — the same notification, two names, one endpoint.
+ *
+ *  The icon chain it replaced had the same `includes('critical')` guess that
+ *  put an URGENT incident in the same bucket as a timecard adjustment.
+ *
+ *  The fallbacks below are not decoration. Three types reaching this page are
+ *  PlatformAlert vocabulary, not Notification types — ADR-324 D2 keeps the two
+ *  apart because a super admin has no Employee row — so they have no registry
+ *  entry and no server-sent label. FAILURE_LABELS is their source of truth,
+ *  and it words them better than a title-cased type would ("Discord is down").
+ */
+function iconFor(n: HistoryNotification): React.ReactNode {
+  if (n.icon) {
+    return (
+      <span aria-hidden="true" className={`shrink-0 ${TONE_TEXT[n.tone] ?? TONE_TEXT.neutral}`}>
+        {n.icon}
+      </span>
+    );
+  }
+  // No registry entry: a PlatformAlert type, or a row predating the registry.
+  if (n.type === 'identity_revocation_failed')
     return <ShieldAlert className="w-4 h-4 text-danger shrink-0" />;
-  if (type.endsWith('_failed'))
+  if (n.type.endsWith('_failed'))
     return <AlertTriangle className="w-4 h-4 text-danger shrink-0" />;
-
-  if (type.endsWith('_approved'))           return <CheckCircle2 className="w-4 h-4 text-success shrink-0" />;
-  if (type.endsWith('_rejected'))           return <XCircle className="w-4 h-4 text-danger shrink-0" />;
-  if (type === 'anchor_point_running_late') return <AlertTriangle className="w-4 h-4 text-warning shrink-0" />;
-  if (type.startsWith('anchor_point'))      return <MapPin className="w-4 h-4 text-info shrink-0" />;
-  if (type === 'timecard_adjustment')       return <AlertTriangle className="w-4 h-4 text-warning shrink-0" />;
-  if (type === 'dispatch_assignment')       return <Bell className="w-4 h-4 text-primary shrink-0" />;
-  if (type.includes('critical') || type.includes('warning')) return <AlertTriangle className="w-4 h-4 text-warning shrink-0" />;
   return <Info className="w-4 h-4 text-info shrink-0" />;
 }
 
-function labelForType(type: string): string {
-  // ADR-341 D5 — a recognisable name where we have one.
-  if (FAILURE_LABELS[type]) return FAILURE_LABELS[type];
-  return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+function labelFor(n: HistoryNotification): string {
+  // FAILURE_LABELS first: these are PlatformAlert types with no registry entry
+  // and deliberately better wording than any generic rule (ADR-341 D5).
+  if (FAILURE_LABELS[n.type]) return FAILURE_LABELS[n.type];
+  if (n.label) return n.label;
+  return n.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function fmtTime(iso: string): string {
@@ -188,13 +201,13 @@ export default function NotificationsHistory() {
                   : 'bg-card border-border shadow-sm'
               }`}
             >
-              <div className="mt-0.5">{iconForType(n.type)}</div>
+              <div className="mt-0.5">{iconFor(n)}</div>
               <div className="flex-1 min-w-0">
                 <p className={`text-sm ${n.is_read ? 'text-muted-foreground' : 'text-foreground font-medium'}`}>
                   {n.message}
                 </p>
                 <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-muted-foreground">{labelForType(n.type)}</span>
+                  <span className="text-xs text-muted-foreground">{labelFor(n)}</span>
                   <span className="text-muted-foreground/40 text-xs">·</span>
                   <span className="text-xs text-muted-foreground">{fmtTime(n.created_at)}</span>
                 </div>

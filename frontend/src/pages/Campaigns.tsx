@@ -17,11 +17,13 @@
  *     a blank screen.
  */
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ClipboardList, Clock, Truck, CheckCircle2, AlertCircle } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
 import SelectMenu from '../components/ui/SelectMenu';
 import { errorText } from '../utils/errorText';
+import { fetchMyCampaigns, type MyCampaign } from '../utils/myCampaigns';
 
 interface Question {
   id: string;
@@ -44,10 +46,32 @@ interface OpenRun {
   truck_name?: string | null;
   answered: boolean;
   questions: Question[];
+  /** ADR-485 D14. First names of the crew on this assignment, so free text
+   *  can be checked for a colleague's name before it is sent. */
+  crew_names?: string[];
 }
 
 /** One answer, shaped by the question's kind. */
 type Draft = Record<string, { bool?: boolean; int?: number; text?: string }>;
+
+/**
+ * Does this free text name someone on the crew? (ADR-485 D14)
+ *
+ * Word boundaries, case-insensitive. Without `\b`, an employee named Al turns
+ * "the van was almost empty" into a false positive, and a warning that fires
+ * on ordinary sentences is a warning people learn to dismiss.
+ */
+function namesACoworker(text: string, crew: string[] | undefined): string | null {
+  if (!text || !crew?.length) return null;
+  for (const name of crew) {
+    // Names shorter than three characters match inside ordinary words too
+    // often to warn on.
+    if (name.length < 3) continue;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escaped}\\b`, 'i').test(text)) return name;
+  }
+  return null;
+}
 
 function closesIn(iso: string): { label: string; urgent: boolean } {
   const ms = new Date(iso).getTime() - Date.now();
@@ -61,6 +85,22 @@ function closesIn(iso: string): { label: string; urgent: boolean } {
 }
 
 export default function Campaigns() {
+  /** Platform collection campaigns this company may contribute to (ADR-485 D9).
+   *
+   *  D9 meeting point 1: "Campaigns" lists BOTH -- the tenant's own campaigns and
+   *  any platform campaign they are eligible for. Visually one surface;
+   *  underneath, two routers with two trust models, which is why this is a
+   *  separate fetch against /collection rather than folded into the run list.
+   *
+   *  Absent rather than empty when there are none: a tenant with no platform
+   *  campaign should not be told about a feature that is not theirs. */
+  const [platform, setPlatform] = useState<MyCampaign[]>([]);
+  useEffect(() => {
+    let live = true;
+    void fetchMyCampaigns().then(rows => { if (live) setPlatform(rows); });
+    return () => { live = false; };
+  }, []);
+
   const [runs, setRuns] = useState<OpenRun[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<OpenRun | null>(null);
@@ -147,7 +187,7 @@ export default function Campaigns() {
           <div className="card text-center py-10 text-subtle text-sm">Loading…</div>
         )}
 
-        {runs !== null && runs.length === 0 && (
+        {runs !== null && runs.length === 0 && platform.length === 0 && (
           <div className="card text-center py-10">
             <p className="text-sm text-foreground">Nothing to answer right now.</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -206,6 +246,34 @@ export default function Campaigns() {
             </button>
           );
         })}
+        {/* ADR-485 D9 meeting point 1. A platform campaign is not a run: there is
+            no subject, no truck and no close -- it is an open invitation to
+            contribute. So it gets its own heading rather than being made to look
+            like a run it is not. */}
+        {platform.length > 0 && (
+          <div className="space-y-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground pt-2">
+              Platform campaigns
+            </h2>
+            {/* Two distinct ROUTES, not a query param: App.tsx mounts /walker-log
+        with dataset="routes" and /address-log with dataset="addresses".
+        `dataset` is a prop, so a ?tab= would be silently ignored and both
+        links would have landed on the routes page. */}
+    {platform.map(c => (
+              <Link
+                key={c.token}
+                to={c.dataset === 'routes' ? '/walker-log' : '/address-log'}
+                className="card block hover:bg-accent/30 transition-colors"
+              >
+                <p className="text-sm font-semibold text-foreground">{c.label}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {c.dataset === 'routes' ? 'Route collection' : 'Address collection'}
+                  {' · open to everyone at your company'}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -319,15 +387,31 @@ export default function Campaigns() {
             )}
 
             {q.kind === 'text' && (
-              <textarea
-                value={draft[q.id]?.text ?? ''}
-                onChange={e => setAnswer(q.id, { text: e.target.value })}
-                maxLength={2000}
-                rows={3}
-                aria-label={q.prompt}
-                className="input-field w-full resize-y"
-                placeholder="Optional"
-              />
+              <>
+                <textarea
+                  value={draft[q.id]?.text ?? ''}
+                  onChange={e => setAnswer(q.id, { text: e.target.value })}
+                  maxLength={2000}
+                  rows={3}
+                  aria-label={q.prompt}
+                  className="input-field w-full resize-y"
+                  placeholder="Optional"
+                />
+                {/* A WARNING, not a block. A walker may have a legitimate
+                    reason to name someone, and a hard refusal on 2000
+                    characters they just typed is how a report gets abandoned
+                    instead of rewritten. */}
+                {namesACoworker(draft[q.id]?.text ?? '', active.crew_names) && (
+                  <p className="text-xs text-warning mt-1.5 flex items-start gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      This mentions a coworker by name. Reviews are about{' '}
+                      {active.subject_name}, so use someone's role if you need
+                      to refer to them.
+                    </span>
+                  </p>
+                )}
+              </>
             )}
           </div>
         ))}

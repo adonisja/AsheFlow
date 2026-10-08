@@ -24,9 +24,9 @@ from app.api.ratelimit import limiter
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.services.audit import write_audit
 from app.services.sns_verify import SNSVerificationError, verify
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -139,16 +139,14 @@ def _flag(db: Session, address: str, bounce_type: str, when: datetime) -> int:
             Employee.id != emp.id,
         ).all()
         for manager in managers:
-            db.add(Notification(
+            write_notification(
+                db,
                 company_id=emp.company_id,
                 employee_id=manager.id,
                 type="email_bounced",
-                # The employee's NAME, never the address (Dimension 7). The
-                # admin can see the address on the employee record; a
-                # notification list is a wider audience than that record.
-                message=(f"Email to {emp.name} {reason} their address. "
-                         f"Check the address on their profile and resend."),
-            ))
+                message=f"Email to {emp.name} {reason} their address. "
+                         f"Check the address on their profile and resend.",
+            )
 
         write_audit(
             db=db,

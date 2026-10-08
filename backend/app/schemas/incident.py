@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from uuid import UUID
 from datetime import date, time, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 _MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5 MB
 
@@ -29,7 +29,14 @@ class IncidentCreate(BaseModel):
     # the authenticated caller's employee record to prevent identity forgery.
     date: date
     category: str
-    severity: str
+    # ADR-487 D1 / ADR-115 D9. A Literal, not a str validated in the router.
+    #
+    # Interpolated into a notification type at incidents.py:76 —
+    # `notif_type = f"incident_{severity}"` — so this is a request-controlled
+    # type name. VALID_SEVERITIES is checked at incidents.py:140, which closes
+    # the set today; stating it in the type closes it for every future caller
+    # and produces a 422 instead of a 400 written by hand.
+    severity: Literal["info", "warning", "critical"]
     description: str = Field(..., max_length=2000)
     photo_url: Optional[str] = None
 
@@ -57,7 +64,7 @@ class IncidentResponse(BaseModel):
     truck_id: Optional[UUID] = None
     date: date
     category: str
-    severity: str
+    severity: Literal["info", "warning", "critical"]
     description: str
     photo_url: Optional[str] = None
 
@@ -90,7 +97,7 @@ class IncidentListItem(BaseModel):
     driver_name: Optional[str] = None
     date: date
     category: str
-    severity: str
+    severity: Literal["info", "warning", "critical"]
     description: str
     resolved: bool
     resolved_at: Optional[datetime] = None

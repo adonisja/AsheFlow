@@ -25,8 +25,7 @@ WEDNESDAY = datetime.date(2026, 9, 23)
 def _emp(db, role, name=None):
     e = Employee(
         id=_uuid.uuid4(), company_id=COMPANY, name=name or f"{role}-{_uuid.uuid4().hex[:5]}",
-        role=role, is_active=True, account_status="active",
-        reset_on_graduation=False, hr_system_id_adp=_uuid.uuid4(),
+        role=role, is_active=True, account_status="active", hr_system_id_adp=_uuid.uuid4(),
         hr_system_id_adp_verified=False,
     )
     db.add(e)

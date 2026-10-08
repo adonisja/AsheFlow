@@ -9,9 +9,9 @@ from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.employee import Employee
 from app.models.time_off_request import TimeOffRequest
 from app.models.employee_off_day import EmployeeOffDay
-from app.models.notification import Notification
 from app.schemas.time_off_request import TimeOffRequestCreate, TimeOffRequestResponse
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/time-off-requests", tags=["time-off-requests"])
 
@@ -149,12 +149,13 @@ def approve_time_off_request(
         raise HTTPException(status_code=404, detail="Time-off request not found")
 
     db_request.status = "approved"
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=db_request.employee_id,
         type="pto_approved",
         message=f"Your PTO request for {db_request.date} has been approved.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(caller.id),
@@ -187,12 +188,13 @@ def reject_time_off_request(
         raise HTTPException(status_code=404, detail="Time-off request not found")
 
     db_request.status = "rejected"
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=db_request.employee_id,
         type="pto_rejected",
         message=f"Your PTO request for {db_request.date} was not approved.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(caller.id),

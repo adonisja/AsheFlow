@@ -157,8 +157,7 @@ class TestTheGuards:
         404 whether or not the query is scoped and so proves nothing."""
         other = Employee(
             id=uuid.uuid4(), company_id=uuid.uuid4(), name="Other Tenant",
-            role="trainee", is_active=False, account_status="pending_verification",
-            reset_on_graduation=False, hr_system_id_adp=uuid.uuid4(),
+            role="trainee", is_active=False, account_status="pending_verification", hr_system_id_adp=uuid.uuid4(),
             hr_system_id_adp_verified=False,
         )
         db.add(other)

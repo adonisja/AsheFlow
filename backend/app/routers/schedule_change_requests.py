@@ -11,8 +11,8 @@ from app.api.deps import RoleChecker, get_caller_employee, get_current_user
 from app.models.schedule_change_request import ScheduleChangeRequest
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/schedule-change-requests", tags=["schedule-change-requests"])
 
@@ -138,13 +138,14 @@ def submit_schedule_change_request(
     }.get(payload.request_type, payload.request_type)
 
     for reviewer in reviewers:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=reviewer.id,
             type="schedule_change_request",
             message=f"{caller.name} has submitted a request to {type_label}."
             + (f" Reason: {payload.reason}" if payload.reason else ""),
-        ))
+        )
 
     db.commit()
     db.refresh(req)
@@ -300,12 +301,13 @@ def approve_schedule_change_request(
         "full_rework": "rework your full schedule",
     }.get(req.request_type, req.request_type)
 
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=reviewer.company_id,
         employee_id=req.employee_id,
         type="schedule_change_approved",
         message=f"Your request to {type_label} has been approved and your schedule has been updated.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(reviewer.id),
@@ -351,12 +353,13 @@ def reject_schedule_change_request(
     req.resolved_at = datetime.now(timezone.utc)
     req.reviewed_by = reviewer.id
 
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=reviewer.company_id,
         employee_id=req.employee_id,
         type="schedule_change_rejected",
         message="Your schedule change request was reviewed and not approved.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(reviewer.id),

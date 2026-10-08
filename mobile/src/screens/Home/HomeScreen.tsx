@@ -90,6 +90,9 @@ export default function HomeScreen() {
      waiting. Same classifier as the web banner, driving a badge rather than a
      layout. */
   const [needsResponse, setNeedsResponse] = useState(false);
+  /** ADR-487 D4a — something is WRONG, as distinct from something awaiting
+   *  your answer. Drives a danger border rather than a warning one. */
+  const [needsUrgentAttention, setNeedsUrgentAttention] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -144,7 +147,19 @@ export default function HomeScreen() {
       // limit must cover the whole unread set — counting within a 10-item
       // page showed "10 unread" while 14 existed.
       const res  = await apiClient.get(`/notifications/${eid}?limit=50`);
-      const list: any[] = res.data ?? [];
+      // Typed to what this card READS, not the full response. `any[]` was here
+      // before and is the reason a typo in `n.severity` would have been silent:
+      // the field would read undefined forever and needsUrgentAttention would
+      // never fire, with nothing to catch it. ADR-487 D4's fields are optional
+      // because an older server build does not send them.
+      const list: {
+        id: string;
+        type: string;
+        message: string;
+        is_read: boolean;
+        dispatch_date: string | null;
+        severity?: 'urgent' | 'action' | 'notice' | 'info';
+      }[] = res.data ?? [];
       setUnreadCount(list.filter(n => !n.is_read).length);
       setLatestMessage(list[0]?.message ?? null);
 
@@ -174,6 +189,21 @@ export default function HomeScreen() {
 
       const { action } = partitionNotifications(unread, { confirmationStatus });
       setNeedsResponse(action.length > 0);
+
+      // ADR-487 D4a, mobile half. URGENT is a DIFFERENT state from
+      // needsResponse, not a stronger one:
+      //
+      //   needsResponse      somebody is waiting on YOUR answer
+      //   needsUrgentAttention  something is wrong and you should look NOW
+      //
+      // An injury alert needs no answer from the reader, so folding it into
+      // needsResponse would label the card "needs your response" about
+      // something that cannot be responded to — the ADR-333 failure of a
+      // message that misdescribes what it wants.
+      //
+      // Read from the SERVER's severity rather than a type list, so a fifth
+      // URGENT type added to the registry lights this up with no mobile change.
+      setNeedsUrgentAttention(unread.some(n => n.severity === 'urgent'));
     } catch {
       setUnreadCount(0);
     } finally {
@@ -268,18 +298,26 @@ export default function HomeScreen() {
             // in that moment is to say "someone is waiting on you".
             // Gated on truckName: a warning border over "No assignment today"
             // told the walker to respond to something that does not exist.
-            borderColor: needsResponse && truckName ? c.warning : truckName ? roleColor : c.border,
-            borderWidth: needsResponse && truckName ? 2 : 1,
+            // Three-way, most-consequential first. URGENT is NOT gated on
+            // truckName: the warning border was, because "respond to your
+            // assignment" is meaningless with no assignment — but an injury
+            // alert is worth seeing whether or not you are dispatched today.
+            borderColor: needsUrgentAttention ? c.danger
+              : needsResponse && truckName ? c.warning
+              : truckName ? roleColor : c.border,
+            borderWidth: needsUrgentAttention || (needsResponse && truckName) ? 2 : 1,
           }]}
           onPress={() => navigation.navigate('TodayAssignment')}
           activeOpacity={0.75}
-          accessibilityLabel={needsResponse && truckName
-            ? 'Today\'s assignment — needs your response'
+          accessibilityLabel={
+            needsUrgentAttention ? 'Today\'s assignment — urgent alert, open now'
+            : needsResponse && truckName ? 'Today\'s assignment — needs your response'
             : "Today's assignment"}
         >
           {/* Color accent stripe */}
           <View style={[s.assignStripe, {
-            backgroundColor: needsResponse && truckName ? c.warning
+            backgroundColor: needsUrgentAttention ? c.danger
+              : needsResponse && truckName ? c.warning
               : truckName ? roleColor : c.surfaceMuted,
           }]} />
 

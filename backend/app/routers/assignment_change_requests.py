@@ -13,9 +13,9 @@ from app.models.assignment_change_request import AssignmentChangeRequest
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.schemas.assignment_change_request import AssignmentChangeRequestCreate, AssignmentChangeRequestResponse
 from app.services.audit import write_audit
+from app.services.notify import write_notification
 
 router = APIRouter(prefix="/assignment-change-requests", tags=["assignment-change-requests"])
 
@@ -99,16 +99,15 @@ def submit_change_request(
     ).all()
 
     for emp in dispatch_employees:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=caller.company_id,
             employee_id=emp.id,
             type="assignment_change_request",
-            message=(
-                f"{employee.name} has requested a truck reassignment for "
+            message=f"{employee.name} has requested a truck reassignment for "
                 f"{payload.requested_date.strftime('%A, %b %d')}."
-                + (f" Reason: {payload.reason}" if payload.reason else "")
-            ),
-        ))
+                + (f" Reason: {payload.reason}" if payload.reason else ""),
+        )
 
     db.commit()
     db.refresh(new_req)
@@ -211,12 +210,13 @@ def approve_change_request(
     req.resolved_at = datetime.now(timezone.utc)
     req.reviewed_by = caller.id
 
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=req.employee_id,
         type="assignment_change_approved",
         message=f"Your truck reassignment request for {req.requested_date.strftime('%A, %b %d')} has been approved. Dispatch will update your assignment shortly.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(caller.id),
@@ -258,12 +258,13 @@ def reject_change_request(
     req.resolved_at = datetime.now(timezone.utc)
     req.reviewed_by = caller.id
 
-    db.add(Notification(
+    write_notification(
+        db,
         company_id=caller.company_id,
         employee_id=req.employee_id,
         type="assignment_change_rejected",
         message=f"Your truck reassignment request for {req.requested_date.strftime('%A, %b %d')} was not approved.",
-    ))
+    )
     write_audit(
         db,
         actor_id=str(caller.id),

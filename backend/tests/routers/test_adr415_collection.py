@@ -269,9 +269,37 @@ class TestTheRouterIsActuallyMounted:
             # the owning company's admin", so the gate is no longer a single
             # dependency — it is _scope_reads, which 403s anyone else and
             # filters a company admin to their own company_id.
-            assert "_scope_reads(" in src, (
-                f"{r.path} is a read on the collection router that does not go "
-                f"through _scope_reads"
+            # ADR-485 D9 added a read that returns no collected data at all:
+            # /my-campaigns answers "which campaigns may my company submit to?"
+            # and selects only CollectionToken (label, dataset, expiry). It must
+            # NOT go through _scope_reads, which 403s anyone below management --
+            # every employee of a commissioned company may contribute.
+            #
+            # So the gate is stated as the invariant it always meant: a read
+            # either narrows through _scope_reads, or it touches none of the
+            # models that hold collected data. Checking the MODELS rather than
+            # keeping an allowlist of exempt paths means a future read that
+            # starts selecting addresses fails here even if someone added its
+            # path to an exemption set.
+            # Derived from the models module, never hand-typed. A typed list
+            # matches by substring, so "CollectedAddress" happens to match
+            # CollectedAddressProfile today and would match nothing after a
+            # rename -- emptying the guard silently while it still passes.
+            # Walking the module means a NEW collected-data model is covered
+            # the moment it is defined (the ADR-464 direction lesson).
+            import app.models.collection as _cm
+            from app.models.base import Base as _Base
+            PII_MODELS = tuple(
+                name for name, obj in vars(_cm).items()
+                if isinstance(obj, type) and issubclass(obj, _Base)
+                and obj is not _cm.CollectionToken
+                and getattr(obj, "__tablename__", None)
+            )
+            assert PII_MODELS, "no collected-data models found -- guard is empty"
+            touches_pii = [m for m in PII_MODELS if m in src]
+            assert "_scope_reads(" in src or not touches_pii, (
+                f"{r.path} reads {touches_pii} without going through "
+                f"_scope_reads"
             )
             # The invariant ADR-423 must not erode: a cross-tenant support
             # login may never reach addresses or names (ADR-343 D4).

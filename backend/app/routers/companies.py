@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_platform_staff, get_caller_employee, RoleChecker
+from app.services.campaign_seeds import seed_campaigns_for
+from app.services.notice_seeds import seed_platform_notices
 from app.services.company_config import (
     _REQUIRED_FIELDS, PLATFORM_ONLY_FIELDS, PLATFORM_SEEDED_DEFAULTS,
     platform_settings_missing, platform_settings_ok,
@@ -416,6 +418,19 @@ def create_company(
     # column COMMENTS ("# default 0.70") and no default= anywhere, so this line
     # used to write eight NULLs and every company was born unconfigurable.
     db.add(CompanyConfig(company_id=company.id, **PLATFORM_SEEDED_DEFAULTS))
+
+    # ADR-485 D8. The built-in campaigns ship as ordinary rows, seeded here
+    # beside the config for the same reason: a tenant that has to design a
+    # driver survey from scratch before they can run one will not run one.
+    seed_campaigns_for(db, company.id, created_by=None)
+
+    # ADR-488 D1. The platform notices ship the same way and for the same
+    # reason. Seeded here rather than created lazily on the first sweep tick,
+    # because a notice that appears only after a sweep has run is invisible to
+    # the admin configuring the company — and the anchors it needs
+    # (shift_end, dispatch_confirmation_cutoff) are exactly what they are in
+    # the settings screen to set.
+    seed_platform_notices(db, company.id)
 
     write_audit(
         db=db,
@@ -1417,12 +1432,13 @@ def _notify_mode_change(
         .all()
     )
     for emp in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=company_id,
             employee_id=emp.id,
             type="operating_mode_change",
             message=message,
-        ))
+        )
     return len(recipients)
 
 
@@ -1511,7 +1527,7 @@ _BASE_FEATURES: tuple[str, ...] = (
     "time_off",
     "incidents",
     "gear",
-    "driver_surveys",
+    "campaigns",            # ADR-485 D17 (was driver_surveys)
     "scorecards",
     "vehicle_compliance",
     "notifications",
@@ -1653,6 +1669,7 @@ def _list_deadlines(db: Session, company_id: UUID) -> list[CheckInDeadline]:
 
 
 from app.models.metric_target import CompanyMetricTarget
+from app.services.notify import write_notification
 
 # ---------------------------------------------------------------------------
 # Scorecard metric targets (ADR-473 D6)

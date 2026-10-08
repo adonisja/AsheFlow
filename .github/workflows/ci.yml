@@ -162,6 +162,13 @@ jobs:
       - name: No literal unicode escapes in copy
         run: python scripts/check_literal_unicode_escapes.py
 
+      # Two scheduled tasks starting in the same minute contend for the same worker
+      # pool for nothing, and the log cannot say which one was slow. Three such
+      # pairs existed; one collided only on the 1st of the month, which a
+      # daily-only scan misses (ADR-487).
+      - name: No two beat tasks share a minute
+        run: python scripts/check_beat_collisions.py
+
       # Cognito's stock invite ("Your username is X and temporary password is
       # Y") ships through our own SES identity, so it arrives from
       # no-reply@asheflow.com looking like ours. Every admin_create_user must

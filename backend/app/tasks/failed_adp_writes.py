@@ -10,10 +10,10 @@ from app.database import SessionLocal
 from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_integration import ADPIntegration
 from app.models.adp_pay_period import ADPPayPeriod
-from app.models.notification import Notification
 
 from app.services.adp import patch_adp_timecard
 from app.services.adp_exceptions import ADPServerError, ADPClientError
+from app.services.notify import write_notification
 
 logger = logging.getLogger(__name__)
 
@@ -117,12 +117,13 @@ def retry_failed_adp_writes():
                         Employee.is_active == True
                     ).all()
                     for person in managers_and_admins:
-                        db.add(Notification(
+                        write_notification(
+                            db,
                             company_id=integration.company_id,
                             employee_id=person.id,
                             type="timecard_update_failed",
                             message=notif_message,
-                        ))
+                        )
 
                 except ADPServerError as e:
                     logger.warning(

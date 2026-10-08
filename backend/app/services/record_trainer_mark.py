@@ -3,9 +3,9 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
-from app.models.notification import Notification
 from app.models.trainer_mark import TrainerMark
 from app.models.training import TrainingRecord, TrainingTask
+from app.services.notify import write_notification
 
 UNDERPERFORMING_MARK_THRESHOLD = 3
 
@@ -158,9 +158,10 @@ def _notify_management(db: Session, message: str, notification_type: str, compan
         Employee.is_active == True,
     ).all()
     for recipient in recipients:
-        db.add(Notification(
+        write_notification(
+            db,
             company_id=company_id,
             employee_id=recipient.id,
             type=notification_type,
             message=message,
-        ))
+        )
