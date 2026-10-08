@@ -17,7 +17,7 @@ from app.services.resolve_truck_anchor import resolve_truck_by_anchor
 from tests.conftest import SEED_COMPANY_ID, make_truck
 
 MORGAN = (30.88353, -44.27243)
-TITAN  = (30.88348, -44.27283)   # 34 m from Morgan
+TITAN  = (30.88348, -44.27283)   # 39 m from Morgan
 VIKING = (30.88639, -44.27401)
 
 
@@ -38,7 +38,7 @@ def test_resolves_the_registered_truck(db):
 
 
 def test_the_34m_neighbour_is_not_returned(db):
-    """Morgan and Titan are 34 m apart. A nearest-neighbour resolver would
+    """Morgan and Titan are 39 m apart. A nearest-neighbour resolver would
     answer Morgan for Titan's sheet and file the wrong truck's totes."""
     _register(db, "Morgan", *MORGAN)
     titan = _register(db, "Titan", *TITAN)
@@ -100,14 +100,14 @@ def test_an_unrounded_stored_anchor_still_resolves(db):
     assert got is not None and got.id == truck.id
 
 
-def test_a_35m_neighbour_does_not_steal_a_claimed_anchor(db):
-    """The real 2026-09-12 export, which is what D3 exists for.
+def test_a_40m_neighbour_does_not_steal_a_claimed_anchor(db):
+    """The 2026-09-12 export (coordinates transformed, ADR-489 D2), which is what D3 exists for.
 
-    BTR29 arrived at 30.87895,-44.27791 — 35 m from Falcon — in the SAME workbook
+    BTR29 arrived at 30.87895,-44.27791 — 40 m from Falcon — in the SAME workbook
     where BTR31 claimed Falcon's anchor exactly. So BTR29 is a different truck
-    standing 35 m away, not Falcon having moved.
+    standing 40 m away, not Falcon having moved.
 
-    35 m is TIGHTER than the registered fleet's own minimum separation (34.1 m,
+    40 m is TIGHTER than the registered fleet's own minimum separation (38.6 m,
     Morgan<->Titan). A nearest-neighbour resolver with any tolerance able to absorb
     GPS noise would have filed BTR29's totes onto Falcon, whose own sheet was in
     the same upload. Exact matching returns None, which routes it to the D6 offer.
@@ -117,5 +117,5 @@ def test_a_35m_neighbour_does_not_steal_a_claimed_anchor(db):
     # Falcon's own sheet still resolves.
     assert resolve_truck_by_anchor(db, SEED_COMPANY_ID, 30.87890, -44.27832).id == falcon.id
 
-    # The 35 m neighbour does not.
+    # The 40 m neighbour does not.
     assert resolve_truck_by_anchor(db, SEED_COMPANY_ID, 30.87895, -44.27791) is None

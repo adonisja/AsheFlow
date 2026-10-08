@@ -31,7 +31,7 @@ FLEET = {
     "Titan":  (30.88348, -44.27283),
     "Falcon": (30.87890, -44.27832),
 }
-NEW_ANCHOR = (30.88673, -44.27768)   # appears on day 2, 311 m from Viking
+NEW_ANCHOR = (30.88673, -44.27768)   # appears on day 2, 352 m from Viking
 
 
 def _register(db, name, lat, lng):
@@ -76,8 +76,8 @@ def test_a_truck_absent_from_the_workbook_is_reported_unclaimed(db):
     unclaimed = _unclaimed_trucks(db, SEED_COMPANY_ID, matched, [orphan])
 
     assert [u.truck_name for u in unclaimed] == ["Viking"]
-    # Described, not chosen: 311 m from the orphan anchor.
-    assert unclaimed[0].distance_m == pytest.approx(311, abs=2)
+    # Described, not chosen: 352 m from the orphan anchor.
+    assert unclaimed[0].distance_m == pytest.approx(352, abs=2)
 
 
 def test_distance_is_omitted_when_more_than_one_sheet_is_unmatched(db):

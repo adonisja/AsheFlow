@@ -1,6 +1,7 @@
 """ADR-411 — a workbook is the day's whole fleet, parsed one worksheet per truck.
 
-Both fixtures are the real dispatch exports, one day apart. The pair is the point:
+Both fixtures are two dispatch exports one day apart, values transformed (ADR-489 D2)
+so no real anchor, DSP code or bag number is in this public repo. The pair is the point:
 every BTR label moved between them while five of six anchors stayed identical, which
 is what makes the anchor the identifier and the label useless as one (ADR-410).
 
@@ -38,7 +39,7 @@ def test_each_worksheet_keeps_its_own_header():
     by_zone = {s.btr_loading_zone: s for s in _sheets(DAY1)}
     assert by_zone["BTR43"].amazon_anchor_lat == 30.88353
     assert by_zone["BTR48"].amazon_anchor_lat == 30.87890
-    assert {s.dsp for s in _sheets(DAY1)} == {"NYCD"}
+    assert {s.dsp for s in _sheets(DAY1)} == {"TSTD"}
 
 
 def test_route_count_matches_each_sheets_printed_total():
@@ -61,7 +62,7 @@ def test_continuation_rows_fold_into_the_route_above():
 
 def test_bags_reconcile_against_the_printed_counts():
     """339 bags are printed across day 1. Exactly one route legitimately fails to
-    reconcile — BTR44/WE123 prints `Yellow 3508` and `Black 3508`, and
+    reconcile — BTR44/WE123 prints `Yellow 8775` and `Black 8775`, and
     parse_bag_labels dedupes on bag_id alone (ADR-290), so one is dropped.
 
     Pinned deliberately: it is a pre-existing dedupe rule, NOT a folding bug, and

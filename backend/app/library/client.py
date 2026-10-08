@@ -56,6 +56,7 @@ from typing import Iterable, Optional
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.building_profile_library import BuildingProfileLibrary
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,28 @@ def _degrades_to(empty):
     return decorate
 
 
+def _shared_or(empty):
+    """Return `empty` without querying while Library sharing is frozen (ADR-489 D1).
+
+    Every cross-tenant Library read passes through this module (ADR-237 D1), so
+    gating here is the whole read side rather than a sample of it. The frozen
+    result is identical to the unreachable one (`_degrades_to`): an empty
+    Library, which routing already handles (ADR-409 D4, ADR-291).
+
+    Read at CALL time, not import time, so flipping the setting needs no restart
+    and a test can patch it.
+    """
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if not settings.library_sharing_enabled:
+                return empty() if callable(empty) else empty
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorate
+
+
+@_shared_or(list)
 @_degrades_to(list)
 def all_active(db: Session) -> list[BuildingProfileLibrary]:
     """Every active Library record.
@@ -128,6 +151,7 @@ def all_active(db: Session) -> list[BuildingProfileLibrary]:
     )
 
 
+@_shared_or(None)
 @_degrades_to(None)
 def by_address(db: Session, normalised_address: str) -> Optional[BuildingProfileLibrary]:
     """One active Library record, or None.
@@ -145,6 +169,7 @@ def by_address(db: Session, normalised_address: str) -> Optional[BuildingProfile
     )
 
 
+@_shared_or(dict)
 @_degrades_to(dict)
 def by_addresses(
     db: Session, normalised_addresses: Iterable[str]

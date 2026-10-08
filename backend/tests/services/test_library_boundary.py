@@ -13,6 +13,7 @@ Source-reading rather than behavioural, deliberately: the thing being guarded is
 an IMPORT, and an import is exactly what an import test should look at. It is
 also the shape that catches a NEW file, which no behavioural test would.
 """
+import uuid
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,14 @@ class TestPlaceTypeCanBecomeRemote:
     branch on whether the store is remote.
     """
 
+    @pytest.fixture(autouse=True)
+    def _sharing_on(self, monkeypatch):
+        """These tests exercise the outage guard, which sits BEHIND the ADR-489
+        freeze. With sharing off, every reader returns empty before the guard
+        runs, so the tests below would pass whether or not the guard exists."""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "library_sharing_enabled", True)
+
     def _client_src(self) -> str:
         from pathlib import Path
         import app.library.client as c
@@ -199,10 +208,21 @@ class TestPlaceTypeCanBecomeRemote:
         database. Separating them makes the distinction real, which is why the
         guard is a prerequisite of the move rather than a follow-up.
         """
+        # Behavioural, not `hasattr(fn, "__wrapped__")`: ADR-489 stacked a second
+        # decorator on these readers, and that check then passed on the OUTER
+        # wrapper with the degradation guard deleted.
+        from unittest.mock import MagicMock
+        from sqlalchemy.exc import OperationalError
         import app.library.client as c
-        for name in ("all_active", "by_address", "by_addresses"):
-            fn = getattr(c, name)
-            assert hasattr(fn, "__wrapped__"), (
+
+        db = MagicMock()
+        db.query.side_effect = OperationalError("x", "y", "z")
+        for name, args, empty in (
+            ("all_active",   (), []),
+            ("by_address",   ("1 MAIN ST",), None),
+            ("by_addresses", (["1 MAIN ST"],), {}),
+        ):
+            assert getattr(c, name)(db, *args) == empty, (
                 f"library_client.{name} lost its degradation guard — an "
                 f"unreachable PlaceType would fail every sort (ADR-409 D4)"
             )
@@ -251,3 +271,60 @@ class TestPlaceTypeCanBecomeRemote:
             "segment_map defines or omits its own degradation guard; the two "
             "PlaceType datasets must degrade identically"
         )
+
+
+class TestLibrarySharingIsFrozen:
+    """ADR-489 D1. DSP Agreement §7(b) counts an address as Personal Information
+    and forbids aggregating or disclosing it; the Library is a cross-tenant table
+    keyed on address. Until counsel answers, nothing crosses tenants through it."""
+
+    def test_the_default_is_frozen(self):
+        from app.core.config import Settings
+        assert Settings.model_fields["library_sharing_enabled"].default is False
+
+    def test_every_reader_returns_empty_without_querying(self):
+        from unittest.mock import MagicMock
+        import app.library.client as c
+
+        db = MagicMock()
+        assert c.all_active(db) == []
+        assert c.by_address(db, "1 MAIN ST") is None
+        assert c.by_addresses(db, ["1 MAIN ST"]) == {}
+        db.query.assert_not_called()
+
+    def test_tenant_reads_see_an_empty_library(self):
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from app.routers import building_profile_library as r
+
+        db = MagicMock()
+        assert r.list_library(caller=MagicMock(), _={}, db=db) == []
+        with pytest.raises(HTTPException) as exc:
+            r.get_library_entry(entry_id=uuid.uuid4(), caller=MagicMock(), _={}, db=db)
+        assert exc.value.status_code == 404
+        db.query.assert_not_called()
+
+    def test_promotion_is_refused_before_any_read_or_write(self):
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from app.routers import building_profile_library as r
+
+        db = MagicMock()
+        with pytest.raises(HTTPException) as exc:
+            r.promote_to_library(profile_id=uuid.uuid4(), body=None, super_admin={}, db=db)
+        assert exc.value.status_code == 409
+        assert "ADR-489" in exc.value.detail
+        db.query.assert_not_called()
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
+    def test_the_freeze_lifts_when_the_setting_is_on(self, monkeypatch):
+        """The flag is the reversible half of D1; prove it actually reverses."""
+        from unittest.mock import MagicMock
+        from app.core.config import settings
+        import app.library.client as c
+
+        monkeypatch.setattr(settings, "library_sharing_enabled", True)
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = ["row"]
+        assert c.all_active(db) == ["row"]

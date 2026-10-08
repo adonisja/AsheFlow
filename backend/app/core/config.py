@@ -194,6 +194,13 @@ class Settings(BaseSettings):
     # Flip to True via ADP_ENABLED=true in the environment to enable all /adp endpoints.
     adp_enabled: bool = False
 
+    # ADR-489 D1 — the cross-tenant PlaceType Library neither serves nor accepts
+    # tenant-derived rows while False. DSP Agreement §7(b) counts an address as
+    # Personal Information and forbids aggregating or disclosing it across DSPs;
+    # whether any form of the Library is permitted is with counsel. Flip only on
+    # a written answer — an empty Library is the proven-safe state (ADR-409 D4).
+    library_sharing_enabled: bool = False
+
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
     # ADR-445. The configuration set SES stamps on every send so bounce and
