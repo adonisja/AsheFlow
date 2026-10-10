@@ -235,6 +235,32 @@ def create_employee(
     db.add(db_employee)
     db.flush()  # get db_employee.id before creating the token
 
+    # ADR-490. Called inside BOTH branches below, above each commit, because the
+    # audit row has to join the same transaction as the employee row: `get_db`
+    # only closes the session, so a row added after the last commit is silently
+    # discarded. The previous version had one `write_audit` AFTER both branches
+    # and therefore audited neither — 22 employees existed locally with zero
+    # `employee.create` rows.
+    #
+    # A closure rather than two copies so the two arms cannot drift.
+    def _audit_created() -> None:
+        write_audit(
+            db=db,
+            company_id=caller.company_id,
+            actor_id=caller.id,
+            action_type="employee.create",
+            target_table="employees",
+            target_id=str(db_employee.id),
+            detail={
+                "name": db_employee.name, "role": db_employee.role,
+                "email": db_employee.email,
+                # ADR-285: without this, a later reader sees a captain who never
+                # earned it and no record of why they were allowed.
+                **({"onboarding_window": True}
+                   if onboarding and db_employee.role in EARNED_ROLES else {}),
+            },
+        )
+
     if employee.email:
         token_str = secrets.token_urlsafe(48)
         expires_at = now + timedelta(days=settings.invite_expiry_days)
@@ -244,6 +270,7 @@ def create_employee(
             employee_id=db_employee.id,
             expires_at=expires_at,
         ))
+        _audit_created()
         db.commit()
         db.refresh(db_employee)
         try:
@@ -262,24 +289,23 @@ def create_employee(
                 db, alert_type=EMAIL_DELIVERY_FAILED,
                 company_id=caller.company_id, message=EMAIL_DOWN_MESSAGE,
             )
+            # The alert is a ROW and the commit above has already run, so without
+            # this it is discarded by get_db's close() exactly as the audit row
+            # was (ADR-490). The ADR-336 D1 alert this path exists to raise would
+            # never have reached the board — a second silent loss on the same
+            # line of code, found while fixing the first.
+            db.commit()
+            # Re-refresh so both branches leave `db_employee` in the same state.
+            # Not load-bearing — a commit expires the instance and the attribute
+            # re-fetches lazily while the session is open, and FastAPI serialises
+            # before get_db closes it (checked, not assumed). Symmetry so the
+            # next reader does not have to work that out.
+            db.refresh(db_employee)
     else:
+        _audit_created()
         db.commit()
         db.refresh(db_employee)
 
-    write_audit(
-        db=db,
-        company_id=caller.company_id,
-        actor_id=caller.id,
-        action_type="employee.create",
-        target_table="employees",
-        target_id=str(db_employee.id),
-        detail={
-            "name": db_employee.name, "role": db_employee.role, "email": db_employee.email,
-            # ADR-285: without this, a later reader sees a captain who never
-            # earned it and no record of why they were allowed.
-            **({"onboarding_window": True} if onboarding and db_employee.role in EARNED_ROLES else {}),
-        },
-    )
     return db_employee
 
 
@@ -379,10 +405,36 @@ def bulk_import_employees(
                 expires_at=now + timedelta(days=settings.invite_expiry_days),
             ))
 
+        # ADR-490: ABOVE the commit, so the audit row joins the same transaction
+        # as the employee it describes. It used to sit after the commit AND after
+        # the invite-email block, in a session nothing committed again — so every
+        # bulk-imported employee was created with no audit entry at all.
+        #
+        # A first version of this comment claimed the old code "would have left
+        # an audit row claiming a failed import had succeeded". That is backwards:
+        # the old `write_audit` sat below the `continue`, so a failed row never
+        # reached it. Checked against git rather than asserted — the old defect
+        # was total absence, not a false positive.
+        write_audit(
+            db=db,
+            company_id=caller.company_id,
+            actor_id=caller.id,
+            action_type="employee.bulk_create",
+            target_table="employees",
+            target_id=str(db_employee.id),
+            detail={
+                "name": row.name, "role": row.role, "email": str(row.email), "row": i,
+                # ADR-285 — same trace as the single-create path. A migrated
+                # captain and a wrongly-created one look identical without it.
+                **({"onboarding_window": True} if onboarding and row.role in EARNED_ROLES else {}),
+            },
+        )
+
         try:
             db.commit()
         except Exception as e:
-            db.rollback()
+            db.rollback()   # discards the audit row too, which is correct:
+                            # the employee did not land, so nothing created one
             logger.error("bulk import commit failed for row %d: %s", i, e)   # ADR-221: no name in logs
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
@@ -406,21 +458,12 @@ def bulk_import_employees(
                     db, alert_type=EMAIL_DELIVERY_FAILED,
                     company_id=caller.company_id, message=EMAIL_DOWN_MESSAGE,
                 )
+                # ADR-490: the alert is a row and the commit above has run, so
+                # without this it is discarded on teardown. On a 40-row bulk
+                # import the whole point of the ADR-336 dedup is that ONE
+                # incident appears — and zero appeared.
+                db.commit()
 
-        write_audit(
-            db=db,
-            company_id=caller.company_id,
-            actor_id=caller.id,
-            action_type="employee.bulk_create",
-            target_table="employees",
-            target_id=str(db_employee.id),
-            detail={
-                "name": row.name, "role": row.role, "email": str(row.email), "row": i,
-                # ADR-285 — same trace as the single-create path. A migrated
-                # captain and a wrongly-created one look identical without it.
-                **({"onboarding_window": True} if onboarding and row.role in EARNED_ROLES else {}),
-            },
-        )
         results.append(BulkImportResult(
             row=i, status="created", name=row.name, email=row.email,
         ))
@@ -988,6 +1031,25 @@ def update_employee(
         db_employee.email_bounced_at = None
         db_employee.email_bounce_type = None
 
+    # ADR-490: above the commit that lands the field changes this row DESCRIBES.
+    # It used to sit at the end of the function, after both commits and after the
+    # Cognito group sync — so the row was added to a session that nothing
+    # committed again, and `get_db`'s close() discarded it. Every employee edit
+    # since this code shipped has gone unrecorded.
+    #
+    # Deliberately NOT at the end: the later commit (the invite-token re-issue)
+    # lands a different thing, and an audit row placed above THAT would describe
+    # the field changes while riding a transaction that may not include them.
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.update",
+        target_table="employees",
+        target_id=str(db_employee.id),
+        detail={k: str(v) if v is not None else None for k, v in updates.items()},
+    )
+
     db.commit()
     db.refresh(db_employee)
 
@@ -1161,15 +1223,6 @@ def update_employee(
                 db_employee.id, old_group, new_group, e,
             )
 
-    write_audit(
-        db=db,
-        company_id=caller.company_id,
-        actor_id=caller.id,
-        action_type="employee.update",
-        target_table="employees",
-        target_id=str(db_employee.id),
-        detail={k: str(v) if v is not None else None for k, v in updates.items()},
-    )
     return db_employee
 
 
