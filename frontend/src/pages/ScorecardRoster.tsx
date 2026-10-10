@@ -352,7 +352,7 @@ function RetentionSection({ employeeId }: { employeeId: string }) {
   };
 
   const status = (r: ScorecardRetentionRow) => {
-    if (r.retention_hold_indefinite) return <span className="text-warning font-medium">Held — open charge</span>;
+    if (r.retention_hold_indefinite) return <span className="text-warning font-medium">Held while charge is open</span>;
     if (r.retention_hold_until) return <span className="text-warning font-medium">Held until {formatDate(r.retention_hold_until)}</span>;
     if (r.open_appeal) return <span className="text-muted-foreground">Kept while appeal is open</span>;
     return <span className="text-subtle">Removed after {r.removed_after ? formatDate(r.removed_after) : '—'}</span>;

@@ -268,7 +268,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
           <p className="text-subtle">Sent {formatDate(existing.sent_at)}</p>
           {existing.confirmed_at ? (
             <p className="text-success font-medium">
-              Trainee changed both on {formatDate(existing.confirmed_at)} — nothing is stored.
+              Trainee changed both on {formatDate(existing.confirmed_at)}. Nothing is stored.
             </p>
           ) : existing.expired_at ? (
             <p className="text-warning font-medium">
