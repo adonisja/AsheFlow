@@ -136,7 +136,9 @@ def sqlite_mirror_with_defaults(table: Table) -> Table:
     """
     cols = []
     for c in table.columns:
-        type_ = SQLiteJSON() if c.type.__class__.__name__ == "JSONB" else c.type
+        # ARRAY too: SQLite has neither. A test that INSERTS into an ARRAY
+        # column also needs the bind/result shim in test_adr493_erasure.py.
+        type_ = SQLiteJSON() if c.type.__class__.__name__ in ("JSONB", "ARRAY") else c.type
         default = c.server_default.arg if c.server_default is not None else None
         cols.append(Column(c.name, type_, primary_key=c.primary_key,
                            nullable=c.nullable, server_default=default))

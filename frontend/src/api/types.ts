@@ -3279,3 +3279,20 @@ export interface CollectedProfile {
 
 /** The listing row plus the whole day. Fetched one at a time: a page of forty
  *  days with every tote and address inline is a large response. */
+
+/** ADR-493 D2 — POST /privacy/erasure. Mirrors ErasureRequest (extra="forbid"). */
+export interface ErasureRequest {
+  kind: 'address' | 'tba';
+  value: string;
+  dry_run: boolean;
+}
+
+/** ADR-493 D2 — what an erasure touched, or would touch on a dry run. */
+export interface ErasureResult {
+  dry_run: boolean;
+  kind: string;
+  total: number;
+  counts: Record<string, number>;
+  /** Every stored spelling the request matched. */
+  matched: string[];
+}

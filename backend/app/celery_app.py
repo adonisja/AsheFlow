@@ -264,6 +264,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.expire_trainee_credentials",
         "schedule": crontab(hour=4, minute=47),
     },
+    # 04:49 Eastern — ADR-493 D4/D8. Package ids past 90 days become placeholders;
+    # audit snapshots lose the addresses (48h) and package ids (90d) that the
+    # row-level retention already cleared. After the 04:00 address nulling, so a
+    # night's audit pass sees the same cutoff the rows just crossed.
+    "expire-package-ids-and-audit-pi-nightly": {
+        "task": "app.tasks.cleanup.expire_package_ids_and_audit_pi",
+        "schedule": crontab(hour=4, minute=49),
+    },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",

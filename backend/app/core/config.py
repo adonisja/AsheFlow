@@ -160,6 +160,20 @@ class Settings(BaseSettings):
     # row for that ID — an ID still appearing weekly keeps its history. 0 disables.
     scorecard_pending_retention_days: int = 56
 
+    # ADR-493 D4: package ids (TBAs) on delivery rows are replaced by a per-row
+    # placeholder this many days after the delivery date — Amazon's 60-day
+    # lost/damaged claim window plus a month. Lengths are kept, because package
+    # counts are read as len(tba_numbers). 0 disables.
+    tba_retention_days: int = 90
+    # ADR-493 D5: OFF until promotion (ADR-494) ships and the backlog is
+    # reviewed; then 180, counted from review. 0 disables.
+    collected_profile_retention_days: int = 0
+    # ADR-493 D3: HMAC key for the erasure ledger, so a ledger entry cannot be
+    # reversed by hashing every NYC address. Set from SSM in staging/prod; an
+    # empty key refuses a real erasure (503) rather than writing an unreplayable
+    # ledger. Dry runs do not need it.
+    pi_erasure_hmac_key: str = ""
+
     # ADR-216 Phase 3: per-stop cutoff-urgency gradient windows (minutes before a
     # building's closing/break cutoff). A stop is RED (urgent) within
     # stop_urgent_window_minutes of its cutoff, YELLOW (caution) the

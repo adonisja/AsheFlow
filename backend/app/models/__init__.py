@@ -64,3 +64,4 @@ from app.models.workforce_ov import WorkforceOV  # ADR-400 A4: OVs are their own
 from app.models.crew_pin import CrewPin, CrewPinMember
 from app.models.truck_pin import TruckPin
 from app.models.collection import CollectionToken, CollectedAddressProfile  # ADR-415: public collection quarantine
+from app.models.pi_erasure_ledger import PiErasureLedger  # ADR-493

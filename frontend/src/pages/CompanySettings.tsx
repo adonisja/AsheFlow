@@ -14,6 +14,7 @@ import ErrorBanner from '../components/ui/ErrorBanner';
 import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 import SelectMenu from '../components/ui/SelectMenu';
 import { useAuth } from '../contexts/AuthContext';
+import PrivacyErasureCard from '../components/settings/PrivacyErasureCard';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1040,6 +1041,9 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
               </form>
             </motion.div>
           )}
+
+          {/* ADR-493 D2 — erasure on Amazon's request. Admin only, like this page. */}
+          {!isOnboarding && <PrivacyErasureCard />}
         </>
       )}
 
