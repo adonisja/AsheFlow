@@ -1469,6 +1469,26 @@ def delete_employee(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
     _refuse_if_owner(db_employee, "deleted")
 
+    # ADR-492 D3. Scorecard.employee_id is ON DELETE CASCADE, so a hard delete
+    # would silently destroy a scorecard held for a personnel decision or an open
+    # charge — the exact record the hold exists to keep. Refuse BEFORE the Cognito
+    # deletion below, or a refused delete would leave a login-less employee.
+    from datetime import date as _date
+    from sqlalchemy import or_
+    from app.models.scorecard import Scorecard
+    held = db.query(Scorecard.id).filter(
+        Scorecard.company_id == caller.company_id,
+        Scorecard.employee_id == employee_id,
+        or_(Scorecard.retention_hold_indefinite.is_(True),
+            Scorecard.retention_hold_until >= _date.today()),
+    ).first()
+    if held:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This employee has scorecards under a retention hold. Release the hold "
+                   "on the Scorecard Roster, or deactivate the employee instead of deleting.",
+        )
+
     # Prefer username — Cognito accounts are created under the derived username.
     # Fall back to email only for legacy accounts predating the username column.
     cognito_username = cognito_username_for(db_employee)

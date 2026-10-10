@@ -148,6 +148,18 @@ class Settings(BaseSettings):
     # after deactivation (covers post-departure disputes/references). 0 disables.
     employee_name_retention_days: int = 180
 
+    # ADR-491: trainee Flex credentials are a handoff. Values unconfirmed this many
+    # days after sending are destroyed (the row survives as a status). 0 disables.
+    trainee_credential_retention_days: int = 14
+
+    # ADR-492: individual Amazon scorecards are deleted this many days after their
+    # ISO week began (~13 months: the 52-week reads plus margin), unless held for a
+    # personnel decision or under an open appeal. Company scorecards are exempt.
+    scorecard_retention_days: int = 396
+    # ADR-492 D4: unmatched-Transporter-ID parking rows, counted from the newest
+    # row for that ID — an ID still appearing weekly keeps its history. 0 disables.
+    scorecard_pending_retention_days: int = 56
+
     # ADR-216 Phase 3: per-stop cutoff-urgency gradient windows (minutes before a
     # building's closing/break cutoff). A stop is RED (urgent) within
     # stop_urgent_window_minutes of its cutoff, YELLOW (caution) the

@@ -597,3 +597,174 @@ def expire_owner_email_changes() -> dict:
         return {"cleared": cleared}
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.cleanup.expire_trainee_credentials")
+def expire_trainee_credentials() -> dict:
+    """Destroy trainee Flex credentials nobody confirmed (ADR-491 D2).
+
+    Management issues temporary credentials and the trainee changes both on first
+    sign-in. A row still holding values `trainee_credential_retention_days` after
+    it was sent is a live Amazon login nobody needs AsheFlow to keep: the values
+    are nulled and `expired_at` stamped. The row stays as a status record, so
+    management sees "Expired" rather than nothing. Global. 0 disables.
+    """
+    from app.models.trainee_credentials import TraineeCredentials
+
+    days = settings.trainee_credential_retention_days
+    if days <= 0:
+        logger.info("expire_trainee_credentials: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        expired = (
+            db.query(TraineeCredentials)
+            .filter(
+                TraineeCredentials.flex_email.isnot(None),
+                TraineeCredentials.sent_at < cutoff,
+            )
+            .update(
+                {
+                    TraineeCredentials.flex_email: None,
+                    TraineeCredentials.clock_in_code: None,
+                    TraineeCredentials.expired_at: now,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        logger.info("expire_trainee_credentials: expired %d row(s) (cutoff %s).", expired, cutoff.date())
+        return {"expired": expired, "cutoff": cutoff.date().isoformat(), "days": days}
+    except Exception as e:
+        db.rollback()
+        logger.error("expire_trainee_credentials failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
+def _iso_week_monday(week: str):
+    """"2026-W28" → the Monday it began, or None if the label does not parse."""
+    import re
+    from datetime import date
+    m = re.match(r"^\s*(\d{4})-W(\d{1,2})\s*$", week or "")
+    if not m:
+        return None
+    try:
+        return date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    except ValueError:
+        return None
+
+
+@celery_app.task(name="app.tasks.cleanup.purge_expired_scorecards")
+def purge_expired_scorecards() -> dict:
+    """Retention for individual Amazon scorecards and unmatched imports (ADR-492).
+
+    D1 — delete `scope='individual'` scorecards whose ISO week began more than
+    `scorecard_retention_days` ago, EXCEPT those under a retention hold (D3) or
+    referenced by an open appeal (draft/submitted — deleting would erase the
+    dispute mid-flight). Company scorecards carry no person and are exempt.
+
+    Children are deleted explicitly, deepest first (ADR-231): an unverified
+    ON DELETE CASCADE is a delete you did not write.
+
+    D4 — delete every `scorecard_import_pending` row for a (company,
+    transporter_id) whose NEWEST row is older than
+    `scorecard_pending_retention_days`, so an ID still arriving weekly keeps
+    its history.
+
+    Global (all companies). Each half is disabled by its own setting being 0.
+    """
+    from datetime import date
+    from sqlalchemy import func, or_
+    from app.models.scorecard import Scorecard, ScorecardMetric
+    from app.models.scorecard_appeal import ScorecardAppeal, ScorecardAppealItem
+    from app.models.scorecard_import import ScorecardImportPending
+
+    out: dict = {}
+    today = date.today()
+    db = SessionLocal()
+    try:
+        days = settings.scorecard_retention_days
+        if days > 0:
+            cutoff = today - timedelta(days=days)
+            open_appeal = (
+                db.query(ScorecardAppeal.scorecard_id)
+                .filter(ScorecardAppeal.status.in_(("draft", "submitted")))
+            )
+            candidates = (
+                db.query(Scorecard.id, Scorecard.week)
+                .filter(
+                    Scorecard.scope == "individual",
+                    Scorecard.retention_hold_indefinite.is_(False),
+                    or_(Scorecard.retention_hold_until.is_(None),
+                        Scorecard.retention_hold_until < today),
+                    Scorecard.id.notin_(open_appeal),
+                )
+                .all()
+            )
+            unparseable = 0
+            ids = []
+            for sid, week in candidates:
+                monday = _iso_week_monday(week)
+                if monday is None:
+                    unparseable += 1     # kept: never delete what we cannot date
+                elif monday < cutoff:
+                    ids.append(sid)
+
+            if ids:
+                appeal_ids = db.query(ScorecardAppeal.id).filter(ScorecardAppeal.scorecard_id.in_(ids))
+                out["appeal_items"] = (
+                    db.query(ScorecardAppealItem)
+                    .filter(ScorecardAppealItem.appeal_id.in_(appeal_ids))
+                    .delete(synchronize_session=False)
+                )
+                out["appeals"] = (
+                    db.query(ScorecardAppeal).filter(ScorecardAppeal.scorecard_id.in_(ids))
+                    .delete(synchronize_session=False)
+                )
+                out["metrics"] = (
+                    db.query(ScorecardMetric).filter(ScorecardMetric.scorecard_id.in_(ids))
+                    .delete(synchronize_session=False)
+                )
+                out["scorecards"] = (
+                    db.query(Scorecard).filter(Scorecard.id.in_(ids))
+                    .delete(synchronize_session=False)
+                )
+            else:
+                out["scorecards"] = 0
+            out["unparseable_weeks_kept"] = unparseable
+            out["cutoff"] = cutoff.isoformat()
+
+        pdays = settings.scorecard_pending_retention_days
+        if pdays > 0:
+            pcutoff = datetime.now(timezone.utc) - timedelta(days=pdays)
+            stale = (
+                db.query(ScorecardImportPending.company_id, ScorecardImportPending.transporter_id)
+                .group_by(ScorecardImportPending.company_id, ScorecardImportPending.transporter_id)
+                .having(func.max(ScorecardImportPending.created_at) < pcutoff)
+                .all()
+            )
+            n = 0
+            for company_id, tid in stale:
+                n += (
+                    db.query(ScorecardImportPending)
+                    .filter(ScorecardImportPending.company_id == company_id,
+                            ScorecardImportPending.transporter_id == tid)
+                    .delete(synchronize_session=False)
+                )
+            out["pending_rows"] = n
+            out["pending_ids"] = len(stale)
+
+        db.commit()
+        logger.info("purge_expired_scorecards: %s", out)
+        return out
+    except Exception as e:
+        db.rollback()
+        logger.error("purge_expired_scorecards failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()

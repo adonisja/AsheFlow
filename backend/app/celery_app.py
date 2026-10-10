@@ -249,6 +249,21 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.redact_departed_employee_names",
         "schedule": crontab(hour=4, minute=31),
     },
+    # 04:45 Eastern — ADR-492. Individual scorecards past ~13 months (unless held
+    # or under an open appeal) and unmatched-ID imports past 8 weeks. After the
+    # 04:31 name redaction, which also touches scorecard_appeals, so the two never
+    # interleave on that table.
+    "purge-expired-scorecards-nightly": {
+        "task": "app.tasks.cleanup.purge_expired_scorecards",
+        "schedule": crontab(hour=4, minute=45),
+    },
+    # 04:47 Eastern — ADR-491. Destroy trainee Flex credentials unconfirmed 14 days
+    # after sending. Pure DB, independent of the scorecard purge; :47 rather than
+    # :45 so each has its own minute in the log.
+    "expire-trainee-credentials-nightly": {
+        "task": "app.tasks.cleanup.expire_trainee_credentials",
+        "schedule": crontab(hour=4, minute=47),
+    },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",

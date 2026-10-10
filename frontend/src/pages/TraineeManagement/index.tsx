@@ -5,11 +5,12 @@ import axiosClient from '../../api/axiosClient';
 import OreRecordRow from '../../components/training/OreRecordRow';
 import {
   Users, Loader2, AlertTriangle, RefreshCw, ChevronRight,
-  X, Calendar, Star, ClipboardList, UserCheck, KeyRound, Eye, EyeOff,
+  X, Calendar, Star, ClipboardList, UserCheck, KeyRound,
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
 import { formatDate, formatDateShort, getLocalYMD } from '../../utils/date';
+import type { TraineeCredentialsStatus } from '../../api/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -204,27 +205,28 @@ function EscalatedTab({
 // ---------------------------------------------------------------------------
 
 function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
-  const [existing, setExisting]       = useState<{ flex_email: string; clock_in_code: string; updated_at: string } | null>(null);
+  // ADR-491: management issued these and never reads them back. This is the
+  // handoff's status only — the server no longer returns the values here.
+  const [existing, setExisting]       = useState<TraineeCredentialsStatus | null>(null);
   const [loadingExisting, setLoadingExisting] = useState(true);
   const [open, setOpen]               = useState(false);
   const [flexEmail, setFlexEmail]     = useState('');
   const [clockInCode, setClockInCode] = useState('');
-  const [showEmail, setShowEmail]     = useState(false);
-  const [showCode, setShowCode]       = useState(false);
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState('');
 
   useEffect(() => {
     setLoadingExisting(true);
-    axiosClient.get(`/trainee-credentials/${traineeId}`)
+    axiosClient.get<TraineeCredentialsStatus>(`/trainee-credentials/${traineeId}`)
       .then(res => setExisting(res.data))
       .catch(() => setExisting(null))
       .finally(() => setLoadingExisting(false));
   }, [traineeId]);
 
   const handleOpen = () => {
-    setFlexEmail(existing?.flex_email ?? '');
-    setClockInCode(existing?.clock_in_code ?? '');
+    // Always blank: a replace is a new handoff, and there is nothing to pre-fill from.
+    setFlexEmail('');
+    setClockInCode('');
     setError('');
     setOpen(true);
   };
@@ -237,7 +239,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
     setSaving(true);
     setError('');
     try {
-      const res = await axiosClient.post(`/trainee-credentials/${traineeId}`, {
+      const res = await axiosClient.post<TraineeCredentialsStatus>(`/trainee-credentials/${traineeId}`, {
         flex_email: flexEmail.trim(),
         clock_in_code: clockInCode.trim(),
       });
@@ -262,39 +264,29 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
           <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading...
         </div>
       ) : existing ? (
-        <div className="space-y-2 text-xs">
-          <div className="bg-accent/50 rounded-lg p-2.5 space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground font-medium uppercase tracking-wider">Flex Email</span>
-              <button onClick={() => setShowEmail(v => !v)} className="text-primary">
-                {showEmail ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            <p className="font-mono text-foreground text-sm">
-              {showEmail ? existing.flex_email : '••••••••••••••••'}
+        <div className="text-xs space-y-1">
+          <p className="text-subtle">Sent {formatDate(existing.sent_at)}</p>
+          {existing.confirmed_at ? (
+            <p className="text-success font-medium">
+              Trainee changed both on {formatDate(existing.confirmed_at)} — nothing is stored.
             </p>
-          </div>
-          <div className="bg-accent/50 rounded-lg p-2.5 space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground font-medium uppercase tracking-wider">Clock-In Code</span>
-              <button onClick={() => setShowCode(v => !v)} className="text-primary">
-                {showCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            <p className="font-mono text-foreground text-sm">
-              {showCode ? existing.clock_in_code : '••••••••'}
+          ) : existing.expired_at ? (
+            <p className="text-warning font-medium">
+              Expired unconfirmed on {formatDate(existing.expired_at)}. Re-send if they have not signed in yet.
             </p>
-          </div>
-          <p className="text-subtle">
-            Last sent {formatDate(existing.updated_at)}
-          </p>
+          ) : (
+            <p className="text-muted-foreground">
+              Waiting for the trainee to confirm they changed both
+              {existing.expires_at ? <> · removed {formatDate(existing.expires_at)} if not</> : null}.
+            </p>
+          )}
         </div>
       ) : (
         <p className="text-subtle text-xs">No credentials on file.</p>
       )}
 
       <button onClick={handleOpen} className="btn-primary w-full text-sm py-2">
-        {existing ? 'Update Credentials' : 'Send Credentials'}
+        {existing ? 'Replace Credentials' : 'Send Credentials'}
       </button>
 
       {/* Modal */}
@@ -304,7 +296,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
             <div className="flex items-center justify-between">
               <h2 className="font-semibold text-foreground flex items-center gap-2">
                 <KeyRound className="w-4 h-4 text-primary" />
-                {existing ? 'Update Credentials' : 'Send Credentials'}
+                {existing ? 'Replace Credentials' : 'Send Credentials'}
               </h2>
               <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
                 <X className="w-4 h-4" />
@@ -313,6 +305,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
 
             <p className="text-xs text-subtle">
               The trainee will receive a notification with these credentials and their ORE training link.
+              AsheFlow keeps them only until the trainee confirms they changed both, or 14 days.
             </p>
 
             <div className="space-y-3">

@@ -1823,6 +1823,38 @@ export interface Scorecard {
   source_file_url?: string | null;
   created_at: string;
   metrics: ScorecardMetric[];
+  /** ADR-492 — a declared retention hold. Both empty = the 13-month clock runs. */
+  retention_hold_until?: string | null;
+  retention_hold_indefinite?: boolean;
+}
+
+/** ADR-492 D3 — POST /scorecards/{id}/retention-hold. Mirrors RetentionHoldIn. */
+export type RetentionHoldIn =
+  | { kind: 'personnel_decision'; decision_date: string }
+  | { kind: 'legal_charge' };
+
+/** ADR-492 D5 — GET /scorecards/individual/{id}/records. Mirrors ScorecardRetentionRow. */
+export interface ScorecardRetentionRow {
+  id: string;
+  week: string;
+  overall_standing?: string | null;
+  retention_hold_until?: string | null;
+  retention_hold_indefinite: boolean;
+  /** When the nightly purge removes it if nothing changes; null while held indefinitely. */
+  removed_after?: string | null;
+  open_appeal: boolean;
+}
+
+/** ADR-491 — management's view of a credential handoff. Never carries the values. */
+export interface TraineeCredentialsStatus {
+  employee_id: string;
+  has_credentials: boolean;
+  sent_by: string;
+  sent_at: string;
+  updated_at: string;
+  confirmed_at?: string | null;
+  expired_at?: string | null;
+  expires_at?: string | null;
 }
 
 // Scorecard cross-check (ADR-204 Phase D) — Amazon vs our data.

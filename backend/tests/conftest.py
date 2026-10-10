@@ -125,6 +125,24 @@ def _sqlite_mirror(table: Table) -> Table:
     return Table(table.name, MetaData(), *cols)
 
 
+def sqlite_mirror_with_defaults(table: Table) -> Table:
+    """`_sqlite_mirror`, keeping server defaults (ADR-491/492 tests).
+
+    For a test that creates an extra table on the `db` fixture's engine and
+    inserts through the ORM: a NOT NULL column filled by a server default
+    (`created_at`, `updated_at`) otherwise fails the insert. Same no-FK,
+    no-CHECK rule as above. Use as:
+        sqlite_mirror_with_defaults(Model.__table__).create(db.get_bind())
+    """
+    cols = []
+    for c in table.columns:
+        type_ = SQLiteJSON() if c.type.__class__.__name__ == "JSONB" else c.type
+        default = c.server_default.arg if c.server_default is not None else None
+        cols.append(Column(c.name, type_, primary_key=c.primary_key,
+                           nullable=c.nullable, server_default=default))
+    return Table(table.name, MetaData(), *cols)
+
+
 _CAMPAIGN_TABLES_SQLITE = [
     _sqlite_mirror(t) for t in (
         Campaign.__table__,
