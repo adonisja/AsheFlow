@@ -93,6 +93,17 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
             f"Congratulations! You passed the graduation quiz "
             f"and have been promoted to Walker effective {target_date}."
         )
+        # ADR-494 D8: TWO types, because these are two notifications.
+        #
+        # Both audiences shared `trainee_graduated` and differed only by message
+        # body, which forced one Spec to describe both -- so the registry could
+        # not give the new walker a congratulatory prompt without also
+        # interrupting every manager with it. Splitting the type is what lets
+        # each side carry its own channels: a banner for oversight, a prompt
+        # with a /my-role link for the person whose job just changed.
+        #
+        # `outcome_type` stays the management one because the audit detail below
+        # and the warnings it feeds are the oversight record.
         outcome_type = "trainee_graduated"
 
         for recipient in recipients:
@@ -108,7 +119,7 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
             db,
             company_id=trainee.company_id,
             employee_id=trainee.id,
-            type=outcome_type,
+            type="graduation",
             message=message_self,
         )
 

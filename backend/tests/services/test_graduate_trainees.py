@@ -201,7 +201,21 @@ class TestNormalGraduation:
 
     def test_graduated_trainee_notified(self, db):
         """
-        ASSERT: trainee receives a Notification of type 'trainee_graduated'.
+        ASSERT: the trainee receives a Notification of type 'graduation'.
+
+        NOT 'trainee_graduated' -- ADR-494 D8 split the two audiences.
+
+        Both used to share one type and differ only by message body, which
+        forced a single Spec to describe two unrelated notifications: a banner
+        for oversight and, for the person whose job just changed, a
+        congratulatory prompt linking to /my-role. One Spec cannot be both, so
+        giving the new walker their prompt would have interrupted every manager
+        with it.
+
+        `graduation` was already declared in the registry (ADR-487 D8) with
+        nothing raising it. This is the assertion that pins which type the
+        PERSON gets; test_privileged_staff_notified_on_graduation pins the
+        oversight side, and the two must not drift back together.
         """
         trainee = make_employee(db, role="trainee", name="Graduate")
         make_graduation_quiz(db, trainee, passed=True)
@@ -210,9 +224,20 @@ class TestNormalGraduation:
 
         notifs = db.query(Notification).filter(
             Notification.employee_id == trainee.id,
-            Notification.type == "trainee_graduated",
+            Notification.type == "graduation",
         ).all()
         assert len(notifs) == 1
+
+        # And NOT the oversight type -- a trainee receiving both would get the
+        # banner and the prompt for the same event.
+        mgmt_copy = db.query(Notification).filter(
+            Notification.employee_id == trainee.id,
+            Notification.type == "trainee_graduated",
+        ).all()
+        assert mgmt_copy == [], (
+            "the graduating trainee received the management banner as well as "
+            "their own prompt -- the audiences are split, so each gets one"
+        )
 
     def test_privileged_staff_notified_on_graduation(self, db):
         """

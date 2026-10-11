@@ -3350,3 +3350,24 @@ export interface PromoteResult {
   skipped: number;
   outcomes: { door_key: string; outcome: string; profile_id: string | null }[];
 }
+
+// ── Role guides (ADR-494 D4) ────────────────────────────────────────────────
+// Mirrors backend/app/routers/role_guides.py. types.ts is hand-maintained —
+// there is no codegen — so a field added to RoleGuideResponse must be added
+// here or the client silently cannot see it.
+
+export interface RoleGuide {
+  role: string;
+  operating_mode: 'full' | 'workforce';
+  title: string;
+  body: string;
+  /** True when the tenant rewrote this text, false while it tracks the platform's. */
+  is_customized: boolean;
+}
+
+/** PATCH /my-role/{role}. Bounds mirror the server's Field(...) constraints —
+ *  the server is the enforcer, these stop the client building a 422. */
+export interface RoleGuideUpdate {
+  title: string;   // 1..80
+  body: string;    // 1..8000
+}

@@ -291,7 +291,73 @@ class TestTheCountsMatchTheApprovedRegistry:
         # +3 action: each of the three names something an admin must do by hand.
         # +1 notice (ADR-488): the tier existed in the enum with zero types
         # using it until the notice system gave it one.
-        assert counts == {"urgent": 4, "action": 29, "notice": 1, "info": 52}, counts
+        # ADR-494 D2 moves route_ready INFO -> ACTION (29->30, 52->51): it fires
+        # once per route, is about this reader, and awaits their tap.
+        assert counts == {"urgent": 4, "action": 30, "notice": 1, "info": 51}, counts
+
+    def test_only_two_types_gate(self):
+        """ADR-494 D1 narrowed GATE from four types to two.
+
+        A GATE has no exit but its own action, so every added one is a new way
+        to lock a field user out of an app they are holding in a van. ADR-487 D8
+        gave four types a GATE on the reasoning that each was important; ADR-494
+        asked the narrower question -- is proceeding without reading it WRONG,
+        or merely uninformed? -- and only two survived it.
+
+        This is the assertion that makes adding a third a deliberate act. It
+        fails on the ADD, not in the field.
+        """
+        gated = {t for t, s in SPEC.items() if Channel.GATE in s.channels}
+        assert gated == {
+            # No deadline to escalate toward, and no app without it: a trainee
+            # cannot log in until they have read their credentials. The gate
+            # CARRIES them rather than linking elsewhere.
+            "credentials_sent",
+            # A PROMPT until one day before ADPPayPeriod.close_deadline, then a
+            # GATE -- declared here as the escalated state, with the server
+            # omitting GATE while the deadline is far (ADR-494 D6).
+            "timecard_mismatch",
+        }, gated
+
+    def test_no_type_is_both_ticker_and_interruptive(self):
+        """ADR-488 D8 built the NOTICE tier ticker-only and never interruptive.
+
+        TICKER + PROMPT is that same contradiction one tier down: a strip that
+        scrolls past and a sheet that interrupts cannot both be the right
+        register for one message. route_ready declared both (ADR-487 D8) and
+        ADR-494 D2 corrected it.
+        """
+        both = {
+            t for t, s in SPEC.items()
+            if Channel.TICKER in s.channels
+            and (Channel.PROMPT in s.channels or Channel.GATE in s.channels)
+        }
+        assert both == set(), both
+
+    def test_every_interruptive_type_offers_an_exit(self):
+        """A PROMPT or GATE must name where the reader goes, or carry its own body.
+
+        The failure this pins is the dismiss-only modal -- the thing ADR-494's
+        own research warns "trains users to close modals without reading them".
+        An interruptive surface with no action is a speed bump: the reader's only
+        move is to make it go away, so it buys attention and spends it on
+        nothing.
+
+        credentials_sent is the one exemption and it is not a loophole: the
+        credentials ARE the content, so there is nowhere to link to.
+        """
+        CARRIES_ITS_OWN_BODY = {"credentials_sent"}
+        missing = {
+            t for t, s in SPEC.items()
+            if (Channel.PROMPT in s.channels or Channel.GATE in s.channels)
+            and not s.actions
+            and t not in CARRIES_ITS_OWN_BODY
+        }
+        assert missing == set(), (
+            f"interruptive with no way out: {missing}. Give each an action, or "
+            f"drop it to BANNER -- a modal the reader can only dismiss is worse "
+            f"than a banner they can read."
+        )
 
     def test_the_four_urgent_types_are_the_approved_ones(self):
         urgent = {t for t, s in SPEC.items() if s.severity is Severity.URGENT}
