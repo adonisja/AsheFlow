@@ -6,7 +6,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Literal
+from pydantic import BaseModel, ConfigDict
 
 from app.database import get_db, SessionLocal
 from app.services.audit import write_audit
@@ -14,6 +15,8 @@ from app.api.deps import RoleChecker, get_caller_employee, Pagination, _resolve_
 from app.core.security import verify_cognito_token
 from app.models.employee import Employee
 from app.models.notification import Notification
+from app.models.role_guide import NotificationAcknowledgement
+from app.routers.registration import ROLE_TO_COGNITO_GROUP
 from app.schemas.notification import NotificationResponse, spec_fields
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
@@ -28,7 +31,16 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 # token auth, so security parity is preserved.
 stream_router = APIRouter(prefix="/notifications", tags=["notifications"])
 
-allow_any_auth   = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+# DERIVED from the canonical role list, not typed out. ADR-494: this constant
+# sat here unused until the acknowledge endpoint needed it, and its hand-written
+# list was missing `captain`, `field_supervisor` and `driver_trainee` -- three
+# real roles in ROLE_TO_COGNITO_GROUP. Adopting it as written would have 403'd a
+# captain trying to answer a timecard_mismatch GATE, which has no other exit:
+# the gate would have been unanswerable for exactly the people it blocks.
+#
+# Deriving it means a role added to the system cannot acquire a Cognito group
+# and silently lose access to its own notifications.
+allow_any_auth   = RoleChecker(sorted(ROLE_TO_COGNITO_GROUP))
 allow_management = RoleChecker(["dispatch", "management", "admin"])
 
 
@@ -64,7 +76,11 @@ def get_notifications(
     # row, not stored. `from_row` rather than FastAPI's automatic
     # from_attributes conversion, because those four fields have no columns
     # behind them and automatic conversion would 500 on the missing attributes.
-    return [NotificationResponse.from_row(r) for r in rows]
+    # `from_row_scoped`, not `from_row`: ADR-494 D6's gate checks need a
+    # session, and without one every gate degrades to a prompt. This is the
+    # list a client renders its gate from, so the weaker answer here would
+    # mean a gate never appears at all.
+    return [NotificationResponse.from_row_scoped(r, db) for r in rows]
 
 
 @router.patch("/{notification_id}/read")
@@ -81,6 +97,127 @@ def mark_read(
         notif.is_read = True
         db.commit()
     return {"ok": True}
+
+
+class AcknowledgeIn(BaseModel):
+    """What the person did with an interruptive notification (ADR-494 D7).
+
+    Dimension 9: a request body, so every field is concrete and bounded and
+    unknown keys are a 422. `action` is a Literal rather than `str` — the three
+    values are the contract, and a fourth arriving from a client is a bug worth
+    surfacing, not a row to store.
+    """
+
+    action: Literal["confirmed", "skipped", "unavailable"]
+    #: Which surface the person actually saw. A gate and a prompt carry
+    #: different weight in a later dispute, and the server cannot infer it after
+    #: the fact: the degradation that produced a prompt is time-dependent (a
+    #: deadline passes, a role guide is seeded), so re-deriving it at read time
+    #: would give a different answer than the reader got.
+    shown_as: Literal["gate", "prompt"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/{notification_id}/acknowledge", status_code=status.HTTP_201_CREATED)
+def acknowledge_notification(
+    notification_id: UUID,
+    payload: AcknowledgeIn,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_any_auth),
+):
+    """Record that THIS person chose something about an interruptive notification.
+
+    Not a read flag. `Notification.is_read` is set by RENDERING; this is set by a
+    person CHOOSING, and conflating them is how a prompt closed by a stray tap
+    becomes evidence of consent. For `timecard_mismatch` that evidence is what a
+    payroll dispute six weeks later turns on.
+
+    **Own notification only, with no oversight override.** `mark_read` lets
+    dispatch/management/admin mark someone else's as read, which is reasonable
+    for a read flag. It is not reasonable here: an acknowledgement is a
+    first-person statement, and a manager recording that a walker "confirmed"
+    their hours is the forgery this table exists to make impossible. Admins have
+    full access everywhere else; this is a record of who clicked, so there is
+    nothing for anyone else to do to it.
+
+    Idempotent by primary key: `notification_id` IS the PK, so a double-tap or a
+    retried request gets 409 rather than a second row. The first answer stands —
+    a person who confirmed and then skipped has not un-confirmed.
+    """
+    notif = (
+        db.query(Notification)
+        .filter(
+            Notification.id == notification_id,
+            Notification.company_id == caller.company_id,
+        )
+        .first()
+    )
+    if notif is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found.",
+        )
+
+    if notif.employee_id != caller.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the person a notification was sent to can acknowledge it.",
+        )
+
+    existing = (
+        db.query(NotificationAcknowledgement)
+        .filter(
+            NotificationAcknowledgement.notification_id == notification_id,
+            NotificationAcknowledgement.company_id == caller.company_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This notification has already been acknowledged.",
+        )
+
+    ack = NotificationAcknowledgement(
+        notification_id=notification_id,
+        employee_id=caller.id,
+        company_id=caller.company_id,
+        acknowledged_at=datetime.now(timezone.utc),
+        action=payload.action,
+        shown_as=payload.shown_as,
+    )
+    db.add(ack)
+
+    # Acknowledging is seeing it. The reverse is NOT true -- that is the whole
+    # point of two columns -- but a person who answered a gate has certainly
+    # read it, and leaving the row unread would keep the banner up behind the
+    # sheet they just dismissed.
+    notif.is_read = True
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="notification.acknowledge",
+        target_table="notification_acknowledgements",
+        target_id=str(notification_id),
+        detail={
+            "notification_type": notif.type,
+            "action": payload.action,
+            "shown_as": payload.shown_as,
+        },
+    )
+    db.commit()
+
+    return {
+        "notification_id": str(notification_id),
+        "action": payload.action,
+        "shown_as": payload.shown_as,
+        "acknowledged_at": ack.acknowledged_at.isoformat(),
+    }
 
 
 @router.patch("/employee/{employee_id}/read-all")
@@ -264,7 +401,12 @@ async def stream_notifications(
                     "created_at": r.created_at.isoformat(),
                     "dispatch_date": r.dispatch_date.isoformat() if r.dispatch_date else None,
                     "expires_at": r.expires_at.isoformat() if r.expires_at else None,
-                    **spec_fields(r.type),
+                    # row + db so the stream and REST agree about a gate.
+                    # ADR-494 D6 exists because two surfaces computing a
+                    # downgrade independently is how they drift; two
+                    # SERIALISATION paths doing it is the same bug one
+                    # layer down.
+                    **spec_fields(r.type, row=r, db=db),
                 }
                 for r in new_rows
             ]

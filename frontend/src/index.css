@@ -489,3 +489,15 @@
   0%   { transform: translateX(-200%); }
   100% { transform: translateX(400%); }
 }
+
+/* ADR-494 — the interruptive dialog's entrance.
+   Referenced by InterruptiveDialog as motion-safe:animate-[dialogIn_160ms_ease-out].
+   A missing keyframe is silent: the class applies, the animation resolves to
+   nothing, and the dialog simply appears. Worth defining rather than leaving
+   the component referencing a name that does not exist.
+   The component also gates this on useReducedMotion, so the motion-safe variant
+   is belt-and-braces rather than the only guard. */
+@keyframes dialogIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
