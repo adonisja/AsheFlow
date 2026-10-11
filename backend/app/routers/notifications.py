@@ -182,6 +182,13 @@ def acknowledge_notification(
 
     ack = NotificationAcknowledgement(
         notification_id=notification_id,
+        # SNAPSHOTS, not a join. `prune_notifications` deletes the notification
+        # after 3 days and the FK is SET NULL, so after that these two columns
+        # are the only record of what the person was actually looking at when
+        # they chose. An acknowledgement that cannot say WHAT was acknowledged
+        # is not evidence of anything, which is the whole purpose of the row.
+        notification_type=notif.type,
+        message_snapshot=notif.message,
         employee_id=caller.id,
         company_id=caller.company_id,
         acknowledged_at=datetime.now(timezone.utc),

@@ -192,3 +192,86 @@ class TestTheRequestSchema:
         assert set(typing.get_args(N.AcknowledgeIn.model_fields["action"].annotation)) == {
             a.value for a in AckAction
         }
+
+class TestTheRowOutlivesTheNotification:
+    """ADR-494 D8 finding — the defect that made D7's whole premise false.
+
+    `notification_id` was the PRIMARY KEY with ON DELETE CASCADE, and
+    `prune_notifications` deletes notifications after 3 days (immediately once
+    `expires_at` passes). So every acknowledgement was destroyed three days
+    after it was made, and D7's justification — *"a dispute six weeks later
+    turns on which it was"* — could never have been met.
+
+    Nothing would have reported it. The rows would simply not be there.
+
+    Verified against the real database during the fix: the notification was
+    deleted, `notification_id` went NULL, and the row survived carrying the
+    type, the exact message shown and the choice. These tests pin the schema
+    properties that make that true.
+    """
+
+    def test_the_fk_sets_null_rather_than_cascading(self):
+        from app.models.role_guide import NotificationAcknowledgement as A
+
+        fks = list(A.__table__.c["notification_id"].foreign_keys)
+        assert fks, "notification_id lost its foreign key"
+        assert fks[0].ondelete == "SET NULL", (
+            f"ondelete is {fks[0].ondelete!r} — CASCADE destroys the evidence "
+            f"when prune_notifications runs, which is 3 days after it is made"
+        )
+
+    def test_notification_id_is_nullable_and_not_the_primary_key(self):
+        """SET NULL is impossible on a primary key, so the swap is load-bearing."""
+        from app.models.role_guide import NotificationAcknowledgement as A
+
+        col = A.__table__.c["notification_id"]
+        assert col.nullable is True
+        assert col.primary_key is False
+        assert A.__table__.c["id"].primary_key is True
+
+    def test_one_acknowledgement_per_notification_still_holds(self):
+        """The old PK's real job, kept without tying the row's lifetime to it."""
+        from app.models.role_guide import NotificationAcknowledgement as A
+
+        col = A.__table__.c["notification_id"]
+        unique = bool(col.unique) or any(
+            [c.name for c in uc.columns] == ["notification_id"]
+            for uc in A.__table__.constraints
+            if uc.__class__.__name__ == "UniqueConstraint"
+        )
+        assert unique, (
+            "notification_id is no longer unique — two acknowledgements for one "
+            "notification make the action column unreadable"
+        )
+
+    def test_the_snapshots_exist_and_are_required(self):
+        """After the prune these are the ONLY record of what was shown.
+
+        Nullable snapshots would let a row say "they confirmed something",
+        which is not evidence of anything.
+        """
+        from app.models.role_guide import NotificationAcknowledgement as A
+
+        for name in ("notification_type", "message_snapshot"):
+            assert name in A.__table__.c, f"{name} is missing"
+            assert A.__table__.c[name].nullable is False, (
+                f"{name} is nullable — an acknowledgement that cannot say WHAT "
+                f"was acknowledged is not evidence"
+            )
+
+    def test_the_endpoint_populates_both_snapshots(self):
+        """A snapshot column the write path never fills is a 500 on every call.
+
+        Parsed from the constructor call, not grepped: the surrounding comment
+        names both columns, so a substring assertion would match the prose.
+        """
+        tree = ast.parse(_ack_src().lstrip())
+        kwargs: set[str] = set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "NotificationAcknowledgement"):
+                kwargs = {kw.arg for kw in node.keywords}
+        assert {"notification_type", "message_snapshot"} <= kwargs, (
+            f"the constructor passes {sorted(kwargs)} — both snapshots are "
+            f"NOT NULL, so a missing one is an IntegrityError on every call"
+        )

@@ -127,18 +127,54 @@ class RoleGuide(Base):
 class NotificationAcknowledgement(Base):
     """That a person chose something about one notification.
 
-    `notification_id` is the primary key: one acknowledgement per notification,
-    and a second attempt is an idempotency question rather than a new row. The
-    alternative — a composite key with `employee_id` — would allow two rows for
-    one notification, and a notification addresses exactly one employee.
+    ## This row OUTLIVES the notification it refers to (ADR-494 D8 finding)
+
+    The first version made `notification_id` the primary key with
+    `ondelete="CASCADE"`, which was tidy and wrong. `prune_notifications`
+    deletes notifications after **3 days** — and immediately once `expires_at`
+    passes — so the cascade destroyed every acknowledgement three days after it
+    was made.
+
+    D7's entire justification is that *"an employee who confirmed the hours and
+    one who skipped have told you different things, and a dispute six weeks
+    later turns on which it was."* A record with a three-day life cannot serve
+    that, and nothing would have reported the loss: the rows simply would not
+    be there when someone looked.
+
+    So the row stands alone as evidence. It carries a surrogate key, a
+    `SET NULL` reference, and **snapshots of what the person was actually
+    shown** — because after the notification is pruned the type and the message
+    are not recoverable from anywhere else, and "they confirmed something" is
+    not evidence of anything.
+
+    This is the shape ADR-492's retention hold already uses: the record survives
+    the thing it refers to, because the record is the point.
+
+    ## Why `notification_id` is still UNIQUE
+
+    One acknowledgement per notification, so a second attempt is an idempotency
+    question (409) rather than a new row. That was the original PK's real job,
+    and a unique constraint does it without tying the row's lifetime to the
+    notification's.
     """
 
     __tablename__ = "notification_acknowledgements"
 
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    #: SET NULL, not CASCADE. The notification is pruned after 3 days; this row
+    #: is the evidence and must not go with it. Nullable for the same reason.
     notification_id = Column(
-        UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"),
-        primary_key=True,
+        UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="SET NULL"),
+        nullable=True, unique=True,
     )
+
+    #: Snapshots, taken at acknowledgement time. Denormalised deliberately:
+    #: once the notification row is pruned these are the only record of what
+    #: the person was looking at when they chose, and an acknowledgement that
+    #: cannot say WHAT was acknowledged is not evidence.
+    notification_type = Column(String(64), nullable=False)
+    message_snapshot = Column(Text, nullable=False)
     employee_id = Column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),
         nullable=False, index=True,
