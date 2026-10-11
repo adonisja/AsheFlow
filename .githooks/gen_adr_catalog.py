@@ -58,12 +58,20 @@ def frontmatter(text: str) -> dict:
 
 def collect_decisions() -> list[tuple[int, str]]:
     rows = []
+    claimed: dict[int, list[str]] = {}
     for path in sorted(DECISIONS.glob("ADR-*.md")):
         m = re.match(r"ADR-(\d+)", path.name)
         if not m:
             continue
         num = int(m.group(1))
         fm = frontmatter(path.read_text(encoding="utf-8"))
+        # A renumbered redirect stub keeps the OLD filename on purpose, so that
+        # wikilinks written before the split still resolve. It does not CLAIM
+        # the number -- the decision that kept it does -- so it is excluded from
+        # the duplicate check below or every resolved collision reports forever.
+        tags = fm.get("tags") or ""
+        if "renumbered" not in tags:
+            claimed.setdefault(num, []).append(path.name)
         title = fm.get("title") or path.stem.split("-", 2)[-1].replace("-", " ")
         # Strip a leading "ADR-N — " if the title repeats it.
         title = re.sub(r"^ADR-\d+\s*[—-]\s*", "", title).strip()
@@ -71,6 +79,32 @@ def collect_decisions() -> list[tuple[int, str]]:
         if status not in SETTLED:
             title = f"{title} [{status}]"
         rows.append((num, title))
+
+    # Two decisions under one number make every bare `ADR-N` citation ambiguous,
+    # and check_adr_coverage.py -- which resolves a citation by globbing
+    # `ADR-N-*.md` -- is satisfied by whichever file it finds first. So a commit
+    # cites a number that does not identify a decision, and the gate passes.
+    #
+    # This happened twice before anyone noticed: ADR-405 (bag sort zones vs
+    # truck-room access) and ADR-464 (redaction registry vs setup gating), the
+    # second cited in 36 places across both meanings. Found by running `uniq -d`
+    # over the filenames during an unrelated docs audit, never by recall --
+    # which is why it is a gate now and not a habit.
+    dupes = {n: names for n, names in claimed.items() if len(names) > 1}
+    if dupes:
+        print("gen_adr_catalog: DUPLICATE ADR NUMBERS", file=sys.stderr)
+        for n, names in sorted(dupes.items()):
+            print(f"  ADR-{n} is claimed by {len(names)} files:", file=sys.stderr)
+            for nm in names:
+                print(f"    {nm}", file=sys.stderr)
+        print("\nGive the later decision the next free number, add\n"
+              "`renumbered_from: <old>` to its frontmatter, and leave a stub at the\n"
+              "old filename with `tags: [adr, renumbered]` so existing wikilinks\n"
+              "still resolve. Then reclassify the bare `ADR-<old>` citations --\n"
+              "they split across BOTH meanings and each one must be read.",
+              file=sys.stderr)
+        raise SystemExit(1)
+
     return rows
 
 
