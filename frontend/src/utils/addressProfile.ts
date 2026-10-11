@@ -423,6 +423,34 @@ export function canonicalAddress(address: string): string {
   return s.replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
+/** Does this address still name a street? (ADR-496)
+ *
+ *  'street_lost' is OUR bug: the input names a street type and
+ *  canonicalAddress() dropped it — how "55 Front St" became "55". 'no_street'
+ *  is the input's: nothing after the house number names a street. When either
+ *  fires, the page keeps what was typed rather than rewriting it.
+ *
+ *  Python twin: `address_problem` in backend/app/services/door_key.py.
+ */
+export type AddressProblem = 'street_lost' | 'no_street';
+
+const _STREET_WORD = /\b(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b/i;
+const _DIRECTIONS = new Set(['n', 's', 'e', 'w', 'north', 'south', 'east', 'west']);
+
+export const ADDRESS_PROBLEM_TEXT: Record<AddressProblem, string> = {
+  street_lost: 'Part of this address was dropped while tidying it. Check the street name.',
+  no_street: 'This address has no street name. Check the entrance or a package label.',
+};
+
+export function addressProblem(address: string): AddressProblem | null {
+  const raw = address.trim().replace(/^\D*/, (m) => (/\d/.test(address) ? '' : m)).trim();
+  const canon = canonicalAddress(raw);
+  if (_STREET_WORD.test(raw) && !_STREET_WORD.test(canon)) return 'street_lost';
+  const words = canon.split(' ').slice(1);
+  if (!words.some((w) => /[A-Z]/.test(w) && !_DIRECTIONS.has(w.toLowerCase()))) return 'no_street';
+  return null;
+}
+
 /** The handle this device collects under (ADR-427).
  *
  *  Remembered so it is typed once a campaign rather than once an address, and

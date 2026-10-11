@@ -171,6 +171,11 @@ class CollectionSubmitOut(BaseModel):
     # "I fixed the one I got wrong".
     updated: int = 0
 
+    # ADR-496 D3. Addresses from THIS request that were accepted but flagged
+    # (no street name, or a street the tidy-up dropped). The same echo terms as
+    # duplicate_addresses: only what the submitter just sent.
+    needs_review_addresses: list[str] = []
+
 
 class CollectionCheckIn(BaseModel):
     """Ask whether one address is already collected under this campaign.
@@ -359,6 +364,8 @@ class CollectedProfileOut(BaseModel):
     # identity and not a secret — it decides only whether a row is yours to
     # update. It is deliberately absent from the public /check response.
     device_id:      Optional[str] = None
+    # ADR-496. "street_lost" | "no_street" | None, set at submit.
+    address_flag:   Optional[str] = None
     # ADR-424. NULL for an open campaign. ADR-423 made the COLUMN nullable and
     # left this read schema declaring a bare UUID, so the first profile
     # submitted to an open campaign 500'd the super-admin listing on
@@ -512,7 +519,7 @@ class PromotionDoorOut(BaseModel):
     door_key: str
     # The canonical form the profile would be stored under.
     address: str
-    state: Literal["ready", "conflict", "exists", "no_street", "already_reviewed"]
+    state: Literal["ready", "conflict", "exists", "check_address", "already_reviewed"]
     observers: int
     rows: list[PromotionRowOut]
 

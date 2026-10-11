@@ -116,6 +116,39 @@ def canonical_address(address: str) -> str:
     return _WHITESPACE.sub(" ", s).strip().upper()
 
 
+# ADR-496 — does this address still name a street?
+#
+# Two different failures, one check. `street_lost` is OUR bug: the input names
+# a street type and canonical_address() dropped it (how `55 Front St` became
+# `55`). `no_street` is the input's: nothing after the house number names a
+# street. MUST STAY IN STEP WITH `addressProblem()` in addressProfile.ts.
+_STREET_WORD = re.compile(
+    r"\b(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b",
+    re.IGNORECASE,
+)
+_DIRECTIONS = frozenset({"n", "s", "e", "w", "north", "south", "east", "west"})
+
+STREET_LOST = "street_lost"
+NO_STREET = "no_street"
+
+ADDRESS_PROBLEM_TEXT = {
+    STREET_LOST: "Part of this address was dropped while tidying it. Check the street name.",
+    NO_STREET: "This address has no street name. Check the entrance or a package label.",
+}
+
+
+def address_problem(address: str) -> str | None:
+    """`street_lost`, `no_street`, or None when the address names a street."""
+    raw = strip_leading_non_number(address or "").strip()
+    canon = canonical_address(raw)
+    if _STREET_WORD.search(raw) and not _STREET_WORD.search(canon):
+        return STREET_LOST
+    words = canon.split()[1:]
+    if not any(re.search(r"[A-Z]", w) and w.lower() not in _DIRECTIONS for w in words):
+        return NO_STREET
+    return None
+
+
 class AddressShapeError(ValueError):
     """The string is not an address. `message` is shown to the collector."""
 

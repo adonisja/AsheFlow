@@ -23,7 +23,7 @@ const STATE_LABEL: Record<PromotionDoorState, string> = {
   ready: 'Ready',
   conflict: 'Observations disagree',
   exists: 'Already in your profiles',
-  no_street: 'No street name',
+  check_address: 'Check the address',
   already_reviewed: 'Done',
 };
 
@@ -31,7 +31,7 @@ const STATE_HELP: Record<PromotionDoorState, string> = {
   ready: '',
   conflict: 'Pick the observation that is right. It enters as one observation.',
   exists: 'Your existing profile is kept as it is. Promoting marks this door done.',
-  no_street: 'Only a house number was recorded, so it names no building. Reject it.',
+  check_address: 'No street name, or one was dropped while tidying it. It names no building, so reject it.',
   already_reviewed: '',
 };
 
@@ -208,7 +208,7 @@ function DoorRow({ door, choice, onChoose }: {
 }) {
   const pending = door.rows.filter(r => r.review_status === 'pending');
   const conflict = door.state === 'conflict';
-  const canPromote = door.state !== 'no_street' && (!conflict || !!choice?.rowId);
+  const canPromote = door.state !== 'check_address' && (!conflict || !!choice?.rowId);
   const name = `door-${door.door_key}`;
 
   return (

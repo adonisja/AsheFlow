@@ -142,6 +142,8 @@ REGISTRY: tuple[Target, ...] = (
 EXEMPT: dict[tuple[str, str], str] = {
     ("building_profiles", "address_status"):
         "a resolution state ('pending'/'resolved'), not an address",
+    ("collected_address_profiles", "address_flag"):
+        "ADR-496 check result ('street_lost'/'no_street'), not an address",
     ("incidents", "packages_tba"):
         "an INTEGER count of packages involved, not a package id",
     ("street_segments", "x_low_address_end"):  "public NYC street topology (house-number ranges)",

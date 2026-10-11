@@ -171,10 +171,10 @@ class TestDoors:
         _row(db, tok)
         assert _door(db, tok).state == promo.READY
 
-    def test_a_bare_house_number_is_no_street(self, db):
+    def test_a_bare_house_number_needs_an_address_check(self, db):
         tok = _token(db)
         _row(db, tok, "55")
-        assert _door(db, tok).state == promo.NO_STREET
+        assert _door(db, tok).state == promo.CHECK_ADDRESS
 
     def test_rows_of_another_tenant_under_the_token_are_not_read(self, db):
         tok = _token(db)
@@ -261,7 +261,7 @@ class TestPromotion:
         tok = _token(db)
         r = _row(db, tok, "55")
         out = _promote(db, tok, {"door_key": "55", "action": "promote"})
-        assert out.outcomes[0].outcome == "no_street"
+        assert out.outcomes[0].outcome == "check_address"
         out = _promote(db, tok, {"door_key": "55", "action": "reject"})
         assert out.rejected == 1 and _profiles(db) == []
         db.expire_all()

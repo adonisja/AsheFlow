@@ -12,12 +12,12 @@ Nothing here commits. The router owns flush, audit and commit.
     ready             observations agree                              promote, reject
     conflict          observations disagree on the building type      promote (pick a row), reject
     exists            the company already has a profile at the door   reject (promote = skipped)
-    no_street         nothing but a house number survived             reject
+    check_address     the address names no street, or the tidy-up     reject
+                      dropped it (ADR-496)
     already_reviewed  every row is stamped                            nothing
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable
@@ -31,22 +31,18 @@ from app.models.employee import Employee
 from app.schemas.building_taxonomy import category_for
 from app.schemas.location_profile import WORKLOAD_CLASSES, derive_workload_class
 from app.services.derive_block_key import ParsedBlock, derive_block_key
-from app.services.door_key import canonical_address, door_key
+from app.services.door_key import address_problem, canonical_address, door_key
 from app.services.note_scrub import scrub_note
 
 # Mirrors building_profiles._REVIEW_THRESHOLD (ADR-276); a test pins the two
 # together. Two agreeing observations reach `review`, never `verified`.
 REVIEW_THRESHOLD = 2
 
-READY, CONFLICT, EXISTS, NO_STREET, REVIEWED = (
-    "ready", "conflict", "exists", "no_street", "already_reviewed")
+READY, CONFLICT, EXISTS, CHECK_ADDRESS, REVIEWED = (
+    "ready", "conflict", "exists", "check_address", "already_reviewed")
 
 PENDING, PROMOTED, REJECTED, SKIPPED = "pending", "promoted", "rejected", "skipped"
 
-# A house number and at least one word with a letter in it. `55` alone is what
-# `55 Front St` became before ADR-495 fixed canonicalAddress; it names no
-# building, and a profile keyed on it would collect every "55" in the city.
-_HAS_STREET = re.compile(r"^\S+\s+.*[A-Z]")
 
 
 @dataclass
@@ -109,8 +105,11 @@ def doors_for(db: Session, tok: CollectionToken) -> list[Door]:
             state = REVIEWED
         elif key in have:
             state = EXISTS
-        elif not _HAS_STREET.match(address):
-            state = NO_STREET
+        # ADR-496 D4. RECOMPUTED with today's canonicaliser rather than read
+        # from the stored flag: rows from before the flag existed are caught
+        # too, and a damaged address can never key a building profile.
+        elif any(address_problem(r.address) for r in pending) or address_problem(address):
+            state = CHECK_ADDRESS
         elif len({r.building_type for r in pending}) > 1:
             state = CONFLICT
         else:
@@ -131,7 +130,7 @@ class Decision:
 class Outcome:
     door_key: str
     outcome: str                # promoted | rejected | skipped | already_reviewed |
-                                # not_found | needs_choice | invalid_choice | no_street
+                                # not_found | needs_choice | invalid_choice | check_address
     profile_id: object = None
 
 
@@ -207,8 +206,8 @@ def promote(db: Session, tok: CollectionToken, decisions: list[Decision],
             _stamp(door.pending, SKIPPED, caller, now)
             out.append(Outcome(dec.door_key, "skipped"))
             continue
-        if door.state == NO_STREET:
-            out.append(Outcome(dec.door_key, "no_street"))
+        if door.state == CHECK_ADDRESS:
+            out.append(Outcome(dec.door_key, "check_address"))
             continue
 
         if dec.use_row_id is not None:

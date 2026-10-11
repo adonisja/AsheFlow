@@ -249,6 +249,9 @@ const CSV_COLUMNS = [
   'has_security_desk', 'workloads', 'workload_other', 'workload_class',
   'raw_note', 'opens_at', 'closes_at', 'break_start', 'break_end',
   'troublesome', 'collected_by', 'collected_on', 'submitted_at',
+  // ADR-496. Last and not a BuildingProfile column: an export must not let a
+  // flagged "55" pass for an address once it is out of this page.
+  'address_flag',
 ] as const;
 
 /** One profile as a row, in CSV_COLUMNS order.
@@ -268,6 +271,7 @@ function profileRow(r: CollectedProfile): unknown[] {
     r.opens_at ?? '', r.closes_at ?? '', r.break_start ?? '', r.break_end ?? '',
     r.troublesome ? 'true' : 'false',
     r.collected_by ?? '', r.collected_on, r.submitted_at,
+    r.address_flag ?? '',
   ];
 }
 
@@ -1263,6 +1267,17 @@ export default function CollectionData({ platform = true }: {
                         </span>
                         {p.note && (
                           <span className="block text-[11px] text-muted-foreground">{p.note}</span>
+                        )}
+                        {/* ADR-496. Accepted at submit but not trusted as an address. */}
+                        {p.address_flag && (
+                          <span
+                            className="mt-0.5 mr-1 inline-block rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning"
+                            title={p.address_flag === 'street_lost'
+                              ? 'The street name was dropped while tidying this address.'
+                              : 'This address has no street name.'}
+                          >
+                            check address
+                          </span>
                         )}
                         {p.troublesome && (
                           <span className="mt-0.5 inline-block rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">

@@ -59,7 +59,7 @@ from app.models.company import Company
 from app.services import collection_promotion as promo
 from app.services.audit import super_admin_identity, write_audit
 from app.services.note_scrub import scrub_note
-from app.services.door_key import door_key
+from app.services.door_key import address_problem, door_key
 from app.schemas.building_taxonomy import category_for
 
 logger = logging.getLogger(__name__)
@@ -163,6 +163,8 @@ def submit_profiles(
     # Which of THIS request's addresses the campaign already had. Not a read
     # path: every entry is an address the submitter just supplied (D4).
     duplicate_addresses: list[str] = []
+    # ADR-496 D3. This request's own addresses that were accepted but flagged.
+    needs_review_addresses: list[str] = []
 
     # ADR-420. Doors already at the verification limit, counted once up front.
     #
@@ -207,6 +209,7 @@ def submit_profiles(
 
     for p in body.profiles:
         key = door_key(p.address)[:200]
+        flag = address_problem(p.address)
 
         mine = owned.get(key)
         if mine is not None:
@@ -227,6 +230,9 @@ def submit_profiles(
             mine.break_end         = p.break_end
             mine.troublesome       = p.troublesome
             mine.collected_by      = p.collected_by
+            mine.address_flag      = flag
+            if flag:
+                needs_review_addresses.append(p.address)
             updated += 1
             continue
 
@@ -265,6 +271,7 @@ def submit_profiles(
             door_key=key,
             # ADR-426 — who may later correct this row.
             device_id=body.device_id,
+            address_flag=flag,
         )
         db.add(row)
         try:
@@ -273,6 +280,8 @@ def submit_profiles(
             # case, not an error — the unique constraint absorbs it.
             db.flush()
             accepted += 1
+            if flag:
+                needs_review_addresses.append(p.address)
         except IntegrityError:
             db.rollback()
             duplicate += 1
@@ -288,7 +297,9 @@ def submit_profiles(
             # No actor_id: there is no account behind this, and inventing one
             # would make the audit log claim something untrue.
             detail={"label": tok.label, "accepted": accepted,
-                    "duplicate": duplicate, "updated": updated},
+                    "duplicate": duplicate, "updated": updated,
+                    # ADR-496: a count, not the addresses.
+                    "flagged": len(needs_review_addresses)},
         )
     db.commit()
 
@@ -298,6 +309,7 @@ def submit_profiles(
         duplicate=duplicate,
         duplicate_addresses=duplicate_addresses,
         updated=updated,
+        needs_review_addresses=needs_review_addresses,
     )
 
 

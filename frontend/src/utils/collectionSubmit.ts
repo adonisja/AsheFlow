@@ -57,6 +57,9 @@ export interface SubmitResult {
    *  Echoed back so the page can warn about them next time rather than letting
    *  someone walk to the same door twice. */
   duplicate_addresses: string[];
+  /** ADR-496. Addresses in THIS batch that were accepted but flagged for a
+   *  reviewer: no street name, or a street the tidy-up dropped. */
+  needs_review_addresses: string[];
 }
 
 /** POSTs a batch of profiles.
@@ -126,7 +129,12 @@ export async function submitProfiles(
   }
   const out = (await res.json()) as SubmitResult;
   // Tolerate a server that predates these fields rather than crashing the page.
-  return { ...out, duplicate_addresses: out.duplicate_addresses ?? [], updated: out.updated ?? 0 };
+  return {
+    ...out,
+    duplicate_addresses: out.duplicate_addresses ?? [],
+    updated: out.updated ?? 0,
+    needs_review_addresses: out.needs_review_addresses ?? [],
+  };
 }
 
 

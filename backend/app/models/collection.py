@@ -182,6 +182,12 @@ class CollectedAddressProfile(Base):
     # Indexed with door_key because the only query is "did THIS device already
     # submit THIS door under this campaign".
     device_id = Column(String(64), nullable=True, index=True)
+
+    # ADR-496 D3. "street_lost" | "no_street" | NULL, from address_problem() at
+    # submit. The row is ACCEPTED either way: the page is public and used at a
+    # door, so a fixable field must not cost the observation. The flag puts it
+    # in front of a reviewer instead of letting a bare "55" pass as an address.
+    address_flag = Column(String(20), nullable=True, index=True)
     collected_on = Column(Date, nullable=False)
 
     submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

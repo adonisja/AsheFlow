@@ -3250,6 +3250,8 @@ export interface CollectedProfile {
    *  attributed and removed as a group. Super-admin read only; deliberately
    *  absent from the public /check response. */
   device_id: string | null;
+  /** ADR-496. 'street_lost' | 'no_street' | null — set at submit. */
+  address_flag?: 'street_lost' | 'no_street' | null;
   /** How many observations this door has across the WHOLE campaign, and
    *  whether that closes it. Server-computed: counting the rows on screen
    *  would miscount a pair split across a page boundary. */
@@ -3307,7 +3309,7 @@ export interface AssignCampaignRequest {
   attest_collected_for_company: boolean;
 }
 
-export type PromotionDoorState = 'ready' | 'conflict' | 'exists' | 'no_street' | 'already_reviewed';
+export type PromotionDoorState = 'ready' | 'conflict' | 'exists' | 'check_address' | 'already_reviewed';
 
 export interface PromotionRow {
   id: string;

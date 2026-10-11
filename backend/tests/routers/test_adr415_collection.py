@@ -164,12 +164,17 @@ class TestTheResponseSaysNothingUseful:
         request corrected. It describes what the caller just did, not what the
         table holds.
 
+        `needs_review_addresses` was added by ADR-496: the addresses in this
+        batch that were accepted but flagged (no street name). Computed from the
+        request's own strings by a pure function; it reads nothing from the table.
+
         The set is pinned exactly so a field that DOES describe the table (an
         id, a count of everything, a neighbouring address) fails here.
         """
         from app.schemas.collection import CollectionSubmitOut
         assert set(CollectionSubmitOut.model_fields) == {
             "accepted", "duplicate", "duplicate_addresses", "updated",
+            "needs_review_addresses",
         }
 
     def test_duplicate_addresses_only_ever_echoes_the_request(self):
