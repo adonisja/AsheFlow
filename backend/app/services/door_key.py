@@ -95,13 +95,15 @@ def door_key(address: str) -> str:
 # ADR-420 were already rewritten by it on the page, and promotion must produce
 # the same string for them, or a door collected before ADR-420 and one after
 # would be stored as two buildings.
-_NOISE = re.compile(
+# The ONE list of unit/floor words (ADR-497 D2). derive_block_key.py (routing,
+# and the GeoClient request) imports this pattern rather than keeping a copy:
+# two lists drifted, and the routing copy cut `55 Front St` to `55` long after
+# this one was fixed. A noise word followed by a street type is a street name.
+NOISE_PATTERN = (
     r"\b(attn|attention|apt|unit|ground|floor|fl|host|suite|ste|basement|bsmt|lobby|rear|front)\b"
-    # A noise word followed by a street type is a street name: `55 Front St`
-    # canonicalised to `55` before this lookahead (found by ADR-495's vector).
-    r"(?!\s+(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b)",
-    re.IGNORECASE,
+    r"(?!\s+(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b)"
 )
+_NOISE = re.compile(NOISE_PATTERN, re.IGNORECASE)
 _CANON_TYPES = [(re.compile(p.pattern, re.IGNORECASE), c.upper()) for p, c in _STREET_TYPES]
 
 

@@ -273,17 +273,19 @@ def submit_profiles(
             device_id=body.device_id,
             address_flag=flag,
         )
-        db.add(row)
         try:
-            # Per-row flush so one duplicate does not discard the batch. A
-            # collector resubmitting after a dropped connection is the normal
-            # case, not an error — the unique constraint absorbs it.
-            db.flush()
+            # ADR-497 D1: a SAVEPOINT per row, so a duplicate rolls back only
+            # itself. This used to be `db.rollback()`, which discards the WHOLE
+            # transaction — every row flushed earlier in the batch — while the
+            # loop kept counting them as accepted. The unique constraint stays
+            # the enforcement (a pre-check would race a concurrent submit); the
+            # savepoint just scopes its failure to one row.
+            with db.begin_nested():
+                db.add(row)
             accepted += 1
             if flag:
                 needs_review_addresses.append(p.address)
         except IntegrityError:
-            db.rollback()
             duplicate += 1
             duplicate_addresses.append(p.address)
 
