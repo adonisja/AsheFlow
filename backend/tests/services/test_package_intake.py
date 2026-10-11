@@ -54,8 +54,24 @@ def _register_json_contains(dbapi_conn, _rec):
 
     Arrays round-trip as JSON strings under the processors above, so testing
     membership is a parse plus an `in`.
+
+    SQLITE ONLY, and the guard is load-bearing. This listens on the GLOBAL
+    `Engine` class, so it fires for every connection opened anywhere in the
+    pytest process — including the real Postgres session that
+    `app.database.SessionLocal` hands out. psycopg2 connections have no
+    `create_function`, so without the guard this raises AttributeError the first
+    time any later test opens a live connection.
+
+    That is not hypothetical: it broke two ADR-494 retention tests, which were
+    the first in this suite to call a Celery task that uses SessionLocal. They
+    passed in isolation and failed in the full run, and the failure surfaced
+    HERE rather than in this file — the cost of a global hook is paid by
+    whoever runs after you.
     """
     import json
+
+    if dbapi_conn.__class__.__module__.split(".")[0] != "sqlite3":
+        return
 
     def _contains(haystack, needle):
         if haystack is None:

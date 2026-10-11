@@ -201,6 +201,17 @@ celery_app.conf.beat_schedule = {
         # skip the entries that carry them.
         "schedule": crontab(hour=3, minute=31, day_of_month=1),
     },
+    # ADR-494. Monthly on the 1st, like its sibling above: a 1095-day window
+    # does not need a daily scan, and a monthly job that deletes nothing for
+    # three years is cheaper to reason about than a daily one.
+    #
+    # 3:32, one minute after the operational purge. Deliberately NOT 3:31 —
+    # that entry's own comment records a collision that only fired on the 1st
+    # of the month, which is exactly the day this runs.
+    "purge-expired-acknowledgements": {
+        "task": "app.tasks.cleanup.purge_expired_acknowledgements",
+        "schedule": crontab(hour=3, minute=32, day_of_month=1),
+    },
     # 02:30 AM Eastern — decay BuildingProfile troublesome scores (~30d half-life, ADR-218).
     "decay-troublesome-scores-nightly": {
         "task": "app.tasks.cleanup.decay_troublesome_scores",

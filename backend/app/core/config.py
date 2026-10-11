@@ -186,6 +186,28 @@ class Settings(BaseSettings):
     # unread — an operational notice's shift is long over after a few days).
     # Expired notifications (past expires_at) are pruned regardless of age. The
     # inbox already hides expired/old ones; this reclaims the storage. 0 disables.
+    # ADR-494: an ACKNOWLEDGEMENT is not a notification and does not share its
+    # 3-day window. The notification is a message; this is the record that a
+    # person CHOSE something, and `notification_id` is SET NULL precisely so it
+    # outlives the message (the D8 finding: CASCADE destroyed every ack 3 days
+    # after it was made).
+    #
+    # 1095 days on the same basis as operational_record_retention_days above:
+    # FLSA §211 requires employment records be kept at least 3 years. The
+    # `timecard_mismatch` sign-off IS a wage-and-hour record — the employee
+    # attests to their own hours and breaks — so the longest-justified type sets
+    # the window for all of them. One clock and one cited statute beats a
+    # per-type map that drifts from the registry.
+    #
+    # Counted from `acknowledged_at`, NOT from the notification: by the time this
+    # fires the notification has been gone for ~3 years.
+    #
+    # Note this is not the only thing keeping the row bounded. 180 days after
+    # departure ADR-221 redacts the employee row to REDACTED_NAME with
+    # email/phone/username nulled, so an ack for a departed employee is already
+    # pseudonymous long before this cutoff. 0 disables.
+    acknowledgement_retention_days: int = 1095
+
     notification_retention_days: int = 3
 
     # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.

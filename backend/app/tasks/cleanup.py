@@ -232,6 +232,64 @@ def expire_registered_unused() -> dict:
     }
 
 
+@celery_app.task(name="app.tasks.cleanup.purge_expired_acknowledgements")
+def purge_expired_acknowledgements() -> dict:
+    """Delete notification acknowledgements older than acknowledgement_retention_days.
+
+    ADR-494. FLSA §211 requires employment records be kept at least 3 years, and
+    a `timecard_mismatch` acknowledgement IS a wage-and-hour record — the
+    employee attests to their own hours and breaks. That is the
+    longest-justified of the five interruptive types, so it sets the window for
+    all of them: one clock and one cited statute, rather than a per-type map
+    that drifts from the registry every time a type is added.
+
+    COUNTED FROM `acknowledged_at`, NOT THE NOTIFICATION.
+    `prune_notifications` deletes the notification after 3 days and the FK is
+    SET NULL, so by the time this fires `notification_id` has been NULL for
+    roughly three years. Joining to `notifications` here would match nothing and
+    silently delete nothing — the shape of bug that reports success forever.
+
+    This is the LAST thing holding the row, so a bug here is unrecoverable:
+    there is no soft-delete and no archive. Hence the explicit cutoff log and
+    the count in the return value.
+
+    Set acknowledgement_retention_days=0 to disable.
+    """
+    from app.models.role_guide import NotificationAcknowledgement
+
+    retention_days = settings.acknowledgement_retention_days
+    if retention_days <= 0:
+        logger.info("purge_expired_acknowledgements: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(NotificationAcknowledgement)
+            .filter(NotificationAcknowledgement.acknowledged_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        logger.info(
+            "purge_expired_acknowledgements: deleted %d (cutoff %s, %d days).",
+            deleted, cutoff.date(), retention_days,
+        )
+        return {
+            "deleted": deleted,
+            "cutoff": cutoff.date().isoformat(),
+            "days": retention_days,
+        }
+    except Exception as e:
+        db.rollback()
+        # type(e).__name__ only: a retention job's failure goes to an operator,
+        # and str(e) on a DB error can carry row contents.
+        logger.error("purge_expired_acknowledgements failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.cleanup.purge_expired_operational_records")
 def purge_expired_operational_records() -> dict:
     """Delete operational shift records older than operational_record_retention_days.
