@@ -394,8 +394,13 @@ export function doorKey(address: string): string {
  *  before calling GeoClient: a street param carrying "APT 4A" fails to match,
  *  which silently broke ~90% of geocodes once already. The tokens are the same
  *  list as `_NOISE_PATTERN` in derive_block_key.py.
+ *
+ *  ADR-495: a noise word followed by a street type is a STREET NAME, not a
+ *  unit. Without the lookahead `55 Front St` canonicalised to `55`, and the
+ *  page wrote that back into the field. The Python twin is
+ *  `canonical_address` in backend/app/services/door_key.py.
  */
-const _NOISE = /\b(attn|attention|apt|unit|ground|floor|fl|host|suite|ste|basement|bsmt|lobby|rear|front)\b/i;
+const _NOISE = /\b(attn|attention|apt|unit|ground|floor|fl|host|suite|ste|basement|bsmt|lobby|rear|front)\b(?!\s+(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b)/i;
 
 export function canonicalAddress(address: string): string {
   // Cut at the first unit/floor token and keep the head, exactly as

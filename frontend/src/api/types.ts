@@ -3216,6 +3216,8 @@ export interface CollectionTokenSummary {
    *  the string still exists but no longer works, and showing a dead link
    *  invites someone to send it. */
   token: string | null;
+  /** ADR-495 D3. Set once when an open campaign was handed to a company. */
+  assigned_at?: string | null;
 }
 
 /** The create response. Deliberately NOT a CollectionTokenSummary: the POST
@@ -3295,4 +3297,54 @@ export interface ErasureResult {
   counts: Record<string, number>;
   /** Every stored spelling the request matched. */
   matched: string[];
+}
+
+// ── ADR-495: collected doors promoted into a company's building profiles ──
+
+export interface AssignCampaignRequest {
+  company_id: string;
+  /** Must be true: the recorded statement that this company's staff collected it. */
+  attest_collected_for_company: boolean;
+}
+
+export type PromotionDoorState = 'ready' | 'conflict' | 'exists' | 'no_street' | 'already_reviewed';
+
+export interface PromotionRow {
+  id: string;
+  address: string;
+  building_type: string;
+  workload_class: string;
+  workloads: string[];
+  has_security_desk: boolean;
+  collected_on: string;
+  /** The SCRUBBED note — what the profile would store. */
+  note: string | null;
+  review_status: 'pending' | 'promoted' | 'rejected' | 'skipped';
+}
+
+export interface PromotionDoor {
+  door_key: string;
+  /** The canonical address the profile would be stored under. */
+  address: string;
+  state: PromotionDoorState;
+  observers: number;
+  rows: PromotionRow[];
+}
+
+export interface PromotionDecision {
+  door_key: string;
+  action: 'promote' | 'reject';
+  use_row_id?: string;
+}
+
+export interface PromoteRequest {
+  /** 1–500, one per door. */
+  decisions: PromotionDecision[];
+}
+
+export interface PromoteResult {
+  promoted: number;
+  rejected: number;
+  skipped: number;
+  outcomes: { door_key: string; outcome: string; profile_id: string | null }[];
 }

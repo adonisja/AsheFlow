@@ -9,7 +9,7 @@ something to persist silently.
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -439,6 +439,9 @@ class CollectionTokenSummary(BaseModel):
     # to send it.
     token: Optional[str] = None
 
+    # ADR-495 D3. Set once when an open campaign is handed to a company.
+    assigned_at: Optional[datetime] = None
+
 
 class MyCampaignOut(BaseModel):
     """A platform campaign an authenticated tenant user may submit to (ADR-485 D9).
@@ -454,3 +457,74 @@ class MyCampaignOut(BaseModel):
     label: str
     dataset: str
     expires_at: Optional[datetime] = None
+
+
+# ── ADR-495: assignment and promotion ──────────────────────────────────────
+
+class AssignCampaignIn(BaseModel):
+    """Hand an open campaign to the one company whose staff collected it (D3)."""
+    model_config = ConfigDict(extra="forbid")
+
+    company_id: UUID
+    # The recorded statement that makes the move custody rather than
+    # disclosure. Required to be TRUE, not merely present (checked in the
+    # router so the 422 can say why).
+    attest_collected_for_company: bool
+
+
+class PromotionDecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    door_key: str = Field(min_length=1, max_length=200)
+    action: Literal["promote", "reject"]
+    # D5: which observation is right, when the door's observations disagree.
+    use_row_id: Optional[UUID] = None
+
+
+class PromoteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: list[PromotionDecisionIn] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _one_decision_per_door(self):
+        keys = [d.door_key for d in self.decisions]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Each door may appear once per request.")
+        return self
+
+
+class PromotionRowOut(BaseModel):
+    """One observation as the reviewer sees it. `note` is the SCRUBBED note:
+    what the profile would store, not what the collector typed."""
+    id: UUID
+    address: str
+    building_type: str
+    workload_class: str
+    workloads: list[str]
+    has_security_desk: bool
+    collected_on: date
+    note: Optional[str] = None
+    review_status: str
+
+
+class PromotionDoorOut(BaseModel):
+    door_key: str
+    # The canonical form the profile would be stored under.
+    address: str
+    state: Literal["ready", "conflict", "exists", "no_street", "already_reviewed"]
+    observers: int
+    rows: list[PromotionRowOut]
+
+
+class PromotionOutcomeOut(BaseModel):
+    door_key: str
+    outcome: str
+    profile_id: Optional[UUID] = None
+
+
+class PromoteOut(BaseModel):
+    promoted: int
+    rejected: int
+    skipped: int
+    outcomes: list[PromotionOutcomeOut]

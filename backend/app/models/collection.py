@@ -92,6 +92,14 @@ class CollectionToken(Base):
     created_by_name = Column(String(100), nullable=True)
     created_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    # ADR-495 D3. An OPEN campaign handed to the one company whose staff
+    # collected it. One-way: set once, with company_id and scope, and never
+    # changed, because moving it again would move one DSP's addresses to
+    # another. `assigned_by` is the super admin's id; they have no Employee
+    # row, so there is no FK.
+    assigned_at     = Column(DateTime(timezone=True), nullable=True)
+    assigned_by     = Column(String(64), nullable=True)
+
 
 class CollectedAddressProfile(Base):
     """One building profile submitted from the public collection page.
@@ -178,8 +186,9 @@ class CollectedAddressProfile(Base):
 
     submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    # Promotion review. Null = untouched; the rest is set by an authenticated
-    # human, which is the whole point of the quarantine.
+    # Promotion review (ADR-495 D8). `pending` = untouched; then exactly one of
+    # `promoted`, `rejected`, `skipped` (the company already had the door),
+    # set by an authenticated human and never changed afterwards.
     review_status = Column(String(20), nullable=False, server_default="pending", index=True)
     reviewed_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     reviewed_at   = Column(DateTime(timezone=True), nullable=True)

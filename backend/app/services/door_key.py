@@ -86,6 +86,36 @@ def door_key(address: str) -> str:
     return _WHITESPACE.sub(" ", s).strip()
 
 
+# ADR-495 D7 — the DISPLAY form, for a collected address entering
+# `building_profiles`. Unlike door_key this is stored and read back, so it keeps
+# the form GeoClient returns ("433 W 32 ST") rather than a lowercase key.
+#
+# MUST STAY IN STEP WITH `canonicalAddress()` in
+# frontend/src/utils/addressProfile.ts (ADR-420 D4): rows submitted after
+# ADR-420 were already rewritten by it on the page, and promotion must produce
+# the same string for them, or a door collected before ADR-420 and one after
+# would be stored as two buildings.
+_NOISE = re.compile(
+    r"\b(attn|attention|apt|unit|ground|floor|fl|host|suite|ste|basement|bsmt|lobby|rear|front)\b"
+    # A noise word followed by a street type is a street name: `55 Front St`
+    # canonicalised to `55` before this lookahead (found by ADR-495's vector).
+    r"(?!\s+(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b)",
+    re.IGNORECASE,
+)
+_CANON_TYPES = [(re.compile(p.pattern, re.IGNORECASE), c.upper()) for p, c in _STREET_TYPES]
+
+
+def canonical_address(address: str) -> str:
+    """`433 West 32nd Street, Apt 4` -> `433 W 32 ST`."""
+    s = _NOISE.split(address)[0].strip().rstrip(",")
+    s = _PUNCT.sub(" ", s)
+    s = re.sub(r"\b(\d+)(st|nd|rd|th)\b", r"\1", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b(north|south|east|west)\b", lambda m: m.group(0)[0], s, flags=re.IGNORECASE)
+    for pattern, canon in _CANON_TYPES:
+        s = pattern.sub(canon, s)
+    return _WHITESPACE.sub(" ", s).strip().upper()
+
+
 class AddressShapeError(ValueError):
     """The string is not an address. `message` is shown to the collector."""
 

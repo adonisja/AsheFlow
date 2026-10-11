@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     # lost/damaged claim window plus a month. Lengths are kept, because package
     # counts are read as len(tba_numbers). 0 disables.
     tba_retention_days: int = 90
-    # ADR-493 D5: OFF until promotion (ADR-494) ships and the backlog is
+    # ADR-493 D5: OFF until promotion (ADR-495) ships and the backlog is
     # reviewed; then 180, counted from review. 0 disables.
     collected_profile_retention_days: int = 0
     # ADR-493 D3: HMAC key for the erasure ledger, so a ledger entry cannot be

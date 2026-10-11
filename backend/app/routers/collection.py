@@ -20,6 +20,7 @@ apparent omission.
 import logging
 import secrets
 from datetime import date, datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func as sa_func
@@ -32,6 +33,7 @@ from app.api.deps import (
     get_caller_employee,
     get_caller_employee_optional,
     get_current_user,
+    get_super_admin,
 )
 from app.api.ratelimit import limiter
 from app.database import get_db
@@ -50,8 +52,13 @@ from app.schemas.collection import (
     CollectedProfileOut, CollectionSubmitIn, CollectionSubmitOut,
     CollectionTokenCreate, CollectionTokenOut, CollectionTokenSummary,
     MyCampaignOut,
+    AssignCampaignIn, PromoteIn, PromoteOut, PromotionDoorOut,
+    PromotionOutcomeOut, PromotionRowOut,
 )
-from app.services.audit import write_audit
+from app.models.company import Company
+from app.services import collection_promotion as promo
+from app.services.audit import super_admin_identity, write_audit
+from app.services.note_scrub import scrub_note
 from app.services.door_key import door_key
 from app.schemas.building_taxonomy import category_for
 
@@ -1045,3 +1052,170 @@ def my_campaigns(
         )
         for t in live
     ]
+
+
+
+# ---------------------------------------------------------------------------
+# ADR-495 — promotion into a company's building profiles
+#
+# Supersedes ADR-415 D6 ("deliberately no promotion path"). A collected door
+# reaches `building_profiles` as `pending`/`review` field evidence; routing
+# reads `locked` only, so nothing here changes dispatch until the company's own
+# route leads sign it off (ADR-276).
+# ---------------------------------------------------------------------------
+
+# D2: the roles that can already read the rows (ADR-423 D4) and know their
+# buildings. Not the super admin: a platform principal has no Employee row and
+# must not write tenant operational records.
+_allow_promotion = RoleChecker(["management", "admin"])
+
+
+@router.post("/tokens/{token_id}/assign", response_model=CollectionTokenSummary)
+def assign_campaign(
+    token_id: UUID,
+    body: AssignCampaignIn,
+    super_admin: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Hand an OPEN campaign to the one company whose staff collected it (D3).
+
+    One-way. Moving it again would move one DSP's customer addresses to
+    another, which is the disclosure ADR-489 froze the Library over.
+    """
+    if not body.attest_collected_for_company:
+        raise HTTPException(
+            status_code=422,
+            detail="Assigning a campaign records that this company's staff collected it. "
+                   "Confirm that, or leave the campaign unassigned.",
+        )
+    tok = db.query(CollectionToken).filter(CollectionToken.id == token_id).first()
+    if tok is None:
+        raise HTTPException(status_code=404, detail="Collection link not found.")
+    if tok.company_id is not None or tok.scope != SCOPE_OPEN:
+        raise HTTPException(status_code=409, detail="This campaign already belongs to a company.")
+    if (tok.dataset or DATASET_ADDRESSES) != DATASET_ADDRESSES:
+        raise HTTPException(status_code=409, detail="Only address campaigns can be assigned.")
+    if tok.revoked_at is None:
+        # A live open link would keep writing anonymous rows into the
+        # company's data after the move (the ADR-437 D2 gate, reused).
+        raise HTTPException(status_code=409, detail="Revoke this link before assigning it.")
+    if db.query(Company.id).filter(Company.id == body.company_id).first() is None:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    now = datetime.now(timezone.utc)
+    moved = (
+        db.query(CollectedAddressProfile)
+        .filter(
+            CollectedAddressProfile.token_id == tok.id,
+            CollectedAddressProfile.company_id.is_(None),
+        )
+        .update({CollectedAddressProfile.company_id: body.company_id},
+                synchronize_session=False)
+    )
+    tok.company_id = body.company_id
+    tok.scope = SCOPE_COMPANY
+    tok.assigned_at = now
+    tok.assigned_by = (super_admin.get("id") or "")[:64] or None
+    db.flush()
+    write_audit(
+        db,
+        action_type="collection.campaign.assign",
+        target_table="collection_tokens",
+        target_id=str(tok.id),
+        actor_id=None,   # no Employee row; identity rides in the payload
+        company_id=str(body.company_id),
+        detail={**super_admin_identity(super_admin), "label": tok.label,
+                "rows": moved, "attested": True},
+    )
+    db.commit()
+    db.refresh(tok)
+    out = CollectionTokenSummary.model_validate(tok)
+    out.submission_count = moved
+    out.token = None   # revoked, by the gate above
+    return out
+
+
+def _company_campaign(db: Session, token_id: UUID, caller: Employee) -> CollectionToken:
+    tok = (
+        db.query(CollectionToken)
+        .filter(CollectionToken.id == token_id,
+                CollectionToken.company_id == caller.company_id)
+        .first()
+    )
+    # 404 for another tenant's campaign AND for an unassigned open one: NULL
+    # never equals the caller's company, so neither is visible here.
+    if tok is None:
+        raise HTTPException(status_code=404, detail="Collection link not found.")
+    return tok
+
+
+def _door_out(d: promo.Door) -> PromotionDoorOut:
+    return PromotionDoorOut(
+        door_key=d.key, address=d.address, state=d.state, observers=len(d.observers),
+        rows=[PromotionRowOut(
+            id=r.id, address=r.address, building_type=r.building_type,
+            workload_class=r.workload_class, workloads=list(r.workloads or []),
+            has_security_desk=bool(r.has_security_desk), collected_on=r.collected_on,
+            note=scrub_note(r.note)[0], review_status=r.review_status,
+        ) for r in d.rows],
+    )
+
+
+@router.get("/tokens/{token_id}/promotion", response_model=list[PromotionDoorOut])
+def preview_promotion(
+    token_id: UUID,
+    _: dict = Depends(_allow_promotion),
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Every door in the campaign, its state, and what it would be stored as."""
+    tok = _company_campaign(db, token_id, caller)
+    return [_door_out(d) for d in promo.doors_for(db, tok)]
+
+
+@router.post("/tokens/{token_id}/promote", response_model=PromoteOut)
+def promote_doors(
+    token_id: UUID,
+    body: PromoteIn,
+    _: dict = Depends(_allow_promotion),
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Apply the reviewer's decisions. Every state is recomputed here: the
+    preview is a courtesy to the reviewer, not a trust boundary (D9)."""
+    tok = _company_campaign(db, token_id, caller)
+    outcomes = promo.promote(db, tok, [
+        promo.Decision(door_key=d.door_key, action=d.action, use_row_id=d.use_row_id)
+        for d in body.decisions
+    ], caller)
+
+    tally = {k: sum(1 for o in outcomes if o.outcome == k)
+             for k in ("promoted", "rejected", "skipped")}
+    created = [str(o.profile_id) for o in outcomes if o.profile_id]
+    if any(tally.values()):
+        db.flush()
+        # One row per batch. Counts and profile ids, no addresses: a copy of
+        # the quarantine inside the audit log defeats the purpose (ADR-437 D3).
+        write_audit(
+            db,
+            action_type="collection.campaign.promote",
+            target_table="collection_tokens",
+            target_id=str(tok.id),
+            actor_id=str(caller.id),
+            company_id=str(caller.company_id),
+            detail={**tally, "profile_ids": created[:100], "truncated": len(created) > 100},
+        )
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two reviewers promoting the same door at once: the unique
+        # (company_id, normalised_address) constraint stops the second.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Another promotion changed these doors. Refresh the preview and try again.",
+        )
+    return PromoteOut(**tally, outcomes=[
+        PromotionOutcomeOut(door_key=o.door_key, outcome=o.outcome, profile_id=o.profile_id)
+        for o in outcomes
+    ])

@@ -10,6 +10,8 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import AssignCampaign from '../../components/collection/AssignCampaign';
+import CampaignPromotion from '../../components/collection/CampaignPromotion';
 import {
   groupByDoor, compareProfiles, filterProfiles,
   NO_FILTERS, hasActiveFilters,
@@ -675,6 +677,10 @@ export default function CollectionData({ platform = true }: {
 
   /** The selected campaign, or null on "All campaigns". Carries the link, so
    *  the row below can show it (ADR-424). */
+  // ADR-495. The promotion review for the selected campaign, company view only.
+  const [reviewing, setReviewing] = useState(false);
+  useEffect(() => { setReviewing(false); }, [activeToken]);
+
   const selected = useMemo(
     () => tokens.find((t) => t.id === activeToken) ?? null,
     [tokens, activeToken],
@@ -877,9 +883,32 @@ export default function CollectionData({ platform = true }: {
               </p>
             </div>
           )}
+
+          {/* ADR-495 D3. An open campaign reaches a company's Building
+              Profiles only after the platform hands it to that company. */}
+          {platform && selected && selected.scope === 'open' && selected.company_id === null
+            && selected.dataset === 'addresses' && (
+            <AssignCampaign token={selected} onAssigned={() => void loadTokens()} />
+          )}
+          {platform && selected?.assigned_at && (
+            <p className="text-[11px] text-muted-foreground">
+              Assigned to a company {formatDate(selected.assigned_at)}. Its admins review it from Building survey.
+            </p>
+          )}
+          {/* ADR-495 D2. The company reviews its own doors. */}
+          {!platform && selected && selected.dataset === 'addresses' && selected.submission_count > 0 && (
+            <button type="button" onClick={() => setReviewing(true)}
+              className="btn-secondary w-full text-xs">
+              Review for Building Profiles
+            </button>
+          )}
         </aside>
 
         {/* ── Rows ─────────────────────────────────────────────────────── */}
+        {reviewing && selected ? (
+          <CampaignPromotion tokenId={selected.id} label={selected.label}
+            onClose={() => setReviewing(false)} />
+        ) : (
         <section className="card p-4 space-y-3">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
@@ -1349,6 +1378,7 @@ export default function CollectionData({ platform = true }: {
           </>
           )}
         </section>
+        )}
       </div>
 
       {/* NAMES THE ADDRESS, and says plainly that it cannot be undone.
