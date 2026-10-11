@@ -175,6 +175,35 @@ class NotificationAcknowledgement(Base):
     #: cannot say WHAT was acknowledged is not evidence.
     notification_type = Column(String(64), nullable=False)
     message_snapshot = Column(Text, nullable=False)
+    #: CASCADE, and that is a DECISION, not the default left in place.
+    #:
+    #: The sibling FK above is SET NULL precisely so this row outlives the
+    #: notification it documents, so the asymmetry needs explaining.
+    #:
+    #: A hard employee delete is ON-DEMAND ERASURE (ADR-221). `delete_employee`
+    #: calls `redact_employee_names` deliberately and its own 409 message tells
+    #: the admin to "deactivate the employee instead of deleting". Evidence
+    #: ABOUT a person who has been erased must go with them: keeping it would be
+    #: the un-erased trace that erasure was asked to remove.
+    #:
+    #: The normal departure path preserves it. `deactivate_employee` stamps
+    #: `deactivated_at` and the row survives as a TOMBSTONE with the FK intact
+    #: (ADR-221), so `employee_id` stays resolvable indefinitely and the
+    #: acknowledgement keeps its subject. The 6-month job redacts the NAME; it
+    #: does not delete the employee row, so nothing here cascades.
+    #:
+    #: Why not ADR-492's answer -- refuse the delete while evidence exists? Its
+    #: retention hold is RELEASABLE and owned by a person who placed it. An
+    #: acknowledgement has no release, and no purge covers this table, so
+    #: refusing on its existence would block erasure PERMANENTLY for anyone who
+    #: ever answered a gate -- and would 409 a GDPR or Amazon erasure request
+    #: with no way to comply. A conditional, clearable refusal and an
+    #: unconditional, permanent one are different things.
+    #:
+    #: Why not SET NULL here too? The row would survive without its subject:
+    #: "somebody at this company confirmed a timecard_mismatch" is evidence of
+    #: nothing for the dispute this table exists to settle, AND it is a retained
+    #: trace of an erased person. The worse half of both options.
     employee_id = Column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),
         nullable=False, index=True,
