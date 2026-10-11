@@ -93,8 +93,3 @@ export function resolveActionRoute(path: string, features: string[]): MobileTarg
 
   return STATIC[path] ?? null;
 }
-
-/** Every path this module knows how to resolve, for the completeness test. */
-export function mappedPaths(): string[] {
-  return [...Object.keys(STATIC), '/my-route', ...DELIBERATELY_UNMAPPED];
-}
