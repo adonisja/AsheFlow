@@ -52,11 +52,11 @@ export default function MyRole() {
       <div className="mx-auto max-w-2xl px-4 py-8">
         <div className="animate-pulse space-y-4" aria-busy="true" aria-live="polite">
           <span className="sr-only">Loading your role guide</span>
-          <div className="h-7 w-2/3 rounded bg-slate-200 dark:bg-slate-700" />
-          <div className="h-4 w-1/3 rounded bg-slate-200 dark:bg-slate-700" />
+          <div className="h-7 w-2/3 rounded bg-muted" />
+          <div className="h-4 w-1/3 rounded bg-muted" />
           <div className="space-y-2.5 pt-4">
             {[...Array(7)].map((_, i) => (
-              <div key={i} className="h-3.5 rounded bg-slate-100 dark:bg-slate-800" />
+              <div key={i} className="h-3.5 rounded bg-muted" />
             ))}
           </div>
         </div>
@@ -67,18 +67,18 @@ export default function MyRole() {
   if (error || !guide) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-8">
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/50 dark:bg-amber-950/30">
+        <div className="rounded-xl border border-warning/30 bg-warning/10 p-5">
           <div className="flex gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-500" aria-hidden="true" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden="true" />
             <div className="min-w-0">
-              <h1 className="font-semibold text-amber-900 dark:text-amber-200">
+              <h1 className="font-semibold text-warning">
                 No guide to show
               </h1>
-              <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">{error}</p>
+              <p className="mt-1 text-sm text-warning">{error}</p>
               <button
                 type="button"
                 onClick={() => void load()}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-amber-800 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-900/30"
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-warning/40 bg-card px-3 py-1.5 text-sm font-medium text-warning hover:bg-warning/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-warning"
               >
                 <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                 Try again
@@ -92,19 +92,19 @@ export default function MyRole() {
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-8">
-      <header className="border-b border-slate-200 pb-5 dark:border-slate-700">
-        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+      <header className="border-b border-border pb-5">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
           Your role
         </div>
-        <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
+        <h1 className="mt-2 text-2xl font-bold tracking-tight text-foreground">
           {guide.title}
         </h1>
         {/* The mode is stated plainly rather than inferred from the text. A
             reader whose company just switched needs to see WHICH mode they are
             reading about — that is the whole point of arriving here from an
             operating_mode_change notification. */}
-        <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-1.5 text-sm text-muted-foreground">
           {guide.operating_mode === 'full'
             ? 'This company runs with an Amazon package feed.'
             : 'This company runs without an Amazon package feed.'}
@@ -118,8 +118,8 @@ export default function MyRole() {
       {/* Shown to everyone, not just admins. A field user who finds something
           here that does not match their lot should know the text is their
           company's to fix, rather than assuming the app is wrong about them. */}
-      <footer className="mt-8 border-t border-slate-200 pt-4 dark:border-slate-700">
-        <p className="text-xs text-slate-500 dark:text-slate-400">
+      <footer className="mt-8 border-t border-border pt-4">
+        <p className="text-xs text-muted-foreground">
           {guide.is_customized
             ? 'Your company wrote this guide.'
             : 'This is the standard guide. Your company can edit it in company settings.'}

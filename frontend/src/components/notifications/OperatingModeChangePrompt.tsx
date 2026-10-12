@@ -59,33 +59,33 @@ export default function OperatingModeChangePrompt({
       kind="prompt"
       titleId={titleId}
       onDismiss={() => void finish('skipped')}
-      className="border-amber-200 dark:border-amber-900/60"
+      className="border-warning/30"
     >
-      <div className="flex items-start gap-3 border-b border-slate-200 px-6 py-5 dark:border-slate-700">
-        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-950/50">
-          <Settings2 className="h-5 w-5 text-amber-700 dark:text-amber-400" aria-hidden="true" />
+      <div className="flex items-start gap-3 border-b border-border px-6 py-5">
+        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning/15">
+          <Settings2 className="h-5 w-5 text-warning" aria-hidden="true" />
         </div>
         <div className="min-w-0">
-          <h2 id={titleId} className="text-lg font-bold leading-tight text-slate-900 dark:text-slate-50">
+          <h2 id={titleId} className="text-lg font-bold leading-tight text-foreground">
             How this company runs has changed
           </h2>
-          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+          <p className="mt-0.5 text-sm text-muted-foreground">
             Some of what you see and do is different now.
           </p>
         </div>
       </div>
 
       <div className="px-6 py-5">
-        <p className="text-[0.9375rem] leading-relaxed text-slate-700 dark:text-slate-300">
+        <p className="text-[0.9375rem] leading-relaxed text-foreground">
           {notification.message}
         </p>
 
         {/* Stated plainly rather than discovered. A walker who finds a button
             missing assumes the app is broken; a walker who was told the mode
             changed knows to look at their role page. */}
-        <div className="mt-4 flex gap-2.5 rounded-xl bg-slate-50 px-3.5 py-3 dark:bg-slate-800/60">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-          <p className="text-sm text-slate-600 dark:text-slate-400">
+        <div className="mt-4 flex gap-2.5 rounded-xl bg-surface-muted px-3.5 py-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">
             Pages and buttons you used before may have moved or gone. That is the
             mode change, not a fault.
           </p>
@@ -94,7 +94,7 @@ export default function OperatingModeChangePrompt({
         {failed && (
           <p
             role="alert"
-            className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+            className="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"
           >
             We couldn't record that just now. Try again — this will keep
             appearing until it saves.
@@ -107,7 +107,7 @@ export default function OperatingModeChangePrompt({
               type="button"
               disabled={busy}
               onClick={() => void finish('confirmed', () => navigate(action.route))}
-              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 font-semibold text-white hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2 disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white dark:focus-visible:ring-offset-slate-900"
+              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 font-semibold text-primary-foreground hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-60"
             >
               {action.label}
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -117,7 +117,7 @@ export default function OperatingModeChangePrompt({
             type="button"
             disabled={busy}
             onClick={() => void finish('skipped')}
-            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 px-4 font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border-strong px-4 font-medium text-foreground hover:bg-surface-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           >
             Not now
           </button>

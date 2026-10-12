@@ -39,7 +39,7 @@ import React from 'react';
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   return text.split('**').map((segment, i) =>
     i % 2 === 1
-      ? <strong key={`${keyPrefix}-b${i}`} className="font-semibold text-slate-900 dark:text-slate-100">{segment}</strong>
+      ? <strong key={`${keyPrefix}-b${i}`} className="font-semibold text-foreground">{segment}</strong>
       : <React.Fragment key={`${keyPrefix}-t${i}`}>{segment}</React.Fragment>,
   );
 }
@@ -61,8 +61,8 @@ export default function GuideBody({ body }: { body: string }) {
     blocks.push(
       <ul key={`ul-${blocks.length}`} className="my-3 space-y-2 pl-1">
         {items.map((item, i) => (
-          <li key={i} className="flex gap-2.5 text-slate-700 dark:text-slate-300">
-            <span aria-hidden="true" className="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400 dark:bg-slate-500" />
+          <li key={i} className="flex gap-2.5 text-foreground">
+            <span aria-hidden="true" className="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground" />
             <span>{renderInline(item, `li${i}`)}</span>
           </li>
         ))}
@@ -75,7 +75,7 @@ export default function GuideBody({ body }: { body: string }) {
     const text = paragraph.join(' ');
     paragraph = [];
     blocks.push(
-      <p key={`p-${blocks.length}`} className="my-3 leading-relaxed text-slate-700 dark:text-slate-300">
+      <p key={`p-${blocks.length}`} className="my-3 leading-relaxed text-foreground">
         {renderInline(text, `p${blocks.length}`)}
       </p>,
     );

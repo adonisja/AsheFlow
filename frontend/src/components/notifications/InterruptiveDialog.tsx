@@ -104,9 +104,8 @@ export default function InterruptiveDialog({
       }}
       className={[
         'm-auto w-[min(32rem,calc(100vw-2rem))] rounded-2xl border p-0',
-        'bg-white text-slate-900 shadow-2xl',
-        'dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100',
-        'backdrop:bg-slate-900/60 backdrop:backdrop-blur-sm',
+        'border-border bg-card text-foreground shadow-2xl',
+        'backdrop:bg-black/60 backdrop:backdrop-blur-sm',
         reduceMotion ? '' : 'motion-safe:animate-[dialogIn_160ms_ease-out]',
         className,
       ].filter(Boolean).join(' ')}

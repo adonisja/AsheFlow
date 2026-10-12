@@ -79,31 +79,31 @@ export default function NotificationGate({
       kind="gate"
       titleId={titleId}
       onDismiss={() => { /* unreachable: a gate ignores Escape and backdrop */ }}
-      className="border-rose-200 dark:border-rose-900/60"
+      className="border-danger/30"
     >
-      <div className="flex items-start gap-3 border-b border-rose-100 bg-rose-50/60 px-6 py-5 dark:border-rose-900/40 dark:bg-rose-950/30">
-        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-950/60">
-          <ShieldAlert className="h-5 w-5 text-rose-700 dark:text-rose-400" aria-hidden="true" />
+      <div className="flex items-start gap-3 border-b border-danger/20 bg-danger/5 px-6 py-5">
+        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-danger/10">
+          <ShieldAlert className="h-5 w-5 text-danger" aria-hidden="true" />
         </div>
         <div className="min-w-0">
-          <h2 id={titleId} className="text-lg font-bold leading-tight text-slate-900 dark:text-slate-50">
+          <h2 id={titleId} className="text-lg font-bold leading-tight text-foreground">
             {notification.label}
           </h2>
-          <p className="mt-0.5 text-sm text-rose-700 dark:text-rose-400">
+          <p className="mt-0.5 text-sm text-danger">
             This needs an answer before you carry on.
           </p>
         </div>
       </div>
 
       <div className="px-6 py-5">
-        <p className="text-[0.9375rem] leading-relaxed text-slate-700 dark:text-slate-300">
+        <p className="text-[0.9375rem] leading-relaxed text-foreground">
           {notification.message}
         </p>
 
         {failed && (
           <p
             role="alert"
-            className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+            className="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"
           >
             We couldn't record your answer. Try again — this stays until it saves.
           </p>
@@ -118,7 +118,7 @@ export default function NotificationGate({
               type="button"
               disabled={busy}
               onClick={() => void finish('unavailable')}
-              className="inline-flex min-h-11 w-full items-center justify-center rounded-xl bg-slate-900 px-4 font-semibold text-white hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2 disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:focus-visible:ring-offset-slate-900"
+              className="inline-flex min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 font-semibold text-primary-foreground hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-60"
             >
               I've read this
             </button>
@@ -127,7 +127,7 @@ export default function NotificationGate({
               type="button"
               disabled={busy}
               onClick={() => void finish('confirmed', () => navigate(action.route))}
-              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 font-semibold text-white hover:bg-rose-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 disabled:opacity-60 dark:focus-visible:ring-offset-slate-900"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-danger px-4 font-semibold text-danger-foreground hover:bg-danger/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-60"
             >
               {action.label}
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
