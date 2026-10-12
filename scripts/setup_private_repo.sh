@@ -149,11 +149,20 @@ else
 
   ROUTERS=()
   SERVICES=()
+  # Any other file path in the manifest, copied to the SAME relative path.
+  # Added for mobile/android/app/google-services.json (ADR-487 D5): before this,
+  # only routers and services were copied, so a path outside backend/ would have
+  # been gitignored and exposure-gated but NEVER synced -- the one-list-agrees,
+  # the-other-silently-does-not drift PROPRIETARY.txt was written to end.
+  OTHER=()
   while IFS= read -r _p; do
     case "$_p" in ''|\#*) continue ;; esac
     case "$_p" in
       backend/app/routers/*.py)  ROUTERS+=("$(basename "$_p")") ;;
       backend/app/services/*.py) SERVICES+=("$(basename "$_p")") ;;
+      backend/tests/*|backend/asheflow_private/) ;;  # handled below by name
+      */) ;;                                         # directories: not files
+      *)                         OTHER+=("$_p") ;;
     esac
   done < "$MANIFEST"
 
@@ -168,6 +177,21 @@ else
       echo "  ✓ routers/$f"
     else
       echo "  ✗ MISSING: routers/$f (skipped)"
+    fi
+  done
+
+  echo ""
+  echo "Copying other private files..."
+  # ${OTHER[@]+...}: macOS ships bash 3.2, where "${OTHER[@]}" on an EMPTY
+  # array under `set -u` aborts with "unbound variable".
+  for rel in ${OTHER[@]+"${OTHER[@]}"}; do
+    src="$PUBLIC_ROOT/$rel"
+    if [ -f "$src" ]; then
+      mkdir -p "$(dirname "$rel")"
+      cp "$src" "$rel"
+      echo "  ✓ $rel"
+    else
+      echo "  ✗ MISSING: $rel (skipped)"
     fi
   done
 
