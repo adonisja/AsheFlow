@@ -9,6 +9,8 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+from pathlib import Path
+import re
 from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -473,3 +475,68 @@ class TestTheGlobalTokenLookupDoesNotLeak:
             "the audit no longer records which action occurred, so a move is "
             "now invisible everywhere rather than just to the caller"
         )
+
+
+class TestTheAndroidChannelIsOneId:
+    """test_adr487_d5_android_channel — three files, one channel id.
+
+    A mismatch does not error anywhere. Android silently falls back to FCM's
+    "Miscellaneous" channel, which a walker may have muted, so an injury alert
+    would arrive with no sound and nobody would know why. The only place the
+    disagreement can be caught is here.
+    """
+
+    ROOT = Path(__file__).resolve().parents[3]
+    KT = ROOT / "mobile/android/app/src/main/java/com/asheflowmobile/MainApplication.kt"
+    MANIFEST = ROOT / "mobile/android/app/src/main/AndroidManifest.xml"
+
+    def test_kotlin_creates_the_channel_the_backend_names(self):
+        m = re.search(r'PUSH_CHANNEL_ID\s*=\s*"([^"]+)"', self.KT.read_text())
+        assert m, "MainApplication.kt no longer declares PUSH_CHANNEL_ID"
+        assert m.group(1) == push_delivery.ANDROID_CHANNEL_ID, (
+            f"the app creates channel {m.group(1)!r} but the backend sends "
+            f"{push_delivery.ANDROID_CHANNEL_ID!r} — pushes land in Miscellaneous"
+        )
+
+    def test_firebase_json_sets_the_same_default_channel(self):
+        """FCM's DEFAULT channel, set through firebase.json.
+
+        Not in AndroidManifest.xml: React Native Firebase's messaging library
+        declares that meta-data in its own manifest, filled from firebase.json,
+        and a second declaration in the app fails the manifest merge. Found by
+        the first Android build — the hand-written meta-data broke it.
+        """
+        cfg = json.loads((self.ROOT / "mobile/firebase.json").read_text())
+        value = cfg["react-native"]["messaging_android_notification_channel_id"]
+        assert value == push_delivery.ANDROID_CHANNEL_ID
+
+    def test_the_manifest_does_not_redeclare_the_default_channel(self):
+        assert "default_notification_channel_id" not in self.MANIFEST.read_text(), (
+            "the app manifest declares FCM's default channel, which collides "
+            "with React Native Firebase's own declaration and fails the build"
+        )
+
+    def test_the_payload_names_the_channel(self):
+        inner = json.loads(json.loads(
+            push_delivery._payload(DevicePlatform.ANDROID, "T", "B", {})
+        )["GCM"])
+        assert inner["notification"]["android_channel_id"] == push_delivery.ANDROID_CHANNEL_ID
+
+    def test_the_post_notifications_permission_is_declared(self):
+        """Android 13+ shows nothing without it (targetSdk 36)."""
+        assert "android.permission.POST_NOTIFICATIONS" in self.MANIFEST.read_text()
+
+
+class TestDataValuesAreStrings:
+    """FCM HTTP v1 rejects any non-string `data` value as INVALID_ARGUMENT.
+
+    SNS converts the legacy payload to v1, so a caller passing an int id would
+    fail delivery silently from our side — SNS accepts the publish.
+    """
+
+    def test_non_string_data_is_coerced(self):
+        inner = json.loads(json.loads(
+            push_delivery._payload(DevicePlatform.ANDROID, "T", "B", {"n": 5, "ok": True})
+        )["GCM"])
+        assert inner["data"] == {"n": "5", "ok": "True"}
+        assert all(isinstance(v, str) for v in inner["data"].values())

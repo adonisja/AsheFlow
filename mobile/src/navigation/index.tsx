@@ -42,6 +42,7 @@ export * from './roles';
 import { TAB_GATES } from './roles';
 import MyRoleScreen from '@screens/MyRole/MyRoleScreen';
 import InterruptiveHost from '@components/notifications/InterruptiveHost';
+import { registerForPush } from '@api/pushRegistration';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
@@ -283,6 +284,19 @@ function MainShell() {
   );
 
   const [activeKey, setActiveKey] = useState(visibleTabs[0]?.key ?? 'Home');
+
+  // ADR-487 D5. Register for push once per session. MainShell mounts only
+  // once signed in, so the Android permission prompt appears with context
+  // rather than on the login screen. Fire-and-forget: push is additive, and a
+  // failure (no Firebase config yet, permission denied) must not delay the UI.
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;
+    registerForPush().then(fn => {
+      if (cancelled) fn(); else unsubscribe = fn;
+    });
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, []);
 
   // Remap 'NotificationsTab' alias so HomeScreen can switch to it by a stable name
   const switchTab = useCallback((key: string) => {

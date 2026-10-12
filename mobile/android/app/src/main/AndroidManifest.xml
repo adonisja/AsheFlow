@@ -10,6 +10,11 @@
          Vibration.vibrate() throws a SecurityException that crashes the app —
          which is what happened on "Mark As Present" before this was declared. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Push notifications (ADR-487 D5). Runtime permission on Android 13+
+         (targetSdk 36), requested by src/api/pushRegistration.ts. Denied
+         means no push, never a broken app: every notification still arrives
+         in-app. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
       android:name=".MainApplication"

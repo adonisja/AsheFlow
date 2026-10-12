@@ -48,6 +48,15 @@ from app.models.device_token import DevicePlatform, DeviceToken
 
 logger = logging.getLogger(__name__)
 
+#: The Android notification channel every push is shown in.
+#:
+#: A CONTRACT with the app: mobile/android MainApplication.PUSH_CHANNEL_ID
+#: creates a channel with this id, and mobile/firebase.json names it as FCM's
+#: default. A mismatch does not error -- Android silently falls back to the
+#: "Miscellaneous" channel, which a walker may have muted, so an injury alert
+#: would arrive silently. test_adr487_d5_android_channel checks all three agree.
+ANDROID_CHANNEL_ID = "alerts"
+
 #: Reported once per process, not per send. An empty ARN is a configuration
 #: state, and a log line per notification would bury the one that matters.
 _warned_disabled: set[str] = set()
@@ -153,7 +162,23 @@ def _payload(platform: str, title: str, body: str, data: dict) -> str:
         inner.update(data)
         return json.dumps({"default": body, "APNS": json.dumps(inner)})
 
-    inner = {"notification": {"title": title, "body": body}, "data": data}
+    # The LEGACY payload shape, which SNS still accepts and converts to FCM HTTP
+    # v1 itself (AWS docs, "Using the legacy payload structure to send messages
+    # to the FCM v1 API", checked 2026-10-12). `android_channel_id` maps to v1's
+    # android.notification.channel_id. The v1 shape (`fcmV1Message`) is only
+    # needed for APNs headers or fcm_options, neither of which Android uses.
+    #
+    # FCM v1 requires every `data` value to be a STRING; a number or a nested
+    # object is rejected as INVALID_ARGUMENT. Coerced here so a caller passing an
+    # int id cannot silently fail delivery.
+    inner = {
+        "notification": {
+            "title": title,
+            "body": body,
+            "android_channel_id": ANDROID_CHANNEL_ID,
+        },
+        "data": {k: str(v) for k, v in data.items()},
+    }
     return json.dumps({"default": body, "GCM": json.dumps(inner)})
 
 
