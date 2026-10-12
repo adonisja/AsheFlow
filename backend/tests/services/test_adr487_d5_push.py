@@ -151,6 +151,51 @@ class TestDisabledIsNotBroken:
         assert push_delivery.push_enabled(DevicePlatform.ANDROID) is False
         assert push_delivery.push_enabled() is True
 
+    @pytest.mark.parametrize("value,label", [
+        (" ", "a single space"),
+        ("   ", "spaces"),
+        ("\t", "a tab"),
+        (" \n ", "whitespace with a newline"),
+    ])
+    def test_a_whitespace_arn_counts_as_disabled(self, monkeypatch, value, label):
+        """SSM cannot store an empty String, so whitespace IS the off switch.
+
+        `check_param_store_parity.py` requires the same parameter NAMES under
+        /asheflow/staging/ and /asheflow/prod/, and SSM refuses a genuinely
+        empty value — so a tenant that wants push off in one environment has to
+        put whitespace there.
+
+        Unstripped, " " is truthy: `push_enabled()` returns True and every send
+        attempts a publish to a nonsense ARN, failing per notification instead
+        of being cleanly disabled. That defeats the whole "disabled is not
+        broken" posture with one space.
+
+        Found while writing docs/runbooks/Push-Notifications-Setup.md, which had
+        recommended exactly that value for exactly that purpose — so the runbook
+        would have shipped advice that broke the thing it was configuring.
+        """
+        monkeypatch.setattr(push_delivery.settings, "sns_apns_platform_arn", value)
+        monkeypatch.setattr(push_delivery.settings, "sns_fcm_platform_arn", value)
+        assert push_delivery.push_enabled() is False, (
+            f"{label} reads as configured — the send path will publish to it"
+        )
+        assert push_delivery.push_enabled(DevicePlatform.IOS) is False
+        assert push_delivery.platform_arn(DevicePlatform.IOS) == ""
+
+    def test_a_real_arn_with_stray_whitespace_still_works(self, monkeypatch):
+        """A value pasted from a console often carries a trailing newline.
+
+        Stripping must not reject the ARN itself — only decide that whitespace
+        alone is nothing.
+        """
+        monkeypatch.setattr(
+            push_delivery.settings, "sns_apns_platform_arn",
+            "  arn:aws:sns:us-east-2:586794453404:app/APNS/AsheFlow-iOS-prod\n",
+        )
+        assert push_delivery.push_enabled(DevicePlatform.IOS) is True
+        assert push_delivery.platform_arn(DevicePlatform.IOS).startswith("arn:aws:sns:")
+        assert not push_delivery.platform_arn(DevicePlatform.IOS).endswith("\n")
+
     def test_create_endpoint_returns_none_rather_than_raising(self, monkeypatch):
         """Registration must succeed with push unconfigured, or a sign-in fails
         on an optional feature."""

@@ -54,11 +54,24 @@ _warned_disabled: set[str] = set()
 
 
 def platform_arn(platform: str) -> str:
-    """The SNS platform application ARN for `platform`, or "" if disabled."""
+    """The SNS platform application ARN for `platform`, or "" if disabled.
+
+    STRIPPED, and that is not cosmetic. SSM Parameter Store refuses a genuinely
+    empty `String` value, and `check_param_store_parity.py` requires the same
+    parameter NAMES under /asheflow/staging/ and /asheflow/prod/ -- so the only
+    way to have the parameter present but the feature off is a whitespace
+    value. Unstripped, " " is truthy: `push_enabled()` would report True and
+    every send would attempt a publish to a nonsense ARN, failing per
+    notification instead of being cleanly disabled.
+
+    That is the exact "disabled is not broken" posture this module is built on,
+    defeated by one space. Found while writing the setup runbook, which had
+    recommended a space for precisely this purpose.
+    """
     if platform == DevicePlatform.IOS:
-        return settings.sns_apns_platform_arn
+        return settings.sns_apns_platform_arn.strip()
     if platform == DevicePlatform.ANDROID:
-        return settings.sns_fcm_platform_arn
+        return settings.sns_fcm_platform_arn.strip()
     return ""
 
 
@@ -72,7 +85,11 @@ def push_enabled(platform: str | None = None) -> bool:
     """
     if platform is not None:
         return bool(platform_arn(platform))
-    return bool(settings.sns_apns_platform_arn or settings.sns_fcm_platform_arn)
+    # Via platform_arn so both paths strip. Reading the settings directly here
+    # was the bug: " " is truthy.
+    return bool(
+        platform_arn(DevicePlatform.IOS) or platform_arn(DevicePlatform.ANDROID)
+    )
 
 
 def _sns():
