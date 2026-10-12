@@ -105,7 +105,7 @@ export default function NotificationGate({
             role="alert"
             className="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"
           >
-            We couldn't record your answer. Try again — this stays until it saves.
+            We couldn't record your answer. Try again. This stays until it saves.
           </p>
         )}
 

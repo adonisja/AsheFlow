@@ -60,7 +60,7 @@ export default function PrivacyErasureCard() {
           <p className="text-sm text-subtle">
             The DSP agreement requires deleting a customer's personal information when Amazon
             asks. Enter the address or package ID from the request; AsheFlow removes it from
-            every record in your company, including audit history. Preview first — erasure is
+            every record in your company, including audit history. Preview first: erasure is
             permanent.
           </p>
         </div>

@@ -181,8 +181,17 @@ class TestD5TwoVisuallyDistinctPrompts:
         """
         grad = _strip_comments(GRAD.read_text())
         mode = _strip_comments(MODE.read_text())
-        grad_colours = set(re.findall(r"\b(?:bg|from|to|text|border)-(\w+)-\d{2,3}", grad))
-        mode_colours = set(re.findall(r"\b(?:bg|from|to|text|border)-(\w+)-\d{2,3}", mode))
+        # Semantic token names, not Tailwind palette names: the colour-literal
+        # gate (design/check_colour_literals.py) forbids `emerald-500` here, and
+        # this test first matched exactly that -- after the token conversion
+        # both sets came back EMPTY and compared equal.
+        tone = r"\b(?:bg|from|to|text|border|ring)-(success|warning|danger|info|teal|gold|brand)\b"
+        grad_colours = set(re.findall(tone, grad))
+        mode_colours = set(re.findall(tone, mode))
+        assert grad_colours and mode_colours, (
+            "a prompt carries no semantic tone at all, so this comparison would "
+            "pass on two identical grey dialogs"
+        )
         assert grad_colours != mode_colours, (
             f"both prompts use the same palette ({grad_colours}) — D5 requires "
             f"them to be visually distinct, because a mode change is not a "

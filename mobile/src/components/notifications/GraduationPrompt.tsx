@@ -51,7 +51,7 @@ export default function GraduationPrompt({
       <View style={s.band}>
         <Text style={s.seal}>🎓</Text>
         <Text style={s.title} accessibilityRole="header">
-          Congratulations — you're a Walker
+          Congratulations, you're a Walker
         </Text>
       </View>
 
@@ -62,7 +62,7 @@ export default function GraduationPrompt({
 
       {failed && (
         <Text style={s.error} accessibilityLiveRegion="assertive">
-          We couldn't record that just now. Try again — this will keep appearing
+          We couldn't record that just now. Try again. This will keep appearing
           until it saves.
         </Text>
       )}

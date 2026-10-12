@@ -69,7 +69,7 @@ export default function OperatingModeChangePrompt({
 
       {failed && (
         <Text style={s.error} accessibilityLiveRegion="assertive">
-          We couldn't record that just now. Try again — this will keep appearing
+          We couldn't record that just now. Try again. This will keep appearing
           until it saves.
         </Text>
       )}

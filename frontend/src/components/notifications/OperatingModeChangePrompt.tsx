@@ -96,7 +96,7 @@ export default function OperatingModeChangePrompt({
             role="alert"
             className="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"
           >
-            We couldn't record that just now. Try again — this will keep
+            We couldn't record that just now. Try again. This will keep
             appearing until it saves.
           </p>
         )}

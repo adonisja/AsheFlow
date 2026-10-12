@@ -80,7 +80,7 @@ export default function NotificationGate({
 
       {failed && (
         <Text style={s.error} accessibilityLiveRegion="assertive">
-          We couldn't record your answer. Try again — this stays until it saves.
+          We couldn't record your answer. Try again. This stays until it saves.
         </Text>
       )}
 

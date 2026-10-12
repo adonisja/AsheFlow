@@ -28,8 +28,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from unittest.mock import patch
 
 from app.core.config import settings
+from tests.conftest import make_employee, sqlite_mirror_with_defaults
 
 
 class TestTheWindowHasAStatedBasis:
@@ -107,12 +109,20 @@ class TestItCountsFromTheAcknowledgement:
 class TestItDeletesTheRightRows:
     """Against real rows. A purge verified only by reading is not verified."""
 
+    # The suite's in-memory `db`, never app.database.SessionLocal. This class
+    # first shipped with its own fixture opening SessionLocal: locally that was
+    # the developer's Postgres (rows written to, and the real purge run
+    # against, the dev database), and in CI an empty SQLite file -- "no such
+    # table: employees". The task opens its own session, so it is pointed at
+    # the same one, the house pattern from test_adr379_invite_expiry.py.
     @pytest.fixture
-    def db(self):
-        from app.database import SessionLocal
-        s = SessionLocal()
-        yield s
-        s.close()
+    def purge(self, db):
+        from app.models.role_guide import NotificationAcknowledgement
+        from app.tasks.cleanup import purge_expired_acknowledgements
+        sqlite_mirror_with_defaults(NotificationAcknowledgement.__table__).create(
+            db.get_bind(), checkfirst=True)
+        with patch("app.tasks.cleanup.SessionLocal", return_value=db):
+            yield purge_expired_acknowledgements
 
     def _ack(self, db, company_id, employee_id, *, age_days: int):
         from app.models.role_guide import NotificationAcknowledgement
@@ -130,14 +140,12 @@ class TestItDeletesTheRightRows:
         db.flush()
         return row.id
 
-    def test_older_than_the_window_goes_and_newer_stays(self, db):
-        from app.models.employee import Employee
+    def test_older_than_the_window_goes_and_newer_stays(self, db, purge):
         from app.models.role_guide import NotificationAcknowledgement
-        from app.tasks.cleanup import purge_expired_acknowledgements
 
-        emp = db.query(Employee).first()
-        if emp is None:
-            pytest.skip("no employee row in this database to attach an ack to")
+        # Built, not looked up: the old `skip` when no employee existed would
+        # have passed this test silently on any empty database.
+        emp = make_employee(db)
 
         # One day past, one day short, and one exactly inside the boundary.
         old = self._ack(db, emp.company_id, emp.id, age_days=1096)
@@ -145,38 +153,30 @@ class TestItDeletesTheRightRows:
         edge = self._ack(db, emp.company_id, emp.id, age_days=1)
         db.commit()
 
-        try:
-            result = purge_expired_acknowledgements()
-            assert result.get("skipped") is not True
-            assert result["days"] == 1095
+        result = purge()
+        assert result.get("skipped") is not True
+        assert result["days"] == 1095
 
-            db.expire_all()
-            q = db.query(NotificationAcknowledgement.id)
-            assert q.filter_by(id=old).first() is None, (
-                "a 1096-day-old acknowledgement survived the 1095-day purge"
-            )
-            assert q.filter_by(id=new).first() is not None, (
-                "a 1094-day-old acknowledgement was deleted by a 1095-day purge "
-                "— the boundary is off by at least a day, and this is evidence"
-            )
-            assert q.filter_by(id=edge).first() is not None, (
-                "a 1-day-old acknowledgement was deleted. The cutoff is inverted."
-            )
-        finally:
-            for ack_id in (old, new, edge):
-                db.query(NotificationAcknowledgement).filter_by(
-                    id=ack_id).delete(synchronize_session=False)
-            db.commit()
+        db.expire_all()
+        q = db.query(NotificationAcknowledgement.id)
+        assert q.filter_by(id=old).first() is None, (
+            "a 1096-day-old acknowledgement survived the 1095-day purge"
+        )
+        assert q.filter_by(id=new).first() is not None, (
+            "a 1094-day-old acknowledgement was deleted by a 1095-day purge "
+            "— the boundary is off by at least a day, and this is evidence"
+        )
+        assert q.filter_by(id=edge).first() is not None, (
+            "a 1-day-old acknowledgement was deleted. The cutoff is inverted."
+        )
 
-    def test_it_reports_what_it_deleted(self, db):
+    def test_it_reports_what_it_deleted(self, purge):
         """Returning a count, not None.
 
         A destructive job whose return value does not say how much it destroyed
         gives an operator nothing to notice an anomaly with.
         """
-        from app.tasks.cleanup import purge_expired_acknowledgements
-
-        result = purge_expired_acknowledgements()
+        result = purge()
         assert "deleted" in result and isinstance(result["deleted"], int)
         assert "cutoff" in result
 

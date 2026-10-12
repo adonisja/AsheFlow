@@ -71,7 +71,7 @@ export default function GraduationPrompt({
           <GraduationCap className="h-7 w-7 text-success-foreground" aria-hidden="true" />
         </div>
         <h2 id={titleId} className="mt-3 text-xl font-bold text-success-foreground">
-          Congratulations — you're a Walker
+          Congratulations, you're a Walker
         </h2>
       </div>
 
@@ -88,7 +88,7 @@ export default function GraduationPrompt({
             role="alert"
             className="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning"
           >
-            We couldn't record that just now. Try again — this will keep
+            We couldn't record that just now. Try again. This will keep
             appearing until it saves.
           </p>
         )}
