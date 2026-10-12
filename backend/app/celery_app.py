@@ -115,6 +115,18 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.notification_sweep.resweep_undelivered",
         "schedule": crontab(minute="*/10"),
     },
+    # ADR-487 D5. Fires pushes whose quiet-hours hold has expired. The resweep
+    # above deliberately skips held rows, so without this the exclusion is a
+    # leak: a push stamped at 02:00 would be skipped forever and sent by nothing.
+    #
+    # */5 rather than */10: this is the LATENCY of a held push, not a safety
+    # net. A walker's 04:00 shift-start notification arriving at 04:09 is worse
+    # than one arriving at 04:04, and the query is a single indexed range scan
+    # over a column that is NULL for almost every row.
+    "release-held-pushes": {
+        "task": "app.tasks.notification_sweep.release_held_pushes",
+        "schedule": crontab(minute="*/5"),
+    },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
         "schedule": crontab(minute="*/10"),

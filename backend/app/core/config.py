@@ -261,6 +261,26 @@ class Settings(BaseSettings):
     # be set once it does.
     sns_ses_topic_arn: str = ""
 
+    # ── ADR-487 D5: SNS mobile push ─────────────────────────────────────────
+    # SNS platform applications, created once per platform with the APNs cert
+    # and the FCM server key. The ARN lives in config; the CREDENTIALS live in
+    # SNS and never reach this repo — that is the whole reason SNS was chosen
+    # over calling APNs and FCM directly (one credential surface, which already
+    # has a health probe and an alerting path).
+    #
+    # EMPTY DISABLES THAT PLATFORM, and is not a misconfiguration. The idiom is
+    # ADR-133's `ses_configuration_set`: empty means "this is not set up yet",
+    # reported once at startup rather than failing per-send. Registration still
+    # succeeds and stores the token with a NULL endpoint_arn, so the day the ARN
+    # appears every already-registered device can be given an endpoint without
+    # anyone re-installing the app.
+    #
+    # Push is ADDITIVE. Everyone receives every notification in-app regardless;
+    # this only decides whether a closed phone also buzzes. Same posture as
+    # ADR-415 D5 took for collection.
+    sns_apns_platform_arn: str = ""   # empty = iOS push disabled
+    sns_fcm_platform_arn: str = ""    # empty = Android push disabled
+
     # Public base URL of the web app — used to build invite links in emails.
     app_base_url: str = "http://localhost:5173"
 

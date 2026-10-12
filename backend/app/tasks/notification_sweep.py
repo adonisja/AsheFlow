@@ -140,6 +140,66 @@ def resweep_undelivered() -> dict:
         db.close()
 
 
+@celery_app.task(name="app.tasks.notification_sweep.release_held_pushes")
+def release_held_pushes() -> dict:
+    """Send pushes whose quiet-hours hold has expired (ADR-487 D5).
+
+    `resweep_undelivered` above deliberately EXCLUDES held rows
+    (`release_at.is_(None)`) with the comment *"a held push is not lost -- D5
+    releases it when its time comes."* This is the thing that does that. Without
+    it the exclusion is a leak: a push stamped at 02:00 would be skipped by the
+    resweep forever and sent by nothing.
+
+    IDEMPOTENT, in the direction that matters. `send_push` clears `release_at`
+    once it has delivered, so a row only appears here while it is still held. A
+    run that overlaps the previous one re-enqueues the same row, and the second
+    send is a duplicate push rather than a lost one -- the safe direction, and
+    the client de-duplicates on `notification_id`.
+
+    NO AGE HORIZON, unlike the resweep. A held push is held on purpose, and the
+    longest possible hold is one night -- `release_at` is always today's or
+    tomorrow's `shift_start`, never further out. A row whose release is more
+    than a day past is a defect worth seeing rather than a stale message worth
+    abandoning, so it is logged and still sent.
+    """
+    from app.tasks.push_delivery_task import send_push
+
+    db = SessionLocal()
+    now = datetime.now(timezone.utc)
+    released = 0
+    try:
+        due = (
+            db.query(Notification)
+            .filter(
+                Notification.release_at.isnot(None),
+                Notification.release_at <= now,
+                Notification.delivery_failed_at.is_(None),
+            )
+            .order_by(Notification.release_at.asc())
+            .limit(_BATCH)
+            .all()
+        )
+
+        for n in due:
+            overdue = now - n.release_at
+            if overdue > timedelta(days=1):
+                # A hold is at most one night. Longer means something stopped
+                # running, and silence about it is how it keeps not running.
+                logger.warning(
+                    "push: notification %s was held until %s, %s overdue — the "
+                    "release sweep may have been down",
+                    n.id, n.release_at.isoformat(), overdue,
+                )
+            send_push.delay(str(n.id))
+            released += 1
+
+        if released:
+            logger.info("push release sweep: %d held push(es) re-enqueued", released)
+        return {"released": released}
+    finally:
+        db.close()
+
+
 def _requeue(db, n: Notification, spec) -> None:
     """Hand a lost delivery back to the delivery task.
 

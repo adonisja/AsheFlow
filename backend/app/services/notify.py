@@ -502,9 +502,14 @@ def _enqueue(d: _Dispatch) -> None:
         )
 
     if Channel.PUSH in d.channels:
-        # D5. Not built: no device_tokens table, no SNS platform ARNs.
-        logger.info(
-            "push not yet wired for notification %s (type=%s, severity=%s) — "
-            "ADR-487 D5",
-            d.notification_id, d.type, d.severity.value,
-        )
+        # ADR-487 D5, now built. The task re-reads the row rather than taking
+        # the message from `d`: after_commit must not hand a detached ORM object
+        # to a task, and the quiet-hours check needs a session anyway.
+        #
+        # NOT enqueued with a countdown for a held push. The quiet-hours
+        # decision happens inside the task, and a held push returns without
+        # sending so the 15-minute sweep can pick it up — a `countdown=` of six
+        # hours lives in the broker and a broker restart loses it (D5).
+        from app.tasks.push_delivery_task import send_push
+
+        send_push.delay(d.notification_id)

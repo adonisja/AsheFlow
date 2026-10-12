@@ -50,6 +50,9 @@ from app.models.campaign import (  # ADR-485
     CampaignResponse, CampaignRun, CampaignSchedule,
 )
 from app.models.notice import NoticeTemplate, NoticeSchedule  # ADR-488
+from app.models.device_token import (  # ADR-487 D5
+    DevicePlatform, DeviceToken,
+)
 from app.models.role_guide import (  # ADR-494
     NotificationAcknowledgement, RoleGuide,
 )

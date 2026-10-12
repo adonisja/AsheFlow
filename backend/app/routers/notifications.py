@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import or_
 from uuid import UUID
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Literal
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.database import get_db, SessionLocal
 from app.services.audit import write_audit
@@ -16,8 +17,12 @@ from app.core.security import verify_cognito_token
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.models.role_guide import NotificationAcknowledgement
+from app.models.device_token import DeviceToken
+from app.services.push_delivery import create_endpoint, push_enabled
 from app.routers.registration import ROLE_TO_COGNITO_GROUP
 from app.schemas.notification import NotificationResponse, spec_fields
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -97,6 +102,199 @@ def mark_read(
         notif.is_read = True
         db.commit()
     return {"ok": True}
+
+
+class DeviceRegisterIn(BaseModel):
+    """A device asking to receive push (ADR-487 D5).
+
+    Dimension 9 -- a request body, so every field is concrete and bounded and an
+    unrecognised key is a 422.
+
+    `token` is bounded at 512 to match the column. FCM tokens run long and have
+    grown historically; APNs device tokens are 64 hex. Unbounded, this is a
+    free-text field an attacker can use to write a megabyte per request into a
+    table the send path scans.
+
+    `platform` is a Literal, not a str: the value selects which SNS platform
+    application the endpoint is created on, so a typo would create it on the
+    wrong platform or on none, and the failure would be silent.
+    """
+
+    platform: Literal["ios", "android"]
+    token: str = Field(min_length=16, max_length=512)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/devices", status_code=status.HTTP_201_CREATED)
+def register_device(
+    payload: DeviceRegisterIn,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_any_auth),
+):
+    """Register this device for push, or MOVE an existing token to this caller.
+
+    **The move is the point, not an edge case.** `token` is globally unique
+    (ADR-487 D5), so a phone handed from one walker to another re-registers the
+    same token against a new employee. Without the move, the old row keeps
+    delivering the first person's notifications to the second -- a cross-person
+    leak that no amount of company scoping prevents, because both walkers are
+    usually in the same company.
+
+    Registration SUCCEEDS with push unconfigured. The row is stored with a NULL
+    `endpoint_arn`, so the day the platform ARN appears every already-registered
+    device can be given an endpoint without anyone re-installing the app. An
+    optional feature must never fail a sign-in.
+    """
+    now = datetime.now(timezone.utc)
+
+    existing = (
+        db.query(DeviceToken)
+        .filter(DeviceToken.token == payload.token)
+        .first()
+    )
+
+    if existing is not None:
+        moved_from = existing.employee_id
+        moved_from_company = existing.company_id
+        # MOVE, not insert. Also clears revoked_at: re-registering is exactly
+        # the signal that this device is live again.
+        existing.employee_id = caller.id
+        existing.company_id = caller.company_id
+        existing.platform = payload.platform
+        existing.last_seen_at = now
+        existing.revoked_at = None
+        device = existing
+        action = "moved" if moved_from != caller.id else "refreshed"
+
+        # A CROSS-TENANT move is the one case worth surfacing rather than just
+        # recording. The lookup above is deliberately global -- the token is
+        # globally unique precisely so a transferred device collides and can be
+        # moved -- but a device crossing a company boundary is either a phone
+        # genuinely changing employers or somebody replaying a token they should
+        # not hold. Either way an operator should be able to see it, and a
+        # warning is the only thing that makes the second case visible at all.
+        #
+        # Not refused: refusing would break the legitimate case (a DSP that
+        # rehires, a shared loaner phone) and would turn this endpoint into an
+        # oracle that reports "that token belongs to another tenant".
+        if moved_from_company != caller.company_id:
+            logger.warning(
+                "device %s moved across companies: %s -> %s (employee %s -> %s). "
+                "Expected when a phone changes employers; investigate otherwise.",
+                device.id, moved_from_company, caller.company_id,
+                moved_from, caller.id,
+            )
+    else:
+        device = DeviceToken(
+            company_id=caller.company_id,
+            employee_id=caller.id,
+            platform=payload.platform,
+            token=payload.token,
+            last_seen_at=now,
+        )
+        db.add(device)
+        action = "registered"
+
+    db.flush()
+
+    # AFTER the flush, so the row exists if SNS is slow, and its result is
+    # stored on the row we already have. A failure here leaves endpoint_arn
+    # NULL, which backfill_endpoints can repair -- it does not fail the request.
+    if device.endpoint_arn is None:
+        device.endpoint_arn = create_endpoint(device)
+
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type=f"device.{action}",
+        target_table="device_tokens",
+        target_id=str(device.id),
+        detail={
+            "platform": payload.platform,
+            # NOT the token. It is a credential for delivering this person's
+            # notifications, and an audit row is read by more people than can
+            # see the device_tokens table.
+            "has_sns_endpoint": device.endpoint_arn is not None,
+            "push_configured": push_enabled(payload.platform),
+        },
+    )
+    db.commit()
+
+    return {
+        "device_id": str(device.id),
+        # `action` is deliberately NOT returned. It distinguishes
+        # registered / refreshed / moved, and "moved" tells the caller that the
+        # token already existed SOMEWHERE -- including in another tenant. The
+        # client has no use for the distinction (it registers the same way
+        # either way), and an endpoint that reports whether an opaque value
+        # exists elsewhere in the system is an existence oracle for free.
+        #
+        # It is still recorded: the audit row carries it, where only the tenant's
+        # own admins can read it.
+        #
+        # So the client can tell "registered but push is off at the platform
+        # level" from "registered and live", and say nothing rather than
+        # promising alerts that will not come.
+        "push_active": device.endpoint_arn is not None,
+    }
+
+
+@router.delete("/devices", status_code=status.HTTP_200_OK)
+def revoke_device(
+    payload: DeviceRegisterIn,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_any_auth),
+):
+    """Stop pushing to this device. Called on sign-out.
+
+    Revokes rather than deletes, so a sign-out stays distinguishable from a
+    token that was never registered (ADR-443: a silent absence looks identical
+    to normal, and "this device signed out" and "this device never existed"
+    need different answers when someone asks why a push did not arrive).
+
+    Scoped to the caller's own device. A token belonging to someone else is a
+    404, not a 403 -- the caller has no way to know the token exists, and
+    saying so would confirm it.
+    """
+    device = (
+        db.query(DeviceToken)
+        .filter(
+            DeviceToken.token == payload.token,
+            DeviceToken.company_id == caller.company_id,
+            DeviceToken.employee_id == caller.id,
+        )
+        .first()
+    )
+    if device is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No registered device with that token.",
+        )
+
+    if device.revoked_at is not None:
+        # Already revoked. Idempotent rather than 409: a sign-out that is
+        # retried after a dropped response must not report an error for having
+        # already achieved what the caller wanted.
+        return {"device_id": str(device.id), "already_revoked": True}
+
+    device.revoked_at = datetime.now(timezone.utc)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="device.revoked",
+        target_table="device_tokens",
+        target_id=str(device.id),
+        detail={"platform": device.platform},
+    )
+    db.commit()
+
+    return {"device_id": str(device.id), "already_revoked": False}
 
 
 class AcknowledgeIn(BaseModel):
