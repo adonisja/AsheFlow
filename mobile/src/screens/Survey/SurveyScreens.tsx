@@ -147,7 +147,7 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
       <View style={[s.card, !all && { opacity: 0.5 }]}>
         <Text style={s.h2}>2. Find the block you're on</Text>
         <TextInput value={typed} onChangeText={setTyped} editable={all} maxLength={200}
-          placeholder="An address on the block, e.g. 433 W 32 St" placeholderTextColor={c.mutedForeground}
+          placeholder="An address on the block, e.g. 433 W 32 St" placeholderTextColor={c.placeholder}
           style={s.input} autoCapitalize="words" returnKeyType="search" onSubmitEditing={() => void find()} />
         <Button onPress={() => void find()} disabled={!all || typed.trim().length < 3} loading={busy === 'find'} fullWidth>
           Find blocks
@@ -264,7 +264,7 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
           <Text style={s.h2}>Deliveries go to</Text>
           <Pick options={POINTS} value={f.delivery_point} onChange={v => set('delivery_point', v)} />
           <TextInput value={f.entrance_side} onChangeText={v => set('entrance_side', v)} maxLength={120}
-            placeholder="Which side? e.g. on 33rd St" placeholderTextColor={c.mutedForeground} style={s.input} />
+            placeholder="Which side? e.g. on 33rd St" placeholderTextColor={c.placeholder} style={s.input} />
         </View>
         <View style={s.card}>
           <Text style={s.h2}>Building type</Text>
@@ -285,16 +285,16 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
           <Pick options={[{ value: 'each_unit', label: 'Each unit' }, { value: 'one_drop_point', label: 'One drop point' }]}
             value={f.delivery_mode} onChange={v => set('delivery_mode', v)} />
           <TextInput value={f.floors} onChangeText={v => set('floors', v.replace(/\D/g, '').slice(0, 3))}
-            keyboardType="number-pad" placeholder="Floors" placeholderTextColor={c.mutedForeground} style={s.input} />
+            keyboardType="number-pad" placeholder="Floors" placeholderTextColor={c.placeholder} style={s.input} />
         </View>
         <View style={s.card}>
           <Text style={s.h2}>Receiving hours</Text>
           <View style={{ flexDirection: 'row', gap: spacing.sm }}>
             <TextInput value={f.opens_at} onChangeText={v => set('opens_at', v)} maxLength={5}
-              placeholder="08:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.mutedForeground}
+              placeholder="08:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.placeholder}
               style={[s.input, { flex: 1 }]} accessibilityLabel="Opens at" />
             <TextInput value={f.closes_at} onChangeText={v => set('closes_at', v)} maxLength={5}
-              placeholder="17:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.mutedForeground}
+              placeholder="17:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.placeholder}
               style={[s.input, { flex: 1 }]} accessibilityLabel="Closes at" />
           </View>
         </View>
