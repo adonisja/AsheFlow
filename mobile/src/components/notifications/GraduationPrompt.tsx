@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import InterruptiveSheet from './InterruptiveSheet';
 import { useAcknowledge } from './useAcknowledge';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { tick, MIN_TARGET } from '@components/ui/primitives';
+import apiClient from '@api/client';
+import { roleLabel } from '@theme/roleLabels';
 
 /**
  * "You passed" (ADR-494 D5, type `graduation`). Mobile twin of the web
@@ -38,6 +40,18 @@ export default function GraduationPrompt({
 
   const action = notification.actions[0];
 
+  // ADR-505 D5. The person's actual role, not a hardcoded "Walker" (right only
+  // while trainee -> walker is the sole promotion that raises this). The role is
+  // set before the notification is raised, so /employees/me reports the new one.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    apiClient.get('/employees/me')
+      .then(r => { if (live) setRole(r.data?.role ?? null); })
+      .catch(() => { /* keep the role-free title */ });
+    return () => { live = false; };
+  }, []);
+
   const finish = async (choice: 'confirmed' | 'skipped', then?: () => void) => {
     const ok = await acknowledge(notification.id, choice, 'prompt');
     if (!ok) return;          // sheet stays open; `failed` renders below
@@ -51,14 +65,14 @@ export default function GraduationPrompt({
       <View style={s.band}>
         <Text style={s.seal}>🎓</Text>
         <Text style={s.title} accessibilityRole="header">
-          Congratulations, you're a Walker
+          {role ? `Congratulations, you're a ${roleLabel(role)}` : 'Congratulations on your new role'}
         </Text>
       </View>
 
-      <Text style={s.message}>{notification.message}</Text>
-      <Text style={s.sub}>
-        Your access has already changed. Here's what's different for you now.
-      </Text>
+      {/* ADR-505 D5, a first pass before the owner's visual triage: the
+          notification's own message is the subtitle; our explanation is the body. */}
+      <Text style={s.sub}>{notification.message}</Text>
+      <Text style={s.message}>Your new access is already on. See what's changed for you.</Text>
 
       {failed && (
         <Text style={s.error} accessibilityLiveRegion="assertive">

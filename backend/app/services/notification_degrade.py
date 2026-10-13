@@ -186,3 +186,45 @@ def degrade_channels(db: Session | None, row, channels: list[str]) -> list[str]:
             return _as_prompt("no_role_guide_rows")
 
     return channels
+
+
+#: The channels that make a notification interrupt. Settling removes both.
+_INTERRUPTIVE = ("gate", "prompt")
+
+
+def drop_if_settled(db: Session | None, row, channels: list[str]) -> list[str]:
+    """`channels` without `gate`/`prompt` once the notification has a final answer (ADR-505 D2).
+
+    Before ADR-505 nothing did this: the list endpoint returns read rows, this
+    module never consulted acknowledgements, and neither client filtered answered
+    rows, so a confirmed prompt came back on every launch until the 3-day prune.
+
+    A SEPARATE function from `degrade_channels`, deliberately. That one decides
+    whether a gate can be HONOURED and never adds or removes anything else;
+    this one decides whether the conversation is OVER, and removes both
+    interruptive channels while leaving banner/push/inbox alone -- the record of
+    the notification stays visible, it just stops interrupting.
+
+    Queries only for rows that interrupt, which is a handful per page, not one
+    query per notification. Without a session it cannot check and changes
+    nothing; the client treats the resulting 409 as "already settled", so the
+    cost of that path is one redundant dialog, never a lost answer.
+    """
+    if db is None or not any(c in channels for c in _INTERRUPTIVE):
+        return channels
+
+    from app.models.role_guide import FINAL_ACK_ACTIONS, NotificationAcknowledgement
+
+    settled = (
+        db.query(NotificationAcknowledgement.id)
+        .filter(
+            # Dimension 1: scoped, though the notification id already implies it.
+            NotificationAcknowledgement.company_id == row.company_id,
+            NotificationAcknowledgement.notification_id == row.id,
+            NotificationAcknowledgement.action.in_(FINAL_ACK_ACTIONS),
+        )
+        .first()
+    )
+    if settled is None:
+        return channels
+    return sorted(c for c in channels if c not in _INTERRUPTIVE)

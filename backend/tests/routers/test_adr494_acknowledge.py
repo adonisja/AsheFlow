@@ -82,8 +82,8 @@ class TestMultiTenancy:
 
 class TestIdempotency:
     def test_a_second_acknowledgement_is_a_409(self):
-        """First answer stands. Someone who confirmed then skipped has not
-        un-confirmed, and a second row would make the column unreadable."""
+        """A source check only. The behaviour (which answers 409, and which
+        repeat) is pinned by test_adr505_answer_history.py against a real db."""
         src = _ack_src()
         assert "HTTP_409_CONFLICT" in src
 
@@ -230,20 +230,21 @@ class TestTheRowOutlivesTheNotification:
         assert col.primary_key is False
         assert A.__table__.c["id"].primary_key is True
 
-    def test_one_acknowledgement_per_notification_still_holds(self):
-        """The old PK's real job, kept without tying the row's lifetime to it."""
-        from app.models.role_guide import NotificationAcknowledgement as A
+    def test_one_final_answer_per_notification_still_holds(self):
+        """The old PK's real job, narrowed by ADR-505 to FINAL answers.
 
-        col = A.__table__.c["notification_id"]
-        unique = bool(col.unique) or any(
-            [c.name for c in uc.columns] == ["notification_id"]
-            for uc in A.__table__.constraints
-            if uc.__class__.__name__ == "UniqueConstraint"
-        )
-        assert unique, (
-            "notification_id is no longer unique — two acknowledgements for one "
-            "notification make the action column unreadable"
-        )
+        ADR-494 kept notification_id UNIQUE, which recorded the first answer
+        forever: "Later" then "confirm" stayed "skipped". What must stay unique is
+        the final answer, so the guarantee is now a PARTIAL unique index.
+        """
+        from app.models.role_guide import FINAL_ACK_ACTIONS, NotificationAcknowledgement as A
+
+        idx = {i.name: i for i in A.__table__.indexes}["uq_ack_final_answer"]
+        assert idx.unique and [c.name for c in idx.columns] == ["notification_id"]
+        where = str(idx.dialect_options["postgresql"]["where"])
+        for action in FINAL_ACK_ACTIONS:
+            assert f"'{action}'" in where, f"the index WHERE no longer names {action!r}"
+        assert "'skipped'" not in where, "skips must be allowed to repeat (ADR-505 D1)"
 
     def test_the_snapshots_exist_and_are_required(self):
         """After the prune these are the ONLY record of what was shown.

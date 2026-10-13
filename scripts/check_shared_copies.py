@@ -89,6 +89,11 @@ class Pair:
 
 PAIRS = [
     Pair(
+        "role display names (ADR-505)",
+        "frontend/src/utils/roleLabels.ts",
+        "mobile/src/theme/roleLabels.ts",
+    ),
+    Pair(
         "stats aggregation (ADR-271 B)",
         "frontend/src/components/stats/aggregate.ts",
         "mobile/src/components/stats/aggregate.ts",

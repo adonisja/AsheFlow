@@ -45,7 +45,7 @@ import uuid
 from enum import StrEnum
 
 from sqlalchemy import (
-    CheckConstraint, Column, DateTime, ForeignKey, Index, String, Text, func,
+    CheckConstraint, Column, DateTime, ForeignKey, Index, String, Text, func, text,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -62,6 +62,13 @@ class AckAction(StrEnum):
     #: no pay-period row to resolve a deadline, or no role guide to link to.
     #: NOT the same as skipped — nobody declined anything.
     UNAVAILABLE = "unavailable"
+
+
+#: The answers that SETTLE an interruptive notification (ADR-505). `skipped` is
+#: "not now" and may repeat; these end it. One definition, used by the endpoint's
+#: 409, the read-time settled check, and the partial unique index's WHERE clause
+#: (which spells the same two values -- a test keeps them in step).
+FINAL_ACK_ACTIONS: tuple[str, ...] = (AckAction.CONFIRMED.value, AckAction.UNAVAILABLE.value)
 
 
 class RoleGuide(Base):
@@ -164,9 +171,16 @@ class NotificationAcknowledgement(Base):
 
     #: SET NULL, not CASCADE. The notification is pruned after 3 days; this row
     #: is the evidence and must not go with it. Nullable for the same reason.
+    #:
+    #: NOT unique (ADR-505). Every answer is a row: a person may defer a prompt
+    #: ("Later" = skipped) several times and then confirm. The rule ADR-494's
+    #: UNIQUE enforced -- one answer per notification -- recorded the FIRST
+    #: answer forever, so a skip followed by a confirm stayed "skipped". What must
+    #: stay unique is the FINAL answer, and the partial index below says exactly
+    #: that.
     notification_id = Column(
         UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="SET NULL"),
-        nullable=True, unique=True,
+        nullable=True, index=True,
     )
 
     #: Snapshots, taken at acknowledgement time. Denormalised deliberately:
@@ -223,6 +237,12 @@ class NotificationAcknowledgement(Base):
     shown_as = Column(String(8), nullable=False)
 
     __table_args__ = (
+        # ADR-505 D1: at most ONE final answer per notification, enforced by the
+        # database so two simultaneous confirms cannot both land. Skips repeat.
+        Index(
+            "uq_ack_final_answer", "notification_id", unique=True,
+            postgresql_where=text("action IN ('confirmed', 'unavailable')"),
+        ),
         CheckConstraint(
             "action IN ('confirmed', 'skipped', 'unavailable')",
             name="ck_ack_action",

@@ -1,9 +1,11 @@
-import React, { useId, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { GraduationCap, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import InterruptiveDialog from './InterruptiveDialog';
 import { useNotificationContext } from '../../contexts/NotificationContext';
 import type { Notification } from '../../contexts/NotificationContext';
+import axiosClient from '../../api/axiosClient';
+import { roleLabel } from '../../utils/roleLabels';
 
 /** "You passed" (ADR-494 D5, type `graduation`).
  *
@@ -35,6 +37,19 @@ export default function GraduationPrompt({
   const [failed, setFailed] = useState(false);
 
   const action = notification.actions[0];
+
+  // ADR-505 D5. The title names the role the person actually holds now. It was
+  // hardcoded "Walker", which is right only while trainee -> walker is the sole
+  // promotion that raises this. The role is set BEFORE the notification is
+  // raised, so /employees/me already reports the new one.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    axiosClient.get<{ role: string }>('/employees/me')
+      .then(r => { if (live) setRole(r.data.role); })
+      .catch(() => { /* keep the role-free title */ });
+    return () => { live = false; };
+  }, []);
 
   const finish = async (
     choice: 'confirmed' | 'skipped',
@@ -71,16 +86,19 @@ export default function GraduationPrompt({
           <GraduationCap className="h-7 w-7 text-success-foreground" aria-hidden="true" />
         </div>
         <h2 id={titleId} className="mt-3 text-xl font-bold text-success-foreground">
-          Congratulations, you're a Walker
+          {role ? `Congratulations, you're a ${roleLabel(role)}` : 'Congratulations on your new role'}
         </h2>
       </div>
 
       <div className="px-6 py-5">
-        <p className="text-[0.9375rem] leading-relaxed text-foreground">
+        {/* ADR-505 D5, a first pass before the owner's visual triage: the
+            notification's own message is the subtitle; our explanation is the
+            body. */}
+        <p className="text-sm leading-relaxed text-muted-foreground">
           {notification.message}
         </p>
-        <p className="mt-3 text-sm text-muted-foreground">
-          Your access has already changed. Here's what's different for you now.
+        <p className="mt-3 text-[0.9375rem] leading-relaxed text-foreground">
+          Your new access is already on. See what's changed for you.
         </p>
 
         {failed && (

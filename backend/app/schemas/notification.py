@@ -163,7 +163,7 @@ def _channel_names(channels: Channel) -> list[str]:
     return sorted(c.name.lower() for c in Channel if c is not Channel.NONE and c in channels)
 
 
-from app.services.notification_degrade import degrade_channels
+from app.services.notification_degrade import degrade_channels, drop_if_settled
 
 
 # What an unrecognised type renders as. See `_resolve_for_read`.
@@ -256,5 +256,8 @@ def spec_fields(notification_type: str, row=None, db=None) -> dict:
 
     if row is not None:
         fields["channels"] = degrade_channels(db, row, fields["channels"])
+        # ADR-505 D2: a notification with a final answer stops interrupting.
+        # After degrade_channels, so a degraded gate (now a prompt) is settled too.
+        fields["channels"] = drop_if_settled(db, row, fields["channels"])
 
     return fields

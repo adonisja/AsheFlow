@@ -5,6 +5,7 @@ import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useTabSwitch } from '@navigation/index';
 import { resolveActionRoute } from '@navigation/actionRoutes';
 import NotificationGate from './NotificationGate';
+import ActionPrompt from './ActionPrompt';
 import GraduationPrompt from './GraduationPrompt';
 import OperatingModeChangePrompt from './OperatingModeChangePrompt';
 
@@ -118,9 +119,10 @@ export default function InterruptiveHost() {
     case 'operating_mode_change':
       return <OperatingModeChangePrompt notification={target} onDone={finish} onNavigate={onNavigate} />;
     default:
-      // A PROMPT type with no component yet. Rendering nothing is correct: the
-      // notification still appears in the Notifications tab, so the message is
-      // not lost — it simply does not interrupt.
-      return null;
+      // ADR-505 D4. Was `return null`: every other prompt rendered nothing, and
+      // as the FIRST prompt it hid every prompt behind it. Reproduced on this
+      // emulator 2026-10-13: a timecard_mismatch (degraded to a prompt) showed
+      // no sheet, and a graduation that rendered a minute earlier vanished.
+      return <ActionPrompt notification={target} onDone={finish} onNavigate={onNavigate} />;
   }
 }

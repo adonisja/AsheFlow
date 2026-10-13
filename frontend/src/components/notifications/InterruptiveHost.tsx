@@ -3,6 +3,7 @@ import { useNotificationContext } from '../../contexts/NotificationContext';
 import GraduationPrompt from './GraduationPrompt';
 import OperatingModeChangePrompt from './OperatingModeChangePrompt';
 import NotificationGate from './NotificationGate';
+import ActionPrompt from './ActionPrompt';
 
 /** Picks the one interruptive notification to show, if any (ADR-494).
  *
@@ -62,10 +63,15 @@ export default function InterruptiveHost() {
     case 'operating_mode_change':
       return <OperatingModeChangePrompt notification={target} onDone={finish} />;
     default:
-      // A PROMPT type with no component yet. Rendering nothing is correct: the
-      // notification still appears as a banner card, so the message is not
-      // lost — it simply does not interrupt. Silently showing a generic sheet
-      // would be worse, because the registry's intent for that type is unknown.
-      return null;
+      // ADR-505 D4. This used to `return null`, with a comment arguing that
+      // rendering nothing was correct because the banner still carries the
+      // message. Two things that reasoning missed, both reproduced on a device:
+      //  - the registry's intent IS known: `prompt` is in `channels`, and for
+      //    timecard_mismatch the PROMPT phase is the whole first half of
+      //    ADR-494's escalation, which therefore never happened;
+      //  - `target` is the FIRST prompt, so an invisible one hid every prompt
+      //    queued behind it. A walker with an open timecard never saw their
+      //    graduation.
+      return <ActionPrompt notification={target} onDone={finish} />;
   }
 }

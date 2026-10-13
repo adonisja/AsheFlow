@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -16,7 +17,7 @@ from app.api.deps import RoleChecker, get_caller_employee, Pagination, _resolve_
 from app.core.security import verify_cognito_token
 from app.models.employee import Employee
 from app.models.notification import Notification
-from app.models.role_guide import NotificationAcknowledgement
+from app.models.role_guide import FINAL_ACK_ACTIONS, NotificationAcknowledgement
 from app.models.device_token import DeviceToken
 from app.services.push_delivery import create_endpoint, push_enabled
 from app.routers.registration import ROLE_TO_COGNITO_GROUP
@@ -341,9 +342,14 @@ def acknowledge_notification(
     full access everywhere else; this is a record of who clicked, so there is
     nothing for anyone else to do to it.
 
-    Idempotent by primary key: `notification_id` IS the PK, so a double-tap or a
-    retried request gets 409 rather than a second row. The first answer stands —
-    a person who confirmed and then skipped has not un-confirmed.
+    **Every answer is a row; exactly one may be final (ADR-505).** `skipped`
+    ("Later") may repeat, because a prompt re-asks each launch. `confirmed` and
+    `unavailable` are final: after one, any further answer is a 409 -- a person
+    who confirmed and then pressed back has not un-confirmed. ADR-494 made
+    `notification_id` UNIQUE, which recorded the FIRST answer forever, so a skip
+    followed by a confirm stayed "skipped" (reproduced on staging 2026-10-13).
+    The database still enforces one final answer, through a partial unique index,
+    so two simultaneous confirms cannot both land.
     """
     notif = (
         db.query(Notification)
@@ -365,18 +371,19 @@ def acknowledge_notification(
             detail="Only the person a notification was sent to can acknowledge it.",
         )
 
-    existing = (
-        db.query(NotificationAcknowledgement)
+    final = (
+        db.query(NotificationAcknowledgement.id)
         .filter(
             NotificationAcknowledgement.notification_id == notification_id,
             NotificationAcknowledgement.company_id == caller.company_id,
+            NotificationAcknowledgement.action.in_(FINAL_ACK_ACTIONS),
         )
         .first()
     )
-    if existing is not None:
+    if final is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This notification has already been acknowledged.",
+            detail="This notification has already been answered.",
         )
 
     ack = NotificationAcknowledgement(
@@ -396,13 +403,24 @@ def acknowledge_notification(
     )
     db.add(ack)
 
-    # Acknowledging is seeing it. The reverse is NOT true -- that is the whole
-    # point of two columns -- but a person who answered a gate has certainly
-    # read it, and leaving the row unread would keep the banner up behind the
-    # sheet they just dismissed.
-    notif.is_read = True
+    # A FINAL answer is seeing it: leaving the row unread would keep the banner
+    # up behind the sheet just answered. A skip is NOT (ADR-505 D3) -- "not now"
+    # means the item is still pending, so the inbox keeps showing it unread. The
+    # reverse never holds: a read flag is set by rendering and is not an answer.
+    if payload.action in FINAL_ACK_ACTIONS:
+        notif.is_read = True
 
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # A concurrent final answer won the race to uq_ack_final_answer. No audit:
+        # after a rollback the row this would describe does not exist (CLAUDE.md
+        # flush-audit-commit exception).
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This notification has already been answered.",
+        )
     write_audit(
         db=db,
         company_id=caller.company_id,
