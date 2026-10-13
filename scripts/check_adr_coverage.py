@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Refuse a push whose commits cite an ADR that has no documentation.
 
-CLAUDE.md requires three artifacts per change -- ADR, journal, LEARNING_GUIDE
-lesson -- and says to write the ADR *before* implementing. That rule has been in
+CLAUDE.md requires four artifacts per change -- ADR, journal, LEARNING_GUIDE
+lesson, and a deep dive (ADR-501) -- and says to write the ADR *before*
+implementing. That rule has been in
 the file the whole time and was skipped twice in three days (ADR-354, ADR-365).
 Both were found by grepping `git log` against `docs/decisions/`, never by recall.
 
@@ -29,6 +30,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = ROOT / "docs" / "decisions"
 JOURNALS = ROOT / "docs" / "journals"
 GUIDE = ROOT / "docs" / "LEARNING_GUIDE.md"
+DEEP_DIVES = ROOT / "docs" / "deep-dives"
+
+# ADR-501: the nine parts every deep dive carries. Presence, not depth: a small
+# fix's part may be one line saying why it is empty, but the author must have
+# DECIDED about it, which a missing heading shows they did not.
+DEEP_DIVE_PARTS = range(1, 10)
+PART_HEADING = re.compile(r"^## Part (\d)\b", re.MULTILINE)
 
 ADR_IN_SUBJECT = re.compile(r"\bADR-(\d{3})\b")
 
@@ -74,8 +82,54 @@ def commits_being_pushed(argv: list[str]) -> list[str]:
     return [l for l in out.strip().split("\n") if l]
 
 
+def _frontmatter_feature(text: str) -> str:
+    """The `feature:` line of a deep dive's YAML frontmatter, or ''."""
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    head = text[3:end] if end != -1 else ""
+    for line in head.splitlines():
+        if line.startswith("feature:"):
+            return line
+    return ""
+
+
+def deep_dive_gap(number: str) -> str | None:
+    """Why ADR-<number> lacks a complete deep dive, or None if it has one (ADR-501).
+
+    A deep dive COVERS an ADR by identity, never by mention: its filename starts
+    `ADR-<number>-`, or its frontmatter `feature:` line names it as a whole token.
+    Mentions do not count. The push deep dive cites ADR-311 and ADR-486 in
+    passing, and must not satisfy them forever.
+    """
+    if not DEEP_DIVES.is_dir():
+        return "a deep dive in docs/deep-dives/ (the directory does not exist)"
+    token = re.compile(rf"\bADR-{number}\b")
+    candidates = []
+    for path in sorted(DEEP_DIVES.glob("*.md")):
+        text = path.read_text(errors="ignore")
+        if path.name.startswith(f"ADR-{number}-") or token.search(_frontmatter_feature(text)):
+            candidates.append((path, text))
+    if not candidates:
+        return f"a deep dive in docs/deep-dives/ (ADR-{number}-*.md, or `feature: ADR-{number}`)"
+
+    # Several may cover one ADR; any COMPLETE one satisfies it.
+    best_missing = None
+    for path, text in candidates:
+        present = {int(n) for n in PART_HEADING.findall(text)}
+        absent = [n for n in DEEP_DIVE_PARTS if n not in present]
+        if not absent:
+            return None
+        if best_missing is None or len(absent) < len(best_missing[1]):
+            best_missing = (path, absent)
+    path, absent = best_missing
+    return (f"{path.relative_to(ROOT)} is incomplete: no "
+            + ", ".join(f"'## Part {n}'" for n in absent)
+            + " (a part may be one line saying why it is empty, but its heading must be there)")
+
+
 def missing_artifacts(number: str) -> list[str]:
-    """Which of the three artifacts are absent for ADR-<number>."""
+    """Which of the four artifacts are absent for ADR-<number>."""
     missing = []
     if not list(DECISIONS.glob(f"ADR-{number}-*.md")):
         missing.append(f"docs/decisions/ADR-{number}-*.md")
@@ -90,6 +144,10 @@ def missing_artifacts(number: str) -> list[str]:
     # accepting only the first.
     if not re.search(rf"ADR-{number}[-|)\]]", guide):
         missing.append("a lesson in docs/LEARNING_GUIDE.md")
+
+    gap = deep_dive_gap(number)
+    if gap:
+        missing.append(gap)
     return missing
 
 
@@ -113,8 +171,14 @@ def main() -> int:
         for m in missing:
             print(f"    missing: {m}", file=sys.stderr)
     print(
-        "\nCLAUDE.md requires an ADR, a journal and a LEARNING_GUIDE lesson for\n"
-        "every fix, change or feature -- with the ADR written BEFORE implementing.\n"
+        "\nCLAUDE.md requires an ADR, a journal, a LEARNING_GUIDE lesson and a deep\n"
+        "dive for every fix, change or feature -- with the ADR written BEFORE\n"
+        "implementing.\n"
+        "\nDeep dive: start from docs/templates/DEEP-DIVE-TEMPLATE.md; the standard\n"
+        "is docs/deep-dives/ADR-487-D5-Push-Notifications.md. Scale the parts,\n"
+        "never the depth: a small fix may be short, but all nine parts are there.\n"
+        "A new bug in an existing feature adds a casebook case to its deep dive;\n"
+        "this check cannot see that, so it is on you (ADR-501 D2).\n"
         "\n"
         "Write the missing artifacts, then push again. To push anyway (a WIP\n"
         "branch, say), set ALLOW_UNDOCUMENTED=1.",
