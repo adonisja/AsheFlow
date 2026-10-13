@@ -57,6 +57,7 @@ import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
 import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
 import MyWorkforceRouteScreen from '@screens/Walker/MyWorkforceRouteScreen';
 import MfaRequiredScreen        from '@screens/MfaRequiredScreen';
+import SurveyNavigator          from '@screens/Survey/SurveyScreens';   // ADR-504
 import MfaGracePrompt           from '@components/MfaGracePrompt';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
@@ -69,6 +70,8 @@ export type RootStackParamList = {
   Main: undefined;
   /** ADR-381 D2 — shown INSTEAD OF Main when the grace period has closed. */
   MfaRequired: undefined;
+  /** ADR-504 — accounts with no Employee row (surveyors, the platform owner). */
+  Survey: undefined;
 };
 
 export type HomeStackParamList = {
@@ -341,7 +344,7 @@ function MainShell() {
 
 // ── Root navigator ────────────────────────────────────────────────────────────
 export default function RootNavigator() {
-  const { isAuthenticated, isLoading, mfaStatus } = useAuth();
+  const { isAuthenticated, isLoading, mfaStatus, hasRole } = useAuth();
 
   /* ADR-381 D2 — a blocked user gets a screen INSTEAD OF the app, not a modal
      over it. Same idiom as the isAuthenticated swap below: the tab shell is
@@ -369,6 +372,10 @@ export default function RootNavigator() {
           <RootStack.Screen name="Auth" component={LoginScreen} />
         ) : mfaBlocked ? (
           <RootStack.Screen name="MfaRequired" component={MfaRequiredScreen} />
+        ) : hasRole('surveyor', 'super_admin') ? (
+          /* ADR-504. No Employee row means no tab works: every tab calls
+             employee endpoints. They get the survey register instead. */
+          <RootStack.Screen name="Survey" component={SurveyNavigator} />
         ) : (
           <RootStack.Screen name="Main" component={MainShell} />
         )}
