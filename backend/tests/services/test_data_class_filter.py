@@ -46,15 +46,24 @@ class TestCallerScopedEndpointsAreUntouched:
         scoped to caller.company_id; adding data_class there returns nothing
         for seed-tenant users, which is a worse bug than the one it fixes.
 
-        companies.py is the exception — it is the one cross-tenant surface, and
-        there data_class is EXPOSED, not filtered on.
+        Exceptions are the cross-tenant PLATFORM surfaces, each with its reason.
+        Neither is caller-scoped, so the bug this guards against (a seed tenant's
+        own users seeing nothing) cannot occur there.
         """
         from pathlib import Path
 
         routers = Path(__file__).resolve().parents[2] / "app" / "routers"
         offenders = []
+        cross_tenant = {
+            # data_class is EXPOSED here, not filtered on.
+            "companies.py": "the platform's company list",
+            # ADR-507 D3: filtered to REFUSE writes into live tenants (send a
+            # sample only to seed/demo), the safety direction, the same rule
+            # ADR-280's seed scripts and fault injection apply. Super-admin only.
+            "notification_gallery.py": "refuses sample sends into live tenants",
+        }
         for f in routers.glob("*.py"):
-            if f.name == "companies.py":
+            if f.name in cross_tenant:
                 continue
             code = "\n".join(
                 ln for ln in f.read_text().splitlines()

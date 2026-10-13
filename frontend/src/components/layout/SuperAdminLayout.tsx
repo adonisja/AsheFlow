@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck,
-  ClipboardList, Menu, X, MapPin,
+  ClipboardList, Menu, X, Bell, MapPin,
 } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
@@ -25,6 +25,10 @@ const NAV = [
   { to: '/superadmin/collection', label: 'Collected', icon: ClipboardList },
   // ADR-504 — the survey register: the owner's own walks, outside any tenant.
   { to: '/survey', label: 'Survey', icon: MapPin },
+  // ADR-507 — every notification type on every surface it reaches, before
+  // anyone receives it. The production components inside a preview context,
+  // plus Send to a test employee through the real pipeline.
+  { to: '/superadmin/notifications', label: 'Notifications', icon: Bell },
 ];
 
 /** Brand + identity row.

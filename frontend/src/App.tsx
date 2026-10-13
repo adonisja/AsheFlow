@@ -59,6 +59,7 @@ import Companies from './pages/superadmin/Companies';
 import CompanyDetail from './pages/superadmin/CompanyDetail';
 import PlatformAlerts from './pages/superadmin/PlatformAlerts';
 import PlatformStaff from './pages/superadmin/PlatformStaff';
+import NotificationGallery from './pages/superadmin/NotificationGallery';
 import CollectionData from './pages/superadmin/CollectionData';
 import SurveyStart from './pages/survey/SurveyStart';
 import SurveyWalkPage from './pages/survey/SurveyWalk';
@@ -755,6 +756,7 @@ function App() {
             <Route path="/superadmin/companies" element={<Companies />} />
             <Route path="/superadmin/companies/:companyId" element={<CompanyDetailWithKey />} />
             <Route path="/superadmin/alerts" element={<PlatformAlerts />} />
+            <Route path="/superadmin/notifications" element={<NotificationGallery />} />
             <Route path="/superadmin/staff" element={<PlatformStaff />} />
             <Route path="/superadmin/collection" element={<CollectionData />} />
             <Route path="/superadmin/account" element={<Account />} />
