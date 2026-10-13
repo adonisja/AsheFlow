@@ -201,7 +201,8 @@ def register_device(
 
     # AFTER the flush, so the row exists if SNS is slow, and its result is
     # stored on the row we already have. A failure here leaves endpoint_arn
-    # NULL, which backfill_endpoints can repair -- it does not fail the request.
+    # NULL, which the hourly backfill_endpoints sweep repairs (ADR-500) -- it
+    # does not fail the request.
     if device.endpoint_arn is None:
         device.endpoint_arn = create_endpoint(device)
 

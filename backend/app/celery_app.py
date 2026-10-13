@@ -127,6 +127,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.notification_sweep.release_held_pushes",
         "schedule": crontab(minute="*/5"),
     },
+    # ADR-500: give live devices with no SNS endpoint one. Registration succeeds
+    # without an endpoint by design, and re-registration only repairs people who
+    # open the app. Hourly: a NULL endpoint costs a missed push, not data. Minute 23
+    # because */5, */10 and */15 own the multiples of five and :07 is taken.
+    "backfill-push-endpoints": {
+        "task": "app.tasks.push_delivery_task.backfill_endpoints",
+        "schedule": crontab(minute=23),
+    },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
         "schedule": crontab(minute="*/10"),

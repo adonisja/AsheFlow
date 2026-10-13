@@ -18,8 +18,11 @@ DISABLED IS NOT BROKEN
 ======================
 An empty platform ARN means "not set up yet" and is reported once, not per-send.
 Registration still succeeds and stores the token with a NULL `endpoint_arn`, so
-the day the ARN appears, `backfill_endpoints` can give every already-registered
-device an endpoint without anyone re-installing the app.
+the day the ARN appears, the hourly `backfill_endpoints` sweep (ADR-500, at :23)
+gives every already-registered device an endpoint without anyone re-installing
+the app or even opening it. Re-registration on launch also repairs it, but only
+for people who open the app. Until ADR-500 this sentence named a function that
+did not exist.
 
 Push is ADDITIVE. Everyone receives every notification in-app regardless; this
 only decides whether a closed phone also buzzes. So every failure here is

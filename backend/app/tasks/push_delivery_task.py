@@ -39,7 +39,10 @@ from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.notification import Notification
 from app.services.notification_spec import Severity, resolve_spec
-from app.services.push_delivery import live_devices, push_enabled, send_to_device
+from app.models.device_token import DevicePlatform, DeviceToken
+from app.services.push_delivery import (
+    create_endpoint, live_devices, push_enabled, send_to_device,
+)
 from app.services.push_quiet_hours import describe, release_at
 
 logger = logging.getLogger(__name__)
@@ -157,6 +160,101 @@ def send_push(self, notification_id: str) -> dict:
             "push: send_push failed for notification %s: %s",
             notification_id, type(e).__name__,
         )
+        return {"error": type(e).__name__}
+    finally:
+        db.close()
+
+
+#: How many devices one backfill run will try. A backlog (every device registered
+#: before the ARN existed) drains over several hourly runs rather than one run
+#: holding a session open across thousands of SNS calls.
+_BACKFILL_BATCH = 200
+
+#: Consecutive refusals that end a run (ADR-500 D2). One is a bad token; three in a
+#: row is the platform -- IAM, the FCM credential, or the ARN -- and every further
+#: call would only add a warning on top of the one that explains it.
+_BACKFILL_STOP_AFTER = 3
+
+
+@celery_app.task(name="app.tasks.push_delivery_task.backfill_endpoints")
+def backfill_endpoints() -> dict:
+    """Give live devices with no SNS endpoint one (ADR-500).
+
+    Registration succeeds without an endpoint by design (push is additive), so a
+    NULL `endpoint_arn` is normal after any of: the platform ARN being set after
+    devices registered, an IAM or credential fault during registration, or a
+    transient SNS error. Re-registration on app launch repairs it, but only for
+    people who open the app, and the walker with the phone in a van cradle is
+    the one push exists for.
+
+    Spans companies like every platform sweep (ADR-500 D4): each write touches
+    only that row's own endpoint, so nothing crosses a tenant.
+
+    Writes no audit row (ADR-500 D3): it repairs a delivery address and records
+    no one's action. The returned counts are the operator's record.
+    """
+    enabled = [p for p in (DevicePlatform.ANDROID, DevicePlatform.IOS) if push_enabled(p)]
+    if not enabled:
+        return {"skipped": "push_not_configured"}
+
+    db = SessionLocal()
+    created = failed = consecutive = 0
+    stopped = False
+    try:
+        pending = (
+            db.query(DeviceToken)
+            .filter(
+                DeviceToken.endpoint_arn.is_(None),
+                DeviceToken.revoked_at.is_(None),
+                DeviceToken.platform.in_([p.value for p in enabled]),
+            )
+            # Most recently seen first: a bounded batch should spend its calls on
+            # people who actually use the app.
+            .order_by(DeviceToken.last_seen_at.desc())
+            .limit(_BACKFILL_BATCH)
+            .all()
+        )
+
+        for device in pending:
+            arn = create_endpoint(device)      # never raises; logs its own failure
+            if arn:
+                device.endpoint_arn = arn
+                created += 1
+                consecutive = 0
+                continue
+            failed += 1
+            consecutive += 1
+            if consecutive >= _BACKFILL_STOP_AFTER:
+                stopped = True
+                logger.warning(
+                    "push backfill: stopped after %d consecutive refusals; this is a "
+                    "platform-level problem (IAM, credential or ARN), not a per-device "
+                    "one. %d created before stopping.",
+                    consecutive, created,
+                )
+                break
+
+        db.commit()
+
+        remaining = (
+            db.query(DeviceToken.id)
+            .filter(
+                DeviceToken.endpoint_arn.is_(None),
+                DeviceToken.revoked_at.is_(None),
+                DeviceToken.platform.in_([p.value for p in enabled]),
+            )
+            .count()
+        )
+        if created or failed:
+            logger.info(
+                "push backfill: %d created, %d failed, %d still without an endpoint",
+                created, failed, remaining,
+            )
+        return {"created": created, "failed": failed,
+                "remaining": remaining, "stopped": stopped}
+    except Exception as e:
+        db.rollback()
+        logger.error("push backfill failed: %s", type(e).__name__)
         return {"error": type(e).__name__}
     finally:
         db.close()
