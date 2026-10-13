@@ -231,6 +231,10 @@ class Settings(BaseSettings):
     # AddressPoint dataset id. Pinned rather than hardcoded so a dataset
     # migration is a config change, not a code change.
     socrata_addresspoint_dataset: str = "uf93-f8nk"
+    # ADR-504 D1. The owner's delivery company. Its employees may never write the
+    # survey register. When unset, the stricter rule applies: an account linked
+    # to an employee of ANY tenant is refused.
+    survey_excluded_company_id: str = ""
 
     # Fernet key for encrypting trainee credentials (flex email, clock-in code).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

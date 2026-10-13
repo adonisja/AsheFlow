@@ -38,6 +38,11 @@ MUTABLE_TYPES = (ARRAY, PG_ARRAY, JSONB, JSON)
 # assignment only, so mutation tracking would buy nothing but a deep copy on
 # every load. Format: "Model.column": why.
 REASSIGN_ONLY = {
+    "SurveyWalk.addresses": (
+        "ADR-504 D3. The city's address list for a walked block, snapshotted ONCE "
+        "when the walk starts and never changed: it is the proof of which doors the "
+        "walk could record, so editing it in place would rewrite that proof."
+    ),
     # ADR-485. Both are written ONCE and never mutated in place.
     #
     # CampaignQuestion.choices is the option list of a `choice` question. A

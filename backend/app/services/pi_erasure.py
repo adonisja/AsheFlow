@@ -144,6 +144,17 @@ EXEMPT: dict[tuple[str, str], str] = {
         "a resolution state ('pending'/'resolved'), not an address",
     ("collected_address_profiles", "address_flag"):
         "ADR-496 check result ('street_lost'/'no_street'), not an address",
+    # ADR-504: the survey register. City addresses from public data (NYC
+    # AddressPoint), observed outside any carrier's services by the owner and
+    # named contributors. Not Personal Information concerning a carrier's
+    # customers, and not Collected Data, by construction (D2, D3). The note is
+    # scrubbed at write and refuses codes (D4).
+    ("survey_observations", "address"):
+        "ADR-504 register: a public city address observed outside the Services, not customer PI",
+    ("survey_observations", "note"):
+        "ADR-504 register: building facts only, scrubbed at write, codes refused (D4)",
+    ("survey_walks", "addresses"):
+        "ADR-504 register: a snapshot of NYC AddressPoint for one block (public data)",
     ("incidents", "packages_tba"):
         "an INTEGER count of packages involved, not a package id",
     ("street_segments", "x_low_address_end"):  "public NYC street topology (house-number ranges)",

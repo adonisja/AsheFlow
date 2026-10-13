@@ -83,6 +83,9 @@ EXEMPT: dict[tuple[str, str], str] = {
     # --- Not an address: a status flag and structural counts/coordinates ---
     ("building_profiles", "address_status"):     "Resolution lifecycle state, not an address.",
     ("collected_address_profiles", "address_flag"): "ADR-496 check result enum, not an address.",
+    ("survey_observations", "address"): "ADR-504 register: a public city address, not a customer delivery address.",
+    ("survey_walks", "addresses"):      "ADR-504 register: NYC AddressPoint snapshot for one block (public data).",
+    ("survey_walks", "street"):         "ADR-504 register: a street name from public data.",
     ("building_profile_library", "street_frontages"): "Integer count of entrances.",
     ("street_segments", "x_low_address_end"):   "Projected coordinate (integer).",
     ("street_segments", "y_low_address_end"):   "Projected coordinate (integer).",
