@@ -60,6 +60,8 @@ import CompanyDetail from './pages/superadmin/CompanyDetail';
 import PlatformAlerts from './pages/superadmin/PlatformAlerts';
 import PlatformStaff from './pages/superadmin/PlatformStaff';
 import CollectionData from './pages/superadmin/CollectionData';
+import SurveyStart from './pages/survey/SurveyStart';
+import SurveyWalkPage from './pages/survey/SurveyWalk';
 import BuildingSurvey from './pages/BuildingSurvey';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
@@ -197,6 +199,8 @@ function RoleRedirect() {
   const { groups, isConfigured, isLoading } = useAuth();
   if (isLoading) return null;
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
+  // ADR-504. A contributor has no Employee row and one place to be.
+  if (groups.includes('surveyor'))    return <Navigate to="/survey" replace />;
   if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
@@ -735,6 +739,11 @@ function App() {
             />
           </Route>
 
+          {/* ADR-504. The survey register: the owner and admitted contributors.
+              Outside every Layout: a contributor has no Employee row, and the
+              page is used on a phone on a sidewalk. The real gate is the API. */}
+          <Route path="/survey" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyStart /></ProtectedRoute>} />
+          <Route path="/survey/walk/:walkId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyWalkPage /></ProtectedRoute>} />
           {/* Super admin — separate layout, no Navbar, violet ambient */}
           <Route
             element={

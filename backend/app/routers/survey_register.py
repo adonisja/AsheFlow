@@ -255,6 +255,33 @@ def survey_me(writer: Writer = Depends(get_writer)):
     return MeOut(role="owner" if writer.owner else "contributor")
 
 
+class PointOut(BaseModel):
+    lat: float
+    lng: float
+
+
+@router.get("/locate", response_model=PointOut)
+def survey_locate(
+    address: str = Query(..., min_length=3, max_length=200),
+    borough: Literal["manhattan", "brooklyn", "queens", "bronx", "staten island"] = "manhattan",
+    writer: Writer = Depends(get_writer),
+):
+    """A typed address to a point, for finding blocks without GPS.
+
+    GeoClient directly (the city's public geocoder). NOT `resolve_address`: that
+    consults the PlaceType Library first and writes back into it, and the
+    register must neither read nor write tenant-derived data (ADR-504 D6).
+    """
+    from app.tasks.enrich_manifest import _geoclient_normalise
+    try:
+        geo = _geoclient_normalise(address, borough=borough)
+    except Exception:
+        raise HTTPException(status_code=503, detail="The city's geocoder is unavailable. Use your location instead.")
+    if geo is None or geo.lat is None or geo.lng is None:
+        raise HTTPException(status_code=404, detail="The city doesn't recognise that address.")
+    return PointOut(lat=geo.lat, lng=geo.lng)
+
+
 @router.get("/blocks", response_model=list[BlockOut])
 def survey_blocks_near(
     lat: float = Query(..., ge=40.4, le=41.0),

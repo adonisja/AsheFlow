@@ -3371,3 +3371,73 @@ export interface RoleGuideUpdate {
   title: string;   // 1..80
   body: string;    // 1..8000
 }
+
+// ── ADR-504: the survey register (kept outside any tenant) ────────────────
+
+export type SurveySource = 'observed' | 'front_desk' | 'mailroom' | 'security';
+export type SurveyDeliveryPoint = 'main_entrance' | 'service_entrance' | 'loading_dock' | 'mailroom' | 'front_desk';
+export type SurveyDeliveryMode = 'each_unit' | 'one_drop_point';
+
+export interface SurveyAddress {
+  index: number;
+  address: string;
+  bin: string | null;
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface SurveyBlock {
+  block_key: string;
+  street: string;
+  description: string;
+  addresses: SurveyAddress[];
+}
+
+/** POST /survey/walks. All three confirmations must be true (ADR-504 D2). */
+export interface SurveyStartWalk {
+  lat: number;
+  lng: number;
+  radius_m?: number;
+  block_key: string;
+  attest_off_shift: boolean;
+  attest_unbranded: boolean;
+  attest_as_self: boolean;
+}
+
+export interface SurveyWalk {
+  id: string;
+  block_key: string;
+  street: string;
+  started_at: string;
+  closed_at: string | null;
+  addresses: SurveyAddress[];
+  /** Indexes already recorded on this walk. */
+  recorded: number[];
+}
+
+/** POST /survey/walks/{id}/observations. The address comes from the walk, by index. */
+export interface SurveyObservationIn {
+  address_index: number;
+  source: SurveySource;
+  building_type: string;
+  delivery_point?: SurveyDeliveryPoint | null;
+  entrance_side?: string | null;     // ≤120
+  security_desk?: boolean | null;
+  sign_in_required?: boolean | null;
+  delivery_mode?: SurveyDeliveryMode | null;
+  floors?: number | null;            // 1–200
+  opens_at?: string | null;          // "HH:MM"
+  closes_at?: string | null;
+  break_start?: string | null;
+  break_end?: string | null;
+  note?: string | null;              // ≤500; codes are refused
+}
+
+export interface SurveyObservation extends Omit<SurveyObservationIn, 'address_index'> {
+  id: string;
+  walk_id: string;
+  address: string;
+  bin: string | null;
+  observed_on: string;
+  mine: boolean;
+}

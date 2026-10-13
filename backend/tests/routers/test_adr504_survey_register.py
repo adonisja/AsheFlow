@@ -319,3 +319,19 @@ def test_only_the_register_router_constructs_register_rows():
 def test_the_walk_confirmations_are_a_database_rule_too():
     names = {c.name for c in SurveyWalk.__table__.constraints}
     assert "ck_survey_walk_attested" in names
+
+
+class TestLocate:
+    def test_locate_uses_geoclient_not_the_library(self, monkeypatch):
+        """D6: `resolve_address` reads and writes the PlaceType Library; the
+        register must call the city's geocoder directly."""
+        import inspect
+        src = inspect.getsource(R.survey_locate)
+        assert "_geoclient_normalise" in src and "resolve_address(" not in src
+
+    def test_an_unknown_address_is_404(self, monkeypatch):
+        import app.tasks.enrich_manifest as EM
+        monkeypatch.setattr(EM, "_geoclient_normalise", lambda a, borough="manhattan": None)
+        with pytest.raises(HTTPException) as e:
+            R.survey_locate(address="999 Nowhere St", borough="manhattan", writer=OWNER_W)
+        assert e.value.status_code == 404

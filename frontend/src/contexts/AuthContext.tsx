@@ -113,9 +113,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const userGroups = await getUserGroups();
       setGroups(userGroups);
 
-      // Resolve DB first name — skip for super_admin (no Employee row)
+      // Resolve DB first name — skip for accounts with no Employee row: the
+      // platform owner, and survey contributors (ADR-504).
+      const noEmployeeRow = userGroups.includes('super_admin') || userGroups.includes('surveyor');
       let firstName = displayName;
-      if (!userGroups.includes('super_admin')) {
+      if (!noEmployeeRow) {
         try {
           const res = await axiosClient.get<{ name: string }>('/employees/me');
           firstName = res.data?.name?.split(' ')[0] ?? displayName;
@@ -146,7 +148,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // people to ignore the console on the one UI where a real 403 matters.
       //
       // Same guard as the /employees/me call above, which already skips it.
-      if (!userGroups.includes('super_admin')) {
+      if (!noEmployeeRow) {
         await loadCapabilities();
       }
 

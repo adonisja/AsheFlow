@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck,
-  ClipboardList, Menu, X,
+  ClipboardList, Menu, X, MapPin,
 } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
@@ -23,6 +23,8 @@ const NAV = [
   // had no reader. Super admin, not platform staff: the rows are customer
   // delivery addresses, and ADR-343 D4 keeps PII off every platform_support path.
   { to: '/superadmin/collection', label: 'Collected', icon: ClipboardList },
+  // ADR-504 — the survey register: the owner's own walks, outside any tenant.
+  { to: '/survey', label: 'Survey', icon: MapPin },
 ];
 
 /** Brand + identity row.
