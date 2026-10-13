@@ -204,10 +204,56 @@ class Result:
             self.counts[label] = self.counts.get(label, 0) + n
 
 
-def _rows(db: Session, model, req: Request, tenant: bool):
+# ADR-503. Rows are read in pages of this many, ordered by primary key, so no
+# scan holds a table in memory. The first build used `.all()` and was killed by
+# the kernel at 2.9 GB on staging's 1.19M delivery stops for one tenant.
+PAGE_SIZE = 2000
+
+
+def _like(token: str) -> str:
+    return "%" + token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def candidate_tokens(req: "Request") -> list[str]:
+    """Substrings EVERY matching stored value must contain (ADR-503).
+
+    A necessary condition, so filtering on it in SQL can never lose a match:
+
+    - address: each token of door_key(value) that the fold does NOT produce
+      by rewriting. Numbers survive ("32nd" -> "32", and "32" is in "32nd");
+      names survive ("penn"). Directions ("w" from "West") and street types
+      ("st" from "Street") are excluded: the stored text may spell them
+      differently, and "ave" is not in "av".
+    - tba: the normalised id itself.
+
+    An empty list means no safe pre-filter exists; the scan is then paged but
+    unfiltered.
+    """
+    if req.kind == "tba":
+        return [req.key] if req.key else []
+    from app.services import door_key as dk
+    folded = set(_DIRECTIONS) | {canon for _, canon in dk._STREET_TYPES}
+    return [t for t in door_key(req.value).split() if t not in folded]
+
+
+def _prefilter(columns, req: "Request"):
+    """SQL clause: every candidate token appears in at least one of `columns`
+    (cast to text, so ARRAY and JSONB columns are searched too)."""
+    from sqlalchemy import Text, and_, cast, or_
+    toks = candidate_tokens(req)
+    if not toks:
+        return None
+    per_col = [and_(*[cast(c, Text).ilike(_like(t), escape="\\") for t in toks]) for c in columns]
+    return per_col[0] if len(per_col) == 1 else or_(*per_col)
+
+
+def _rows(db: Session, model, req: Request, tenant: bool, where=None):
     """Tenant scope sees that tenant's rows. Platform scope (company_id None)
     sees only rows that belong to NO tenant — open-campaign collected rows,
-    tenant-less audit rows — and the tenant-less tables (the Library)."""
+    tenant-less audit rows — and the tenant-less tables (the Library).
+
+    A generator, paged by primary key (ADR-503). `where` is the candidate
+    pre-filter from `_prefilter`."""
     q = db.query(model)
     if tenant:
         if req.company_id is None:
@@ -215,8 +261,22 @@ def _rows(db: Session, model, req: Request, tenant: bool):
         else:
             q = q.filter(model.company_id == req.company_id)
     elif req.company_id is not None:
-        return []      # tenant-less tables are platform scope only
-    return q.all()
+        return         # tenant-less tables are platform scope only
+    if where is not None:
+        q = q.filter(where)
+    pk = model.__mapper__.primary_key[0]
+    last = None
+    while True:
+        page_q = q.order_by(pk)
+        if last is not None:
+            page_q = page_q.filter(pk > last)
+        page = page_q.limit(PAGE_SIZE).all()
+        if not page:
+            return
+        last = getattr(page[-1], pk.key)
+        yield from page
+        if len(page) < PAGE_SIZE:
+            return
 
 
 _DIRECTIONS = {"n": "north", "s": "south", "e": "east", "w": "west"}
@@ -346,7 +406,8 @@ def erase(db: Session, req: Request, *, dry_run: bool) -> Result:
     for t in kind_targets:
         model = resolve(t)
         label = f"{model.__tablename__}.{t.column}"
-        for row in _rows(db, model, req, t.tenant):
+        for row in _rows(db, model, req, t.tenant,
+                         _prefilter([getattr(model, t.column)], req)):
             val = getattr(row, t.column)
             if t.shape == "list":
                 items = list(val or [])
@@ -377,7 +438,7 @@ def erase(db: Session, req: Request, *, dry_run: bool) -> Result:
     # Route.stops JSONB repeats what the flat lists hold (ADR-194 double
     # storage), and can still hold it after the lists were scrubbed — one pass.
     from app.models.walker_route import Route
-    for row in _rows(db, Route, req, True):
+    for row in _rows(db, Route, req, True, _prefilter([Route.stops], req)):
         _erase_route_stops(row, req, res, dry_run)
 
     needles = {req.value} | res.matched_spellings
@@ -387,7 +448,11 @@ def erase(db: Session, req: Request, *, dry_run: bool) -> Result:
     for t in text_targets:
         model = resolve(t)
         label = f"{model.__tablename__}.{t.column}"
-        for row in _rows(db, model, req, t.tenant):
+        # Every needle (the value and each matched spelling) folds to the
+        # same key, so each contains the request's candidate tokens: the same
+        # pre-filter is safe for free text.
+        for row in _rows(db, model, req, t.tenant,
+                         _prefilter([getattr(model, t.column)], req)):
             val = getattr(row, t.column)
             if not isinstance(val, str) or not val:
                 continue
@@ -455,12 +520,12 @@ def _erase_audit(db: Session, req: Request, res: Result, dry_run: bool) -> None:
     still says what kind of thing happened."""
     from app.models.audit_log import AuditLog
     keys = AUDIT_ADDRESS_KEYS if req.kind == "address" else AUDIT_TBA_KEYS
-    q = db.query(AuditLog)
-    if req.company_id is None:
-        q = q.filter(AuditLog.company_id.is_(None))
-    else:
-        q = q.filter(AuditLog.company_id == req.company_id)
-    for a in q.filter(AuditLog.target_table.notin_(AUDIT_EXEMPT_TARGETS)).all():
+    where = AuditLog.target_table.notin_(AUDIT_EXEMPT_TARGETS)
+    pre = _prefilter([AuditLog.before_snapshot, AuditLog.after_snapshot], req)
+    if pre is not None:
+        from sqlalchemy import and_
+        where = and_(where, pre)
+    for a in _rows(db, AuditLog, req, True, where):
         total = 0
         for col in ("before_snapshot", "after_snapshot"):
             snap = getattr(a, col)
@@ -506,6 +571,8 @@ def _distinct_values(db: Session, probe: Request) -> set[str]:
         if t.kind != probe.kind:
             continue
         model = resolve(t)
+        # Replay must see EVERY value (it hashes them), so no pre-filter, but
+        # still paged (ADR-503).
         for row in _rows(db, model, probe, t.tenant):
             val = getattr(row, t.column)
             vals = val if t.shape == "list" else [val]
