@@ -117,8 +117,13 @@ def sync_adp_employees() -> dict:
                         for member in accounts:
                             db.delete(member)
 
-                        db.commit()
-
+                        # ADR-490: the audit joins the SAME transaction as the
+                        # offboarding it records. It used to sit BELOW this
+                        # commit and was persisted only by the commit after the
+                        # notification fan-out below — and ADR-487 D1's registry
+                        # REFUSES an undeclared type, so a refusal there would
+                        # have deactivated an employee, deleted their future
+                        # assignments, and recorded none of it.
                         write_audit(
                             db,
                             actor_id = "system",
@@ -129,6 +134,7 @@ def sync_adp_employees() -> dict:
                             before = {"is_active": True},
                             after = {"is_active": False, "account_status": "inactive"}
                         )
+                        db.commit()
 
                         # ADR-487 D2 fixed TWO defects in this one block.
                         #

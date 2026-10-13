@@ -5,6 +5,7 @@ import Navbar from './Navbar';
 import FeedbackModal from '../FeedbackModal';
 import CommandPalette from '../CommandPalette';
 import NotificationBanner from '../NotificationBanner';
+import InterruptiveHost from '../notifications/InterruptiveHost';
 import MfaNudgeBanner from '../MfaNudgeBanner';
 
 /**
@@ -80,6 +81,12 @@ const Layout = () => {
               warning. */}
           <MfaNudgeBanner />
           <NotificationBanner />
+          {/* ADR-494. A SIBLING of the banner, not a child: the banner is a
+              capped, scrollable container (ADR-487 D4a), and an interruptive
+              dialog inside something that can be scrolled past is not
+              interruptive. Same reasoning that put the URGENT region outside
+              the cap. */}
+          <InterruptiveHost />
         </div>
         <AnimatePresence mode="wait">
           <motion.div

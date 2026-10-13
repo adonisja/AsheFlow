@@ -47,6 +47,7 @@ import ReturnsManifestPrint from './pages/ReturnsManifestPrint';
 import WalkerSortMonitor from './pages/WalkerSort';
 import NotificationsHistory from './pages/NotificationsHistory';
 import MyRoute from './pages/MyRoute';
+import MyRole from './pages/MyRole';
 import BuildingProfilesPage from './pages/BuildingProfiles';
 import TruckBuildingsPage from './pages/TruckBuildings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -707,6 +708,20 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['walker', 'trainee']}>
                   <MyRoute />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-494 D4. NO allowedRoles: every authenticated role reads
+                their own guide, and the server answers for the caller's role
+                and their company's mode. A role list here would have to be
+                kept in step with ROLE_TO_COGNITO_GROUP, and the role it
+                omitted would be the one a role_change notification had just
+                sent to this page. */}
+            <Route
+              path="/my-role"
+              element={
+                <ProtectedRoute>
+                  <MyRole />
                 </ProtectedRoute>
               }
             />

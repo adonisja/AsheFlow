@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, String, Text, Integer, Date, DateTime, Boolean, ForeignKey, UniqueConstraint, CheckConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -34,6 +34,14 @@ class Scorecard(Base):
     entered_by       = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     created_at       = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at       = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # ADR-492 — a declared hold stops the 13-month retention clock. Individual
+    # scorecards only. `until` = personnel-decision date + 1 year (EEOC
+    # 1602.14); `indefinite` = a charge or claim is open, released by hand.
+    retention_hold_until      = Column(Date, nullable=True)
+    retention_hold_indefinite = Column(Boolean, nullable=False, server_default=text("false"), default=False)
+    retention_hold_set_by     = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    retention_hold_set_at     = Column(DateTime(timezone=True), nullable=True)
 
     metrics = relationship(
         "ScorecardMetric", back_populates="scorecard",

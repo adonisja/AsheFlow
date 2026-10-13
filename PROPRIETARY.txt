@@ -97,3 +97,14 @@ backend/tests/services/test_stop_cutoff.py
 
 # ── Black-box registration package ──────────────────────────────────────────
 backend/asheflow_private/
+
+# ── Mobile build configuration ──────────────────────────────────────────────
+# Firebase client config for the Android app (ADR-487 D5). Not a secret in the
+# credential sense — it ships inside every APK — but it names the Firebase
+# project and its API key, and the owner chose to keep it out of the public repo
+# (2026-10-12). The Android build applies the google-services plugin only when
+# this file exists, so a public checkout builds fine with push off.
+#
+# NOT the Firebase service account key. That one is a real credential and must
+# not be in EITHER repo: it lives in SNS (and the owner's secret store) only.
+mobile/android/app/google-services.json

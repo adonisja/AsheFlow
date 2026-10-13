@@ -232,6 +232,64 @@ def expire_registered_unused() -> dict:
     }
 
 
+@celery_app.task(name="app.tasks.cleanup.purge_expired_acknowledgements")
+def purge_expired_acknowledgements() -> dict:
+    """Delete notification acknowledgements older than acknowledgement_retention_days.
+
+    ADR-494. FLSA §211 requires employment records be kept at least 3 years, and
+    a `timecard_mismatch` acknowledgement IS a wage-and-hour record — the
+    employee attests to their own hours and breaks. That is the
+    longest-justified of the five interruptive types, so it sets the window for
+    all of them: one clock and one cited statute, rather than a per-type map
+    that drifts from the registry every time a type is added.
+
+    COUNTED FROM `acknowledged_at`, NOT THE NOTIFICATION.
+    `prune_notifications` deletes the notification after 3 days and the FK is
+    SET NULL, so by the time this fires `notification_id` has been NULL for
+    roughly three years. Joining to `notifications` here would match nothing and
+    silently delete nothing — the shape of bug that reports success forever.
+
+    This is the LAST thing holding the row, so a bug here is unrecoverable:
+    there is no soft-delete and no archive. Hence the explicit cutoff log and
+    the count in the return value.
+
+    Set acknowledgement_retention_days=0 to disable.
+    """
+    from app.models.role_guide import NotificationAcknowledgement
+
+    retention_days = settings.acknowledgement_retention_days
+    if retention_days <= 0:
+        logger.info("purge_expired_acknowledgements: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(NotificationAcknowledgement)
+            .filter(NotificationAcknowledgement.acknowledged_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        logger.info(
+            "purge_expired_acknowledgements: deleted %d (cutoff %s, %d days).",
+            deleted, cutoff.date(), retention_days,
+        )
+        return {
+            "deleted": deleted,
+            "cutoff": cutoff.date().isoformat(),
+            "days": retention_days,
+        }
+    except Exception as e:
+        db.rollback()
+        # type(e).__name__ only: a retention job's failure goes to an operator,
+        # and str(e) on a DB error can carry row contents.
+        logger.error("purge_expired_acknowledgements failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.cleanup.purge_expired_operational_records")
 def purge_expired_operational_records() -> dict:
     """Delete operational shift records older than operational_record_retention_days.
@@ -595,5 +653,350 @@ def expire_owner_email_changes() -> dict:
         if cleared:
             db.commit()
         return {"cleared": cleared}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.cleanup.expire_trainee_credentials")
+def expire_trainee_credentials() -> dict:
+    """Destroy trainee Flex credentials nobody confirmed (ADR-491 D2).
+
+    Management issues temporary credentials and the trainee changes both on first
+    sign-in. A row still holding values `trainee_credential_retention_days` after
+    it was sent is a live Amazon login nobody needs AsheFlow to keep: the values
+    are nulled and `expired_at` stamped. The row stays as a status record, so
+    management sees "Expired" rather than nothing. Global. 0 disables.
+    """
+    from app.models.trainee_credentials import TraineeCredentials
+
+    days = settings.trainee_credential_retention_days
+    if days <= 0:
+        logger.info("expire_trainee_credentials: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        expired = (
+            db.query(TraineeCredentials)
+            .filter(
+                TraineeCredentials.flex_email.isnot(None),
+                TraineeCredentials.sent_at < cutoff,
+            )
+            .update(
+                {
+                    TraineeCredentials.flex_email: None,
+                    TraineeCredentials.clock_in_code: None,
+                    TraineeCredentials.expired_at: now,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        logger.info("expire_trainee_credentials: expired %d row(s) (cutoff %s).", expired, cutoff.date())
+        return {"expired": expired, "cutoff": cutoff.date().isoformat(), "days": days}
+    except Exception as e:
+        db.rollback()
+        logger.error("expire_trainee_credentials failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
+def _iso_week_monday(week: str):
+    """"2026-W28" → the Monday it began, or None if the label does not parse."""
+    import re
+    from datetime import date
+    m = re.match(r"^\s*(\d{4})-W(\d{1,2})\s*$", week or "")
+    if not m:
+        return None
+    try:
+        return date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    except ValueError:
+        return None
+
+
+@celery_app.task(name="app.tasks.cleanup.purge_expired_scorecards")
+def purge_expired_scorecards() -> dict:
+    """Retention for individual Amazon scorecards and unmatched imports (ADR-492).
+
+    D1 — delete `scope='individual'` scorecards whose ISO week began more than
+    `scorecard_retention_days` ago, EXCEPT those under a retention hold (D3) or
+    referenced by an open appeal (draft/submitted — deleting would erase the
+    dispute mid-flight). Company scorecards carry no person and are exempt.
+
+    Children are deleted explicitly, deepest first (ADR-231): an unverified
+    ON DELETE CASCADE is a delete you did not write.
+
+    D4 — delete every `scorecard_import_pending` row for a (company,
+    transporter_id) whose NEWEST row is older than
+    `scorecard_pending_retention_days`, so an ID still arriving weekly keeps
+    its history.
+
+    Global (all companies). Each half is disabled by its own setting being 0.
+    """
+    from datetime import date
+    from sqlalchemy import func, or_
+    from app.models.scorecard import Scorecard, ScorecardMetric
+    from app.models.scorecard_appeal import ScorecardAppeal, ScorecardAppealItem
+    from app.models.scorecard_import import ScorecardImportPending
+
+    out: dict = {}
+    today = date.today()
+    db = SessionLocal()
+    try:
+        days = settings.scorecard_retention_days
+        if days > 0:
+            cutoff = today - timedelta(days=days)
+            open_appeal = (
+                db.query(ScorecardAppeal.scorecard_id)
+                .filter(ScorecardAppeal.status.in_(("draft", "submitted")))
+            )
+            candidates = (
+                db.query(Scorecard.id, Scorecard.week)
+                .filter(
+                    Scorecard.scope == "individual",
+                    Scorecard.retention_hold_indefinite.is_(False),
+                    or_(Scorecard.retention_hold_until.is_(None),
+                        Scorecard.retention_hold_until < today),
+                    Scorecard.id.notin_(open_appeal),
+                )
+                .all()
+            )
+            unparseable = 0
+            ids = []
+            for sid, week in candidates:
+                monday = _iso_week_monday(week)
+                if monday is None:
+                    unparseable += 1     # kept: never delete what we cannot date
+                elif monday < cutoff:
+                    ids.append(sid)
+
+            if ids:
+                appeal_ids = db.query(ScorecardAppeal.id).filter(ScorecardAppeal.scorecard_id.in_(ids))
+                out["appeal_items"] = (
+                    db.query(ScorecardAppealItem)
+                    .filter(ScorecardAppealItem.appeal_id.in_(appeal_ids))
+                    .delete(synchronize_session=False)
+                )
+                out["appeals"] = (
+                    db.query(ScorecardAppeal).filter(ScorecardAppeal.scorecard_id.in_(ids))
+                    .delete(synchronize_session=False)
+                )
+                out["metrics"] = (
+                    db.query(ScorecardMetric).filter(ScorecardMetric.scorecard_id.in_(ids))
+                    .delete(synchronize_session=False)
+                )
+                out["scorecards"] = (
+                    db.query(Scorecard).filter(Scorecard.id.in_(ids))
+                    .delete(synchronize_session=False)
+                )
+            else:
+                out["scorecards"] = 0
+            out["unparseable_weeks_kept"] = unparseable
+            out["cutoff"] = cutoff.isoformat()
+
+        pdays = settings.scorecard_pending_retention_days
+        if pdays > 0:
+            pcutoff = datetime.now(timezone.utc) - timedelta(days=pdays)
+            stale = (
+                db.query(ScorecardImportPending.company_id, ScorecardImportPending.transporter_id)
+                .group_by(ScorecardImportPending.company_id, ScorecardImportPending.transporter_id)
+                .having(func.max(ScorecardImportPending.created_at) < pcutoff)
+                .all()
+            )
+            n = 0
+            for company_id, tid in stale:
+                n += (
+                    db.query(ScorecardImportPending)
+                    .filter(ScorecardImportPending.company_id == company_id,
+                            ScorecardImportPending.transporter_id == tid)
+                    .delete(synchronize_session=False)
+                )
+            out["pending_rows"] = n
+            out["pending_ids"] = len(stale)
+
+        db.commit()
+        logger.info("purge_expired_scorecards: %s", out)
+        return out
+    except Exception as e:
+        db.rollback()
+        logger.error("purge_expired_scorecards failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
+# ADR-493 D4/D8. The nightly passes look back this far behind their cutoff, so
+# the work per run is bounded by recent history instead of growing forever.
+# A missed run is caught up as long as the gap is shorter than this; history
+# older than the window is handled ONCE by `backfill=True` at deploy.
+PI_RETENTION_WINDOW_DAYS = 30
+
+
+def _expire_tbas(db, cutoff_date, window_start) -> dict:
+    """Replace TBAs on delivery rows dated in [window_start, cutoff_date) with
+    per-value placeholders. Lengths kept: package counts are len(tba_numbers)."""
+    from sqlalchemy.orm.attributes import flag_modified
+    from app.models.walker_route import Route, MisroutedPackageFlag
+    from app.models.delivery_stop import DeliveryStop
+    from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
+    from app.models.tote_ops import PackageRemoval
+    from app.models.truck_zone import TruckZone
+    from app.services.pi_erasure import placeholder, placeholder_all, is_placeholder
+
+    counts: dict[str, int] = {}
+
+    def in_window(col):
+        q = [col < cutoff_date]
+        if window_start is not None:
+            q.append(col >= window_start)
+        return q
+
+    def bump(label, n):
+        if n:
+            counts[label] = counts.get(label, 0) + n
+
+    routes = db.query(Route).filter(*in_window(Route.route_date)).all()
+    route_ids = [r.id for r in routes]
+    for r in routes:
+        new, n = placeholder_all(r.tba_numbers)
+        if n:
+            r.tba_numbers = new
+            flag_modified(r, "tba_numbers")
+            bump("routes.tba_numbers", n)
+        if r.stops:
+            changed, total = [], 0
+            for st in r.stops:
+                st = dict(st or {})
+                if isinstance(st.get("tba_numbers"), list):
+                    st["tba_numbers"], k = placeholder_all(st["tba_numbers"])
+                    total += k
+                changed.append(st)
+            if total:
+                r.stops = changed
+                flag_modified(r, "stops")
+                bump("routes.stops", total)
+
+    if route_ids:
+        for stop in db.query(DeliveryStop).filter(DeliveryStop.route_id.in_(route_ids)).all():
+            new, n = placeholder_all(stop.tba_numbers)
+            if n:
+                stop.tba_numbers = new
+                flag_modified(stop, "tba_numbers")
+                bump("delivery_stops.tba_numbers", n)
+        for f in db.query(MisroutedPackageFlag).filter(MisroutedPackageFlag.route_id.in_(route_ids)).all():
+            if f.tba_number and not is_placeholder(f.tba_number):
+                f.tba_number = placeholder()
+                bump("misrouted_package_flags.tba_number", 1)
+
+    cutoff_dt = datetime.combine(cutoff_date, datetime.min.time(), tzinfo=timezone.utc)
+    start_dt = (datetime.combine(window_start, datetime.min.time(), tzinfo=timezone.utc)
+                if window_start is not None else None)
+    for model, col, label in (
+        (RTSPackage, RTSPackage.recorded_at, "rts_packages.tba_number"),
+        (MissingPackage, MissingPackage.reported_at, "missing_packages.tba_number"),
+    ):
+        q = db.query(model).filter(col < cutoff_dt)
+        if start_dt is not None:
+            q = q.filter(col >= start_dt)
+        for row in q.all():
+            if row.tba_number and not is_placeholder(row.tba_number):
+                row.tba_number = placeholder()
+                bump(label, 1)
+
+    for row in db.query(DamagedPackage).filter(*in_window(DamagedPackage.route_date)).all():
+        if row.tba_number and not is_placeholder(row.tba_number):
+            row.tba_number = placeholder()
+            bump("damaged_packages.tba_number", 1)
+
+    for row in db.query(PackageRemoval).filter(*in_window(PackageRemoval.removal_date)).all():
+        if row.tba and not is_placeholder(row.tba):
+            row.tba = None
+            bump("package_removals.tba", 1)
+        new, n = placeholder_all(row.tba_numbers)
+        if n:
+            row.tba_numbers = new
+            flag_modified(row, "tba_numbers")
+            bump("package_removals.tba_numbers", n)
+
+    for z in db.query(TruckZone).filter(*in_window(TruckZone.zone_date)).all():
+        new, n = placeholder_all(z.package_tbas)
+        if n:
+            z.package_tbas = new
+            flag_modified(z, "package_tbas")
+            bump("truck_zones.package_tbas", n)
+
+    return counts
+
+
+def _blank_audit_keys(db, keys, cutoff_dt, start_dt) -> int:
+    """ADR-493 D8 — audit snapshots copied addresses and TBAs that the row-level
+    retention then cleared, so the copies outlived the originals indefinitely."""
+    from sqlalchemy.orm.attributes import flag_modified
+    from app.models.audit_log import AuditLog
+    from app.services.pi_erasure import blank_keys, AUDIT_EXEMPT_TARGETS
+
+    q = db.query(AuditLog).filter(
+        AuditLog.created_at < cutoff_dt,
+        AuditLog.target_table.notin_(AUDIT_EXEMPT_TARGETS),
+    )
+    if start_dt is not None:
+        q = q.filter(AuditLog.created_at >= start_dt)
+    total = 0
+    for a in q.all():
+        for col in ("before_snapshot", "after_snapshot"):
+            snap = getattr(a, col)
+            if snap:
+                new, n = blank_keys(snap, keys)
+                if n:
+                    setattr(a, col, new)
+                    flag_modified(a, col)
+                    total += n
+    return total
+
+
+@celery_app.task(name="app.tasks.cleanup.expire_package_ids_and_audit_pi")
+def expire_package_ids_and_audit_pi(backfill: bool = False) -> dict:
+    """ADR-493 D4 + D8, nightly.
+
+    1. TBAs on delivery rows older than `tba_retention_days` → placeholders.
+    2. TBA values in audit snapshots on the same clock.
+    3. Address values in audit snapshots older than
+       `delivery_address_retention_hours` — the copies ADR-219's 48h nulling
+       never reached.
+
+    Each pass covers a PI_RETENTION_WINDOW_DAYS window behind its cutoff;
+    `backfill=True` drops the lower bound (run once at deploy). Global.
+    """
+    from app.services.pi_erasure import AUDIT_ADDRESS_KEYS, AUDIT_TBA_KEYS
+
+    now = datetime.now(timezone.utc)
+    out: dict = {"backfill": backfill}
+    db = SessionLocal()
+    try:
+        days = settings.tba_retention_days
+        if days > 0:
+            cutoff = now.date() - timedelta(days=days)
+            start = None if backfill else cutoff - timedelta(days=PI_RETENTION_WINDOW_DAYS)
+            out["tbas"] = _expire_tbas(db, cutoff, start)
+            cutoff_dt = now - timedelta(days=days)
+            start_dt = None if backfill else cutoff_dt - timedelta(days=PI_RETENTION_WINDOW_DAYS)
+            out["audit_tba_values"] = _blank_audit_keys(db, AUDIT_TBA_KEYS, cutoff_dt, start_dt)
+
+        hours = settings.delivery_address_retention_hours
+        if hours > 0:
+            cutoff_dt = now - timedelta(hours=hours)
+            start_dt = None if backfill else cutoff_dt - timedelta(days=PI_RETENTION_WINDOW_DAYS)
+            out["audit_address_values"] = _blank_audit_keys(db, AUDIT_ADDRESS_KEYS, cutoff_dt, start_dt)
+
+        db.commit()
+        logger.info("expire_package_ids_and_audit_pi: %s", out)
+        return out
+    except Exception as e:
+        db.rollback()
+        logger.error("expire_package_ids_and_audit_pi failed: %s", type(e).__name__)
+        raise
     finally:
         db.close()

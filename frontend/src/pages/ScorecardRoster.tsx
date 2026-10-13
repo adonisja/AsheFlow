@@ -13,14 +13,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import SelectMenu from '../components/ui/SelectMenu';
 import {
-  Users, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Minus, X,
+  Users, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Minus, X, Lock, Loader2,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import type {
   IndividualRosterResponse, IndividualRosterRow, IndividualTrendResponse,
+  RetentionHoldIn, ScorecardRetentionRow,
 } from '../api/types';
 import { count, pct } from '../utils/metric';
+import { formatDate, getLocalYMD } from '../utils/date';
+import { errorText } from '../utils/errorText';
 
 function standingTone(s?: string | null): string {
   if (!s) return 'text-muted-foreground';
@@ -270,10 +273,171 @@ function TrendDrawer({
           )}
         </div>
 
+        {trend.employee_id && <RetentionSection employeeId={trend.employee_id} />}
+
         <div className="sticky bottom-0 bg-background border-t border-border px-5 py-3 flex justify-end">
           <button onClick={onClose} className="btn-ghost text-sm">Close</button>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * ADR-492 — retention. Individual scorecards are deleted ~13 months after their
+ * week unless held. A scorecard used in a discipline or termination decision
+ * must be kept one year from that decision (EEOC 29 CFR 1602.14); an open
+ * charge keeps it until released. AsheFlow has no disciplinary record, so the
+ * hold is declared here, by the person who made the decision.
+ */
+function RetentionSection({ employeeId }: { employeeId: string }) {
+  const [rows, setRows] = useState<ScorecardRetentionRow[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [kind, setKind] = useState<RetentionHoldIn['kind']>('personnel_decision');
+  const [decisionDate, setDecisionDate] = useState(getLocalYMD());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await axiosClient.get<ScorecardRetentionRow[]>(
+        `/scorecards/individual/${employeeId}/records`,
+      );
+      setRows(res.data);
+      setSelected(new Set());
+    } catch (e) {
+      setError(errorText(e, 'Could not load retention status.'));
+    }
+  }, [employeeId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = (id: string) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // One request per scorecard: the server enforces "extend, never shorten" per
+  // row, and a refusal on one week must not hide that the others succeeded.
+  const hold = async () => {
+    setBusy(true);
+    setError(null);
+    const body: RetentionHoldIn = kind === 'legal_charge'
+      ? { kind }
+      : { kind, decision_date: decisionDate };
+    const failed: string[] = [];
+    for (const r of (rows ?? []).filter(r => selected.has(r.id))) {
+      try {
+        await axiosClient.post(`/scorecards/${r.id}/retention-hold`, body);
+      } catch (e) {
+        failed.push(`${r.week}: ${errorText(e, 'refused')}`);
+      }
+    }
+    if (failed.length) setError(failed.join(' · '));
+    await load();
+    setBusy(false);
+  };
+
+  const release = async (r: ScorecardRetentionRow) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await axiosClient.delete(`/scorecards/${r.id}/retention-hold`);
+    } catch (e) {
+      setError(errorText(e, `Could not release ${r.week}.`));
+    }
+    await load();
+    setBusy(false);
+  };
+
+  const status = (r: ScorecardRetentionRow) => {
+    if (r.retention_hold_indefinite) return <span className="text-warning font-medium">Held while charge is open</span>;
+    if (r.retention_hold_until) return <span className="text-warning font-medium">Held until {formatDate(r.retention_hold_until)}</span>;
+    if (r.open_appeal) return <span className="text-muted-foreground">Kept while appeal is open</span>;
+    return <span className="text-subtle">Removed after {r.removed_after ? formatDate(r.removed_after) : '—'}</span>;
+  };
+
+  return (
+    <section className="px-5 pb-5 space-y-3" aria-labelledby="retention-heading">
+      <h3 id="retention-heading" className="text-sm font-semibold text-foreground flex items-center gap-2">
+        <Lock className="w-4 h-4 text-primary" /> Retention
+      </h3>
+      <p className="text-xs text-subtle">
+        Scorecards are removed about 13 months after their week. If any of these
+        informed a discipline or termination decision, hold them: they are then kept
+        one year from the decision, or until released if a charge or claim is open.
+      </p>
+
+      <ErrorBanner message={error} />
+
+      {rows === null ? (
+        <div className="card animate-pulse h-12" />
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-subtle">No individual scorecards on file.</p>
+      ) : (
+        <>
+          <ul className="divide-y divide-border border border-border rounded-lg">
+            {rows.map(r => {
+              const held = r.retention_hold_indefinite || !!r.retention_hold_until;
+              return (
+                <li key={r.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="accent-primary"
+                    checked={selected.has(r.id)}
+                    onChange={() => toggle(r.id)}
+                    aria-label={`Select ${r.week}`}
+                  />
+                  <span className="font-mono text-foreground w-20 shrink-0">{r.week}</span>
+                  <span className="flex-1 min-w-0 text-xs">{status(r)}</span>
+                  {held && (
+                    <button onClick={() => release(r)} disabled={busy} className="btn-ghost text-xs py-1">
+                      Release
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <fieldset className="flex flex-col gap-1 text-xs">
+              <legend className="sr-only">Hold reason</legend>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="hold-kind" className="accent-primary"
+                  checked={kind === 'personnel_decision'} onChange={() => setKind('personnel_decision')} />
+                Discipline or termination decision
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="hold-kind" className="accent-primary"
+                  checked={kind === 'legal_charge'} onChange={() => setKind('legal_charge')} />
+                Open charge or claim
+              </label>
+            </fieldset>
+            {kind === 'personnel_decision' && (
+              <label className="text-xs text-muted-foreground flex flex-col gap-1">
+                Decision date
+                <input
+                  type="date"
+                  value={decisionDate}
+                  max={getLocalYMD()}
+                  onChange={e => setDecisionDate(e.target.value)}
+                  className="border border-input rounded-lg px-2 py-1 text-sm bg-background"
+                />
+              </label>
+            )}
+            <button
+              onClick={hold}
+              disabled={busy || selected.size === 0}
+              className="btn-primary text-sm py-2 flex items-center gap-2"
+            >
+              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Hold {selected.size || ''} selected
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

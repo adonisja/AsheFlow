@@ -1823,6 +1823,38 @@ export interface Scorecard {
   source_file_url?: string | null;
   created_at: string;
   metrics: ScorecardMetric[];
+  /** ADR-492 — a declared retention hold. Both empty = the 13-month clock runs. */
+  retention_hold_until?: string | null;
+  retention_hold_indefinite?: boolean;
+}
+
+/** ADR-492 D3 — POST /scorecards/{id}/retention-hold. Mirrors RetentionHoldIn. */
+export type RetentionHoldIn =
+  | { kind: 'personnel_decision'; decision_date: string }
+  | { kind: 'legal_charge' };
+
+/** ADR-492 D5 — GET /scorecards/individual/{id}/records. Mirrors ScorecardRetentionRow. */
+export interface ScorecardRetentionRow {
+  id: string;
+  week: string;
+  overall_standing?: string | null;
+  retention_hold_until?: string | null;
+  retention_hold_indefinite: boolean;
+  /** When the nightly purge removes it if nothing changes; null while held indefinitely. */
+  removed_after?: string | null;
+  open_appeal: boolean;
+}
+
+/** ADR-491 — management's view of a credential handoff. Never carries the values. */
+export interface TraineeCredentialsStatus {
+  employee_id: string;
+  has_credentials: boolean;
+  sent_by: string;
+  sent_at: string;
+  updated_at: string;
+  confirmed_at?: string | null;
+  expired_at?: string | null;
+  expires_at?: string | null;
 }
 
 // Scorecard cross-check (ADR-204 Phase D) — Amazon vs our data.
@@ -3184,6 +3216,8 @@ export interface CollectionTokenSummary {
    *  the string still exists but no longer works, and showing a dead link
    *  invites someone to send it. */
   token: string | null;
+  /** ADR-495 D3. Set once when an open campaign was handed to a company. */
+  assigned_at?: string | null;
 }
 
 /** The create response. Deliberately NOT a CollectionTokenSummary: the POST
@@ -3216,6 +3250,8 @@ export interface CollectedProfile {
    *  attributed and removed as a group. Super-admin read only; deliberately
    *  absent from the public /check response. */
   device_id: string | null;
+  /** ADR-496. 'street_lost' | 'no_street' | null — set at submit. */
+  address_flag?: 'street_lost' | 'no_street' | null;
   /** How many observations this door has across the WHOLE campaign, and
    *  whether that closes it. Server-computed: counting the rows on screen
    *  would miscount a pair split across a page boundary. */
@@ -3247,3 +3283,91 @@ export interface CollectedProfile {
 
 /** The listing row plus the whole day. Fetched one at a time: a page of forty
  *  days with every tote and address inline is a large response. */
+
+/** ADR-493 D2 — POST /privacy/erasure. Mirrors ErasureRequest (extra="forbid"). */
+export interface ErasureRequest {
+  kind: 'address' | 'tba';
+  value: string;
+  dry_run: boolean;
+}
+
+/** ADR-493 D2 — what an erasure touched, or would touch on a dry run. */
+export interface ErasureResult {
+  dry_run: boolean;
+  kind: string;
+  total: number;
+  counts: Record<string, number>;
+  /** Every stored spelling the request matched. */
+  matched: string[];
+}
+
+// ── ADR-495: collected doors promoted into a company's building profiles ──
+
+export interface AssignCampaignRequest {
+  company_id: string;
+  /** Must be true: the recorded statement that this company's staff collected it. */
+  attest_collected_for_company: boolean;
+}
+
+export type PromotionDoorState = 'ready' | 'conflict' | 'exists' | 'check_address' | 'already_reviewed';
+
+export interface PromotionRow {
+  id: string;
+  address: string;
+  building_type: string;
+  workload_class: string;
+  workloads: string[];
+  has_security_desk: boolean;
+  collected_on: string;
+  /** The SCRUBBED note — what the profile would store. */
+  note: string | null;
+  review_status: 'pending' | 'promoted' | 'rejected' | 'skipped';
+}
+
+export interface PromotionDoor {
+  door_key: string;
+  /** The canonical address the profile would be stored under. */
+  address: string;
+  state: PromotionDoorState;
+  observers: number;
+  rows: PromotionRow[];
+}
+
+export interface PromotionDecision {
+  door_key: string;
+  action: 'promote' | 'reject';
+  use_row_id?: string;
+}
+
+export interface PromoteRequest {
+  /** 1–500, one per door. */
+  decisions: PromotionDecision[];
+}
+
+export interface PromoteResult {
+  promoted: number;
+  rejected: number;
+  skipped: number;
+  outcomes: { door_key: string; outcome: string; profile_id: string | null }[];
+}
+
+// ── Role guides (ADR-494 D4) ────────────────────────────────────────────────
+// Mirrors backend/app/routers/role_guides.py. types.ts is hand-maintained —
+// there is no codegen — so a field added to RoleGuideResponse must be added
+// here or the client silently cannot see it.
+
+export interface RoleGuide {
+  role: string;
+  operating_mode: 'full' | 'workforce';
+  title: string;
+  body: string;
+  /** True when the tenant rewrote this text, false while it tracks the platform's. */
+  is_customized: boolean;
+}
+
+/** PATCH /my-role/{role}. Bounds mirror the server's Field(...) constraints —
+ *  the server is the enforcer, these stop the client building a 422. */
+export interface RoleGuideUpdate {
+  title: string;   // 1..80
+  body: string;    // 1..8000
+}

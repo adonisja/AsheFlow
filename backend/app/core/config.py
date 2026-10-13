@@ -148,6 +148,32 @@ class Settings(BaseSettings):
     # after deactivation (covers post-departure disputes/references). 0 disables.
     employee_name_retention_days: int = 180
 
+    # ADR-491: trainee Flex credentials are a handoff. Values unconfirmed this many
+    # days after sending are destroyed (the row survives as a status). 0 disables.
+    trainee_credential_retention_days: int = 14
+
+    # ADR-492: individual Amazon scorecards are deleted this many days after their
+    # ISO week began (~13 months: the 52-week reads plus margin), unless held for a
+    # personnel decision or under an open appeal. Company scorecards are exempt.
+    scorecard_retention_days: int = 396
+    # ADR-492 D4: unmatched-Transporter-ID parking rows, counted from the newest
+    # row for that ID — an ID still appearing weekly keeps its history. 0 disables.
+    scorecard_pending_retention_days: int = 56
+
+    # ADR-493 D4: package ids (TBAs) on delivery rows are replaced by a per-row
+    # placeholder this many days after the delivery date — Amazon's 60-day
+    # lost/damaged claim window plus a month. Lengths are kept, because package
+    # counts are read as len(tba_numbers). 0 disables.
+    tba_retention_days: int = 90
+    # ADR-493 D5: OFF until promotion (ADR-495) ships and the backlog is
+    # reviewed; then 180, counted from review. 0 disables.
+    collected_profile_retention_days: int = 0
+    # ADR-493 D3: HMAC key for the erasure ledger, so a ledger entry cannot be
+    # reversed by hashing every NYC address. Set from SSM in staging/prod; an
+    # empty key refuses a real erasure (503) rather than writing an unreplayable
+    # ledger. Dry runs do not need it.
+    pi_erasure_hmac_key: str = ""
+
     # ADR-216 Phase 3: per-stop cutoff-urgency gradient windows (minutes before a
     # building's closing/break cutoff). A stop is RED (urgent) within
     # stop_urgent_window_minutes of its cutoff, YELLOW (caution) the
@@ -160,6 +186,28 @@ class Settings(BaseSettings):
     # unread — an operational notice's shift is long over after a few days).
     # Expired notifications (past expires_at) are pruned regardless of age. The
     # inbox already hides expired/old ones; this reclaims the storage. 0 disables.
+    # ADR-494: an ACKNOWLEDGEMENT is not a notification and does not share its
+    # 3-day window. The notification is a message; this is the record that a
+    # person CHOSE something, and `notification_id` is SET NULL precisely so it
+    # outlives the message (the D8 finding: CASCADE destroyed every ack 3 days
+    # after it was made).
+    #
+    # 1095 days on the same basis as operational_record_retention_days above:
+    # FLSA §211 requires employment records be kept at least 3 years. The
+    # `timecard_mismatch` sign-off IS a wage-and-hour record — the employee
+    # attests to their own hours and breaks — so the longest-justified type sets
+    # the window for all of them. One clock and one cited statute beats a
+    # per-type map that drifts from the registry.
+    #
+    # Counted from `acknowledged_at`, NOT from the notification: by the time this
+    # fires the notification has been gone for ~3 years.
+    #
+    # Note this is not the only thing keeping the row bounded. 180 days after
+    # departure ADR-221 redacts the employee row to REDACTED_NAME with
+    # email/phone/username nulled, so an ack for a departed employee is already
+    # pseudonymous long before this cutoff. 0 disables.
+    acknowledgement_retention_days: int = 1095
+
     notification_retention_days: int = 3
 
     # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
@@ -212,6 +260,26 @@ class Settings(BaseSettings):
     # genuinely-AWS topic", which is correct before the topic exists and should
     # be set once it does.
     sns_ses_topic_arn: str = ""
+
+    # ── ADR-487 D5: SNS mobile push ─────────────────────────────────────────
+    # SNS platform applications, created once per platform with the APNs cert
+    # and the FCM server key. The ARN lives in config; the CREDENTIALS live in
+    # SNS and never reach this repo — that is the whole reason SNS was chosen
+    # over calling APNs and FCM directly (one credential surface, which already
+    # has a health probe and an alerting path).
+    #
+    # EMPTY DISABLES THAT PLATFORM, and is not a misconfiguration. The idiom is
+    # ADR-133's `ses_configuration_set`: empty means "this is not set up yet",
+    # reported once at startup rather than failing per-send. Registration still
+    # succeeds and stores the token with a NULL endpoint_arn, so the day the ARN
+    # appears every already-registered device can be given an endpoint without
+    # anyone re-installing the app.
+    #
+    # Push is ADDITIVE. Everyone receives every notification in-app regardless;
+    # this only decides whether a closed phone also buzzes. Same posture as
+    # ADR-415 D5 took for collection.
+    sns_apns_platform_arn: str = ""   # empty = iOS push disabled
+    sns_fcm_platform_arn: str = ""    # empty = Android push disabled
 
     # Public base URL of the web app — used to build invite links in emails.
     app_base_url: str = "http://localhost:5173"

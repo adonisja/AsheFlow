@@ -25,6 +25,7 @@ write site" lesson, applied to a read.
 """
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 
@@ -37,7 +38,12 @@ from app.schemas.notification import (
 )
 from app.services.notification_spec import RETIRED, SPEC, Severity, Tone
 
-_REGISTRY_FIELDS = ("severity", "label", "tone", "icon", "channels")
+# ADR-494 adds `actions`: the controls a PROMPT or GATE carries, resolved per
+# read exactly like the other five. Always present, `[]` for the 80 types that
+# declare none — a key that appears only for some types is a key the Pydantic
+# model and the hand-built SSE dict can disagree about, which is the drift
+# TestTheTwoTransportsAgree exists to catch.
+_REGISTRY_FIELDS = ("severity", "label", "tone", "icon", "channels", "actions")
 
 
 class TestTheSchemaCarriesTheRegistryFields:
@@ -115,6 +121,76 @@ class TestTheTwoTransportsAgree:
         assert "resolve_spec(" not in src, (
             "from_row must go through spec_fields so both transports share the "
             "same unknown-type fallback"
+        )
+
+    def test_both_transports_pass_the_row_and_session(self):
+        """ADR-494 D6: the server decides a gate degradation, so BOTH paths must
+        hand `spec_fields` the row and a session.
+
+        A path that calls `spec_fields(r.type)` alone gets the registry's
+        declared channels, gate included, with none of the checks run. The
+        result is the exact failure D6 was written to prevent, one layer lower
+        than it anticipated: not web-vs-mobile drift, but REST-vs-SSE drift
+        inside one server, where a gate the list degrades arrives intact over
+        the stream a second later.
+        """
+        import app.routers.notifications as N
+
+        # Also parsed, for the same reason: assert the CALL passes row and db
+        # rather than that the source mentions them.
+        stream_tree = ast.parse(inspect.getsource(N.stream_notifications).lstrip())
+        spec_calls = [
+            node for node in ast.walk(stream_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "spec_fields"
+        ]
+        assert spec_calls, "the SSE path no longer calls spec_fields at all"
+        for call in spec_calls:
+            kwargs = {kw.arg for kw in call.keywords}
+            assert {"row", "db"} <= kwargs, (
+                f"an SSE spec_fields call passes only {sorted(kwargs)} — without "
+                f"row and db every gate it emits skips the ADR-494 D6 checks, so "
+                f"the stream contradicts the list one second later"
+            )
+
+        # PARSED, not grepped. The substring version of this assertion did not
+        # fire when probed: the endpoint's own comment explains the choice by
+        # NAMING `from_row_scoped`, so `"from_row_scoped" in src` matched the
+        # prose while the call said `from_row(r)`. That is the same
+        # prose-not-code false pass this repo has recorded more than fifteen
+        # times, and the better the comment the more reliably it hides the bug.
+        rest_tree = ast.parse(inspect.getsource(N.get_notifications).lstrip())
+        called = {
+            node.func.attr
+            for node in ast.walk(rest_tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert "from_row_scoped" in called, (
+            f"the REST list must CALL from_row_scoped (it calls {sorted(called)}) "
+            f"— plain from_row has no session, so it degrades every gate to a "
+            f"prompt and the gate never appears at all"
+        )
+        assert "from_row" not in called, (
+            "the REST list calls the session-less from_row, which skips every "
+            "ADR-494 D6 check"
+        )
+
+    def test_the_session_aware_constructor_is_the_one_with_db(self):
+        """`from_row` has no session on purpose and must stay that way.
+
+        Both constructors exist so the session is a VISIBLE decision at the call
+        site. If `from_row` grew a `db=None` default the distinction would
+        collapse, and a caller that meant to verify a gate would silently get
+        the weaker answer.
+        """
+        scoped = inspect.signature(NotificationResponse.from_row_scoped)
+        assert "db" in scoped.parameters
+
+        plain = inspect.signature(NotificationResponse.from_row)
+        assert "db" not in plain.parameters, (
+            "from_row gained a session parameter — the two constructors exist "
+            "precisely so the caller cannot omit it by accident"
         )
 
     def test_the_sse_payload_is_json_serialisable(self):

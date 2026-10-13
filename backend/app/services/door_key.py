@@ -86,6 +86,71 @@ def door_key(address: str) -> str:
     return _WHITESPACE.sub(" ", s).strip()
 
 
+# ADR-495 D7 — the DISPLAY form, for a collected address entering
+# `building_profiles`. Unlike door_key this is stored and read back, so it keeps
+# the form GeoClient returns ("433 W 32 ST") rather than a lowercase key.
+#
+# MUST STAY IN STEP WITH `canonicalAddress()` in
+# frontend/src/utils/addressProfile.ts (ADR-420 D4): rows submitted after
+# ADR-420 were already rewritten by it on the page, and promotion must produce
+# the same string for them, or a door collected before ADR-420 and one after
+# would be stored as two buildings.
+# The ONE list of unit/floor words (ADR-497 D2). derive_block_key.py (routing,
+# and the GeoClient request) imports this pattern rather than keeping a copy:
+# two lists drifted, and the routing copy cut `55 Front St` to `55` long after
+# this one was fixed. A noise word followed by a street type is a street name.
+NOISE_PATTERN = (
+    r"\b(attn|attention|apt|unit|ground|floor|fl|host|suite|ste|basement|bsmt|lobby|rear|front)\b"
+    r"(?!\s+(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b)"
+)
+_NOISE = re.compile(NOISE_PATTERN, re.IGNORECASE)
+_CANON_TYPES = [(re.compile(p.pattern, re.IGNORECASE), c.upper()) for p, c in _STREET_TYPES]
+
+
+def canonical_address(address: str) -> str:
+    """`433 West 32nd Street, Apt 4` -> `433 W 32 ST`."""
+    s = _NOISE.split(address)[0].strip().rstrip(",")
+    s = _PUNCT.sub(" ", s)
+    s = re.sub(r"\b(\d+)(st|nd|rd|th)\b", r"\1", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b(north|south|east|west)\b", lambda m: m.group(0)[0], s, flags=re.IGNORECASE)
+    for pattern, canon in _CANON_TYPES:
+        s = pattern.sub(canon, s)
+    return _WHITESPACE.sub(" ", s).strip().upper()
+
+
+# ADR-496 — does this address still name a street?
+#
+# Two different failures, one check. `street_lost` is OUR bug: the input names
+# a street type and canonical_address() dropped it (how `55 Front St` became
+# `55`). `no_street` is the input's: nothing after the house number names a
+# street. MUST STAY IN STEP WITH `addressProblem()` in addressProfile.ts.
+_STREET_WORD = re.compile(
+    r"\b(street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|lane|ln|parkway|pkwy)\b",
+    re.IGNORECASE,
+)
+_DIRECTIONS = frozenset({"n", "s", "e", "w", "north", "south", "east", "west"})
+
+STREET_LOST = "street_lost"
+NO_STREET = "no_street"
+
+ADDRESS_PROBLEM_TEXT = {
+    STREET_LOST: "Part of this address was dropped while tidying it. Check the street name.",
+    NO_STREET: "This address has no street name. Check the entrance or a package label.",
+}
+
+
+def address_problem(address: str) -> str | None:
+    """`street_lost`, `no_street`, or None when the address names a street."""
+    raw = strip_leading_non_number(address or "").strip()
+    canon = canonical_address(raw)
+    if _STREET_WORD.search(raw) and not _STREET_WORD.search(canon):
+        return STREET_LOST
+    words = canon.split()[1:]
+    if not any(re.search(r"[A-Z]", w) and w.lower() not in _DIRECTIONS for w in words):
+        return NO_STREET
+    return None
+
+
 class AddressShapeError(ValueError):
     """The string is not an address. `message` is shown to the collector."""
 

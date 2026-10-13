@@ -215,6 +215,7 @@ backend/tests/routers/test_route_detail.py
 backend/tests/routers/test_route_reassign_unassign.py
 backend/tests/services/test_stop_cutoff.py
 backend/asheflow_private/
+mobile/android/app/google-services.json
 # <<< PROPRIETARY <<<
 
 # ── Local working files, never committed ─────────────────────────────────────

@@ -120,3 +120,19 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// ADR-487 D5 — push. Applied ONLY when google-services.json is present.
+//
+// The plugin fails the whole build when the file is missing, and the file comes
+// from the Firebase console (docs/runbooks/Push-Notifications-Setup.md, step 3).
+// Unconditional, every Android build would break until someone created a
+// Firebase project — including builds that have nothing to do with push.
+//
+// Without the file the app still builds and runs: Firebase stays uninitialised,
+// getToken() rejects, and src/api/pushRegistration.ts treats that as "push
+// unavailable". Push is additive; every notification still arrives in-app.
+if (file("google-services.json").exists()) {
+    apply plugin: "com.google.gms.google-services"
+} else {
+    logger.lifecycle("google-services.json not found: building WITHOUT push (ADR-487 D5)")
+}

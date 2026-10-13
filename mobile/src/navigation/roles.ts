@@ -136,4 +136,10 @@ export const TAB_GATES: Record<string, TabGate> = {
   Preferences:     { roles: PREFERENCES_ROLES },
   Notifications:   { roles: [] },
   Account:         { roles: [] },
+  // ADR-494 D4. `roles: []` = every authenticated role, and NO `feature:` gate
+  // deliberately: the row is keyed by (company, role, mode) and the server
+  // returns the one matching the CURRENT mode, so a tenant who switches finds
+  // the other set already written. A capability gate here would hide the
+  // destination of the very notification that announces the switch.
+  MyRole:          { roles: [] },
 };

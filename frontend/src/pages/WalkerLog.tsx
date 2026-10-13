@@ -33,7 +33,7 @@ import LabelScanner from '../components/walkerlog/LabelScanner';
 import ImportDialog from '../components/walkerlog/ImportDialog';
 import AddressProfileForm from '../components/walkerlog/AddressProfileForm';
 import {
-  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress, BUILDING_TYPES, collectorHandle, rememberHandle} from '../utils/addressProfile';
+  emptyProfile, isUsable, profileId, type AddressProfile, knownAddresses, rememberKnown, doorKey, canonicalAddress, addressProblem, ADDRESS_PROBLEM_TEXT, BUILDING_TYPES, collectorHandle, rememberHandle} from '../utils/addressProfile';
 import {
   checkAddress, submitConfigured, submitProfiles, fetchLeaderboard,
   findDeletedSubmissions,
@@ -711,7 +711,16 @@ export default function WalkerLog({ dataset = 'routes' }: {
     // this the duplicate check still matched (it folds both spellings to one
     // key), but two collectors saw two different strings for one door and had
     // no reason to believe they had hit the same building.
-    const canon = p.address.trim() ? canonicalAddress(p.address) : '';
+    //
+    // ADR-496 D2: NEVER rewrite into a damaged address. If the address names no
+    // street, or the tidy-up would drop the street it named (how "55 Front St"
+    // became "55"), the collector's own words stay in the field and they are
+    // told why. The form still opens — a collector at a door is never blocked.
+    const problem = p.address.trim() ? addressProblem(p.address) : null;
+    if (problem) setError(`${p.address.trim()}: ${ADDRESS_PROBLEM_TEXT[problem]}`);
+    // Fixed now: clear only OUR warning, never an unrelated error.
+    else setError((e) => (Object.values(ADDRESS_PROBLEM_TEXT).some((t) => e.endsWith(t)) ? '' : e));
+    const canon = p.address.trim() && !problem ? canonicalAddress(p.address) : '';
     if (canon && canon !== p.address) {
       p = { ...p, address: canon };
       setProfiles((ps) => ps.map((x) => (x.id === p.id ? p : x)));
@@ -884,6 +893,12 @@ export default function WalkerLog({ dataset = 'routes' }: {
           held ? `held back ${held}` : '',
         ].filter(Boolean).join(', ') + '.',
       );
+      // ADR-496 D3. Sent and kept, but a reviewer will check these — say so,
+      // in a message that stays until the next action rather than a flash.
+      if (r.needs_review_addresses.length > 0) {
+        setError(`Sent, but flagged for review: ${r.needs_review_addresses.join('; ')}. `
+          + 'Check the street name if you can.');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send.');
     } finally {

@@ -245,7 +245,11 @@ async def employee_signoff(
     
     adjustment.status = "pending_manager"
     adjustment.employee_signed_off_at = datetime.now(timezone.utc)
-    db.commit()
+    # ADR-490: the audit joins the SAME transaction as the status change it
+    # records. It used to sit below this commit, so anything raising in the
+    # notification fan-out below would have committed a payroll signoff with no
+    # record of who signed it — and ADR-487 D1's registry REFUSES an undeclared
+    # type, which is exactly such a raise.
     write_audit(
         db, actor_id=str(caller.id),
         company_id=caller.company_id,
@@ -254,6 +258,7 @@ async def employee_signoff(
         target_id=str(adjustment.id),
         before={"status": "pending_employee"}, after={"status": "pending_manager"}
     )
+    db.commit()
 
     managers_and_admins = db.query(Employee).filter(
         Employee.company_id == caller.company_id,
@@ -383,7 +388,18 @@ async def manager_sign_off(
         adjustment.status = "write_failed"
         adjustment.write_attempt_count += 1
 
-    db.commit()
+    # ADR-490: above THIS commit, not the earlier one at the approval.
+    #
+    # Unlike the other two endpoints in this file, this audit cannot simply move
+    # to the top: its `after` reports the status AFTER the ADP write
+    # ("applied" / "write_failed"), so it depends on a result that does not exist
+    # until the call above returns. Moving it higher would record "approved" for
+    # an adjustment that then failed to write.
+    #
+    # The earlier `db.commit()` at the approval is deliberate and stays: it
+    # persists the manager's decision before an outbound HTTP call that may hang
+    # or fail, so the decision survives a timeout. What this fixes is only the
+    # second window — the ADP outcome and its record now land together.
     write_audit(
         db, actor_id=str(caller.id),
         company_id=str(caller.company_id),
@@ -393,6 +409,7 @@ async def manager_sign_off(
         before={"status": "pending_manager"},
         after={"status": adjustment.status}
     )
+    db.commit()
 
     if adjustment.status == "applied":
         notif_message = (
@@ -443,8 +460,11 @@ def reject_adjustment(
     
     previous_status = adjustment.status
     adjustment.status = "rejected"
-    db.commit()
 
+    # ADR-490: above the commit, so the rejection and its record land together.
+    # `before` reads `previous_status` which was captured BEFORE the mutation —
+    # that ordering was already right and is why this reorder is safe: the audit
+    # does not depend on anything the commit does.
     write_audit(
         db, actor_id=str(caller.id),
         company_id=str(caller.company_id),
@@ -454,6 +474,7 @@ def reject_adjustment(
         before={"status": previous_status},
         after={"status": adjustment.status}
     )
+    db.commit()
 
     # ADR-487 D1. TWO TYPES, not one branched.
     #

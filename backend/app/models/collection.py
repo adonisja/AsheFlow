@@ -92,6 +92,14 @@ class CollectionToken(Base):
     created_by_name = Column(String(100), nullable=True)
     created_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    # ADR-495 D3. An OPEN campaign handed to the one company whose staff
+    # collected it. One-way: set once, with company_id and scope, and never
+    # changed, because moving it again would move one DSP's addresses to
+    # another. `assigned_by` is the super admin's id; they have no Employee
+    # row, so there is no FK.
+    assigned_at     = Column(DateTime(timezone=True), nullable=True)
+    assigned_by     = Column(String(64), nullable=True)
+
 
 class CollectedAddressProfile(Base):
     """One building profile submitted from the public collection page.
@@ -174,12 +182,19 @@ class CollectedAddressProfile(Base):
     # Indexed with door_key because the only query is "did THIS device already
     # submit THIS door under this campaign".
     device_id = Column(String(64), nullable=True, index=True)
+
+    # ADR-496 D3. "street_lost" | "no_street" | NULL, from address_problem() at
+    # submit. The row is ACCEPTED either way: the page is public and used at a
+    # door, so a fixable field must not cost the observation. The flag puts it
+    # in front of a reviewer instead of letting a bare "55" pass as an address.
+    address_flag = Column(String(20), nullable=True, index=True)
     collected_on = Column(Date, nullable=False)
 
     submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    # Promotion review. Null = untouched; the rest is set by an authenticated
-    # human, which is the whole point of the quarantine.
+    # Promotion review (ADR-495 D8). `pending` = untouched; then exactly one of
+    # `promoted`, `rejected`, `skipped` (the company already had the door),
+    # set by an authenticated human and never changed afterwards.
     review_status = Column(String(20), nullable=False, server_default="pending", index=True)
     reviewed_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     reviewed_at   = Column(DateTime(timezone=True), nullable=True)

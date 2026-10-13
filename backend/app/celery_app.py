@@ -115,6 +115,26 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.notification_sweep.resweep_undelivered",
         "schedule": crontab(minute="*/10"),
     },
+    # ADR-487 D5. Fires pushes whose quiet-hours hold has expired. The resweep
+    # above deliberately skips held rows, so without this the exclusion is a
+    # leak: a push stamped at 02:00 would be skipped forever and sent by nothing.
+    #
+    # */5 rather than */10: this is the LATENCY of a held push, not a safety
+    # net. A walker's 04:00 shift-start notification arriving at 04:09 is worse
+    # than one arriving at 04:04, and the query is a single indexed range scan
+    # over a column that is NULL for almost every row.
+    "release-held-pushes": {
+        "task": "app.tasks.notification_sweep.release_held_pushes",
+        "schedule": crontab(minute="*/5"),
+    },
+    # ADR-500: give live devices with no SNS endpoint one. Registration succeeds
+    # without an endpoint by design, and re-registration only repairs people who
+    # open the app. Hourly: a NULL endpoint costs a missed push, not data. Minute 23
+    # because */5, */10 and */15 own the multiples of five and :07 is taken.
+    "backfill-push-endpoints": {
+        "task": "app.tasks.push_delivery_task.backfill_endpoints",
+        "schedule": crontab(minute=23),
+    },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
         "schedule": crontab(minute="*/10"),
@@ -201,6 +221,17 @@ celery_app.conf.beat_schedule = {
         # skip the entries that carry them.
         "schedule": crontab(hour=3, minute=31, day_of_month=1),
     },
+    # ADR-494. Monthly on the 1st, like its sibling above: a 1095-day window
+    # does not need a daily scan, and a monthly job that deletes nothing for
+    # three years is cheaper to reason about than a daily one.
+    #
+    # 3:32, one minute after the operational purge. Deliberately NOT 3:31 —
+    # that entry's own comment records a collision that only fired on the 1st
+    # of the month, which is exactly the day this runs.
+    "purge-expired-acknowledgements": {
+        "task": "app.tasks.cleanup.purge_expired_acknowledgements",
+        "schedule": crontab(hour=3, minute=32, day_of_month=1),
+    },
     # 02:30 AM Eastern — decay BuildingProfile troublesome scores (~30d half-life, ADR-218).
     "decay-troublesome-scores-nightly": {
         "task": "app.tasks.cleanup.decay_troublesome_scores",
@@ -248,6 +279,29 @@ celery_app.conf.beat_schedule = {
     "redact-departed-employee-names-nightly": {
         "task": "app.tasks.cleanup.redact_departed_employee_names",
         "schedule": crontab(hour=4, minute=31),
+    },
+    # 04:45 Eastern — ADR-492. Individual scorecards past ~13 months (unless held
+    # or under an open appeal) and unmatched-ID imports past 8 weeks. After the
+    # 04:31 name redaction, which also touches scorecard_appeals, so the two never
+    # interleave on that table.
+    "purge-expired-scorecards-nightly": {
+        "task": "app.tasks.cleanup.purge_expired_scorecards",
+        "schedule": crontab(hour=4, minute=45),
+    },
+    # 04:47 Eastern — ADR-491. Destroy trainee Flex credentials unconfirmed 14 days
+    # after sending. Pure DB, independent of the scorecard purge; :47 rather than
+    # :45 so each has its own minute in the log.
+    "expire-trainee-credentials-nightly": {
+        "task": "app.tasks.cleanup.expire_trainee_credentials",
+        "schedule": crontab(hour=4, minute=47),
+    },
+    # 04:49 Eastern — ADR-493 D4/D8. Package ids past 90 days become placeholders;
+    # audit snapshots lose the addresses (48h) and package ids (90d) that the
+    # row-level retention already cleared. After the 04:00 address nulling, so a
+    # night's audit pass sees the same cutoff the rows just crossed.
+    "expire-package-ids-and-audit-pi-nightly": {
+        "task": "app.tasks.cleanup.expire_package_ids_and_audit_pi",
+        "schedule": crontab(hour=4, minute=49),
     },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {

@@ -50,6 +50,12 @@ from app.models.campaign import (  # ADR-485
     CampaignResponse, CampaignRun, CampaignSchedule,
 )
 from app.models.notice import NoticeTemplate, NoticeSchedule  # ADR-488
+from app.models.device_token import (  # ADR-487 D5
+    DevicePlatform, DeviceToken,
+)
+from app.models.role_guide import (  # ADR-494
+    NotificationAcknowledgement, RoleGuide,
+)
 from app.models.delivery_stop import DeliveryStop
 from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment, DamagedPackage
 from app.models.shift_roll_call import ShiftRollCall
@@ -64,3 +70,4 @@ from app.models.workforce_ov import WorkforceOV  # ADR-400 A4: OVs are their own
 from app.models.crew_pin import CrewPin, CrewPinMember
 from app.models.truck_pin import TruckPin
 from app.models.collection import CollectionToken, CollectedAddressProfile  # ADR-415: public collection quarantine
+from app.models.pi_erasure_ledger import PiErasureLedger  # ADR-493

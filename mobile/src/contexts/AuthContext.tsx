@@ -6,6 +6,7 @@ import React, {
   useCallback,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { unregisterFromPush } from '@api/pushRegistration';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
 import { Linking } from 'react-native';
 import { Platform } from 'react-native';
@@ -314,6 +315,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    // ADR-487 D5. BEFORE clearTokens: the revoke is an authenticated DELETE,
+    // and afterwards it would 401 — leaving this phone receiving the previous
+    // user's notifications. Best effort and never throws, so sign-out cannot
+    // be blocked by push.
+    await unregisterFromPush();
     await clearTokens();
     setUser(null);
     setCapabilities(null);

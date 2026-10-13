@@ -43,6 +43,29 @@ export interface Notification {
    *  this surface cannot compute. Hardcoding the 20 would drift from the
    *  server the first time a type is added. */
   channels: string[];
+
+  /** The controls this notification CARRIES, resolved from the registry per
+   *  read like `channels` is (ADR-494).
+   *
+   *  Empty for the 80 types that declare none, so a surface that ignores it
+   *  behaves exactly as before. A PROMPT or GATE, though, must name where the
+   *  reader goes — a sheet whose only control is "dismiss" trains people to
+   *  close modals without reading them, which is the failure ADR-494 D1 set
+   *  out to remove.
+   *
+   *  `route` is a web path. It is the same string the mobile app receives, by
+   *  contract, so a gate cannot send one surface somewhere the other cannot
+   *  reach. */
+  actions: NotificationAction[];
+}
+
+/** One control on a notification. `style` is a semantic role, never a colour —
+ *  the two surfaces own different palettes, so a hex from the server would be
+ *  wrong on at least one of them. */
+export interface NotificationAction {
+  label: string;
+  route: string;
+  style: 'default' | 'primary' | 'danger';
 }
 
 interface NotificationContextType {
@@ -51,6 +74,14 @@ interface NotificationContextType {
   employeeId: string | null;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
+  /** Record that the person CHOSE something about an interruptive notification
+   *  (ADR-494 D7). Distinct from `markRead`, which is set by rendering — a
+   *  prompt closed by a stray tap must not become evidence of consent. */
+  acknowledge: (
+    id: string,
+    action: 'confirmed' | 'skipped' | 'unavailable',
+    shownAs: 'gate' | 'prompt',
+  ) => Promise<void>;
   refresh: () => void;
   setOnNotification: (cb: ((type: string) => void) | null) => void;
 }
@@ -169,6 +200,36 @@ export const NotificationProvider = ({ children }: { children: React.ReactNode }
     setNotifications([]);
   }, [employeeId]);
 
+  /** ADR-494 D7. Records a CHOICE, and the server marks the row read as part of
+   *  it — so this does not also call markRead, which would be a second request
+   *  doing what the first already did.
+   *
+   *  Errors are NOT swallowed, unlike markRead above. A failed read flag is
+   *  cosmetic and self-corrects on the next poll; a failed acknowledgement
+   *  means the gate stays up, and the caller needs to know that so it can keep
+   *  the sheet open rather than dismissing it over a lost record. A 409 is the
+   *  exception: the row already exists, so the gate is genuinely answered and
+   *  the caller should proceed.
+   */
+  const acknowledge = useCallback(async (
+    id: string,
+    action: 'confirmed' | 'skipped' | 'unavailable',
+    shownAs: 'gate' | 'prompt',
+  ) => {
+    try {
+      await axiosClient.post(`/notifications/${id}/acknowledge`, {
+        action,
+        shown_as: shownAs,
+      });
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      // 409 = already acknowledged. The record exists, which is all the caller
+      // needed; re-throwing would keep a gate up that is already answered.
+      if (status !== 409) throw err;
+    }
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }, []);
+
   return (
     <NotificationContext.Provider value={{
       notifications,
@@ -176,6 +237,7 @@ export const NotificationProvider = ({ children }: { children: React.ReactNode }
       employeeId,
       markRead,
       markAllRead,
+      acknowledge,
       refresh,
       setOnNotification,
     }}>

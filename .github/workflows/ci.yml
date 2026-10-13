@@ -176,6 +176,13 @@ jobs:
       - name: Cognito sends no email of its own
         run: python scripts/check_cognito_suppressed.py
 
+      # An audit row added AFTER the commit is discarded when get_db closes the
+      # session. Measured at ADR-490: the whole employee lifecycle (create, bulk
+      # import, update) wrote no audit trail at all — 22 employees locally with
+      # zero `employee.create` rows, while the audit system itself worked fine.
+      - name: Every audit row joins its own transaction
+        run: python scripts/check_audit_before_commit.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit

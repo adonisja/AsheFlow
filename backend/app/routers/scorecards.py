@@ -3,12 +3,15 @@
 POST   /scorecards                 — mgmt creates/updates a week's scorecard (structured entry)
 GET    /scorecards/me              — the caller's own scorecards (latest first)
 GET    /scorecards/{week}          — mgmt: all scorecards for a week (individual + company)
-DELETE /scorecards/{scorecard_id}  — mgmt removes one
+DELETE /scorecards/{scorecard_id}  — mgmt removes one (409 while held)
+POST   /scorecards/{scorecard_id}/retention-hold — mgmt holds past 13 months (ADR-492)
+DELETE /scorecards/{scorecard_id}/retention-hold — mgmt releases the hold
 
 Amazon-computed values are stored/displayed as-is. The cross-check (Phase D) compares a subset
 against our DeliveryStop/RTS data. This router is public — no proprietary algorithm.
 """
 import re
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,7 +37,7 @@ from app.schemas.scorecard import (
     CompanyStandingCard, IndividualTrendResponse, IndividualMetricTrend,
     IndividualMetricPoint, IndividualRosterResponse, IndividualRosterRow,
     ScorecardTrendResponse, MetricTrend, MetricTrendPoint, StandingPoint,
-    ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn,
+    ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn, RetentionHoldIn, ScorecardRetentionRow,
     PackageRecord, PackageSearchResponse,
     CrossCheckResponse, CrossCheckItem, RtsReasonEvidence,
 )
@@ -64,6 +67,8 @@ def _serialize(sc: Scorecard, emp_name: Optional[str]) -> dict:
         "employee_id": sc.employee_id, "employee_name": emp_name,
         "overall_standing": sc.overall_standing, "source_file_url": sc.source_file_url,
         "created_at": sc.created_at, "metrics": sc.metrics,
+        "retention_hold_until": sc.retention_hold_until,
+        "retention_hold_indefinite": bool(sc.retention_hold_indefinite),
     }
 
 
@@ -806,6 +811,10 @@ def delete_scorecard(
     ).first()
     if not sc:
         raise HTTPException(status_code=404, detail="Scorecard not found.")
+    if _is_held(sc):
+        # ADR-492 — the hold exists to keep this record; a manual delete is the
+        # same loss as the nightly purge would be.
+        raise HTTPException(status_code=409, detail="This scorecard is under a retention hold. Release the hold first.")
     db.delete(sc)
     write_audit(
         db=db, company_id=caller.company_id, actor_id=caller.id,
@@ -813,6 +822,165 @@ def delete_scorecard(
         detail={"week": sc.week, "scope": sc.scope},
     )
     db.commit()
+
+
+# ── Retention holds (ADR-492) ────────────────────────────────────────────────
+
+# One year from the personnel decision (EEOC 29 CFR 1602.14).
+_PERSONNEL_HOLD_DAYS = 365
+
+
+def _is_held(sc: Scorecard) -> bool:
+    return bool(sc.retention_hold_indefinite) or (
+        sc.retention_hold_until is not None and sc.retention_hold_until >= date.today()
+    )
+
+
+def _hold_snapshot(sc: Scorecard) -> dict:
+    return {
+        "retention_hold_until": sc.retention_hold_until.isoformat() if sc.retention_hold_until else None,
+        "retention_hold_indefinite": bool(sc.retention_hold_indefinite),
+    }
+
+
+def _held_individual(db: Session, scorecard_id: UUID, caller: Employee) -> Scorecard:
+    sc = db.query(Scorecard).filter(
+        Scorecard.id == scorecard_id, Scorecard.company_id == caller.company_id,
+    ).first()
+    if not sc:
+        raise HTTPException(status_code=404, detail="Scorecard not found.")
+    if sc.scope != "individual":
+        raise HTTPException(
+            status_code=422,
+            detail="Only individual scorecards carry personal data and a retention clock.",
+        )
+    return sc
+
+
+def _out_with_name(db: Session, sc: Scorecard, caller: Employee) -> dict:
+    name = None
+    if sc.employee_id:
+        name = db.query(Employee.name).filter(
+            Employee.id == sc.employee_id, Employee.company_id == caller.company_id,
+        ).scalar()
+    return _serialize(sc, name)
+
+
+@router.get("/individual/{employee_id}/records", response_model=List[ScorecardRetentionRow])
+def individual_retention_records(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """One person's individual scorecards with their retention state (ADR-492 D5),
+    newest first. Management/admin only — same tier as the roster."""
+    from app.core.config import settings
+    from app.models.scorecard_appeal import ScorecardAppeal
+    from app.tasks.cleanup import _iso_week_monday
+
+    cards = (
+        db.query(Scorecard)
+        .filter(Scorecard.company_id == caller.company_id,
+                Scorecard.scope == "individual",
+                Scorecard.employee_id == employee_id)
+        .order_by(Scorecard.week.desc())
+        .all()
+    )
+    open_ids = {
+        r[0] for r in db.query(ScorecardAppeal.scorecard_id).filter(
+            ScorecardAppeal.company_id == caller.company_id,
+            ScorecardAppeal.scorecard_id.in_([c.id for c in cards] or [None]),
+            ScorecardAppeal.status.in_(("draft", "submitted")),
+        )
+    }
+    days = settings.scorecard_retention_days
+    rows = []
+    for c in cards:
+        monday = _iso_week_monday(c.week)
+        removed_after = None
+        if monday is not None and days > 0 and not c.retention_hold_indefinite:
+            removed_after = monday + timedelta(days=days)
+            if c.retention_hold_until and c.retention_hold_until > removed_after:
+                removed_after = c.retention_hold_until
+        rows.append(ScorecardRetentionRow(
+            id=c.id, week=c.week, overall_standing=c.overall_standing,
+            retention_hold_until=c.retention_hold_until,
+            retention_hold_indefinite=bool(c.retention_hold_indefinite),
+            removed_after=removed_after, open_appeal=c.id in open_ids,
+        ))
+    return rows
+
+
+@router.post("/{scorecard_id}/retention-hold", response_model=ScorecardOut)
+def set_retention_hold(
+    scorecard_id: UUID,
+    body: RetentionHoldIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """Hold an individual scorecard past its 13-month window (ADR-492 D3).
+
+    A hold can only be extended, never shortened: a later decision cannot
+    release a record an earlier one still needs.
+    """
+    sc = _held_individual(db, scorecard_id, caller)
+    before = _hold_snapshot(sc)
+
+    if body.kind == "legal_charge":
+        sc.retention_hold_indefinite = True
+    else:
+        if sc.retention_hold_indefinite:
+            raise HTTPException(status_code=409, detail="Already held until released (open charge).")
+        until = body.decision_date + timedelta(days=_PERSONNEL_HOLD_DAYS)
+        if sc.retention_hold_until is not None and until < sc.retention_hold_until:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Already held until {sc.retention_hold_until.isoformat()}; a hold can only be extended.",
+            )
+        sc.retention_hold_until = until
+
+    sc.retention_hold_set_by = caller.id
+    sc.retention_hold_set_at = datetime.now(timezone.utc)
+    db.flush()
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="scorecard.retention_hold.set", target_table="scorecards",
+        target_id=str(sc.id), before=before,
+        after={**_hold_snapshot(sc), "kind": body.kind, "week": sc.week},
+    )
+    db.commit()
+    db.refresh(sc)
+    return _out_with_name(db, sc, caller)
+
+
+@router.delete("/{scorecard_id}/retention-hold", response_model=ScorecardOut)
+def release_retention_hold(
+    scorecard_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """Release a hold. The 13-month clock resumes; an old scorecard is then
+    removed by the next nightly run (ADR-492)."""
+    sc = _held_individual(db, scorecard_id, caller)
+    if not sc.retention_hold_indefinite and sc.retention_hold_until is None:
+        raise HTTPException(status_code=409, detail="This scorecard has no retention hold.")
+    before = _hold_snapshot(sc)
+    sc.retention_hold_until = None
+    sc.retention_hold_indefinite = False
+    sc.retention_hold_set_by = caller.id
+    sc.retention_hold_set_at = datetime.now(timezone.utc)
+    db.flush()
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="scorecard.retention_hold.release", target_table="scorecards",
+        target_id=str(sc.id), before=before, after={**_hold_snapshot(sc), "week": sc.week},
+    )
+    db.commit()
+    db.refresh(sc)
+    return _out_with_name(db, sc, caller)
 
 
 # ── Company trend ────────────────────────────────────────────────────────────

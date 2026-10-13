@@ -1,3 +1,4 @@
+import { fetchAuthSession } from 'aws-amplify/auth';
 import axiosClient from '../api/axiosClient';
 
 /** Discovering the campaigns your own company may submit to (ADR-485 D9).
@@ -34,12 +35,24 @@ export interface MyCampaign {
  *  the rest of this page takes (ADR-415 D5).
  */
 export async function fetchMyCampaigns(): Promise<MyCampaign[]> {
+  // ADR-502 — NO SESSION, NO REQUEST. The catch below cannot absorb a 401:
+  // axiosClient's response interceptor runs FIRST, signs out and sends the
+  // browser to /login. Every signed-out collector on the public page was
+  // redirected away from it on load. Asking without a session is never useful
+  // (the answer comes from caller.company_id), so don't ask.
+  try {
+    const session = await fetchAuthSession();
+    if (!session.tokens?.idToken) return [];
+  } catch {
+    return [];
+  }
   try {
     const res = await axiosClient.get<MyCampaign[]>('/collection/my-campaigns');
     return Array.isArray(res.data) ? res.data : [];
   } catch {
-    // Includes the 401 a signed-out visitor gets on the public collection page,
-    // which is an expected state here, not an error worth surfacing.
+    // A signed-in caller's failure (network, 5xx). An expired session's 401
+    // still reaches the interceptor's redirect, which is right for a user who
+    // has an account.
     return [];
   }
 }

@@ -10,6 +10,8 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import AssignCampaign from '../../components/collection/AssignCampaign';
+import CampaignPromotion from '../../components/collection/CampaignPromotion';
 import {
   groupByDoor, compareProfiles, filterProfiles,
   NO_FILTERS, hasActiveFilters,
@@ -247,6 +249,9 @@ const CSV_COLUMNS = [
   'has_security_desk', 'workloads', 'workload_other', 'workload_class',
   'raw_note', 'opens_at', 'closes_at', 'break_start', 'break_end',
   'troublesome', 'collected_by', 'collected_on', 'submitted_at',
+  // ADR-496. Last and not a BuildingProfile column: an export must not let a
+  // flagged "55" pass for an address once it is out of this page.
+  'address_flag',
 ] as const;
 
 /** One profile as a row, in CSV_COLUMNS order.
@@ -266,6 +271,7 @@ function profileRow(r: CollectedProfile): unknown[] {
     r.opens_at ?? '', r.closes_at ?? '', r.break_start ?? '', r.break_end ?? '',
     r.troublesome ? 'true' : 'false',
     r.collected_by ?? '', r.collected_on, r.submitted_at,
+    r.address_flag ?? '',
   ];
 }
 
@@ -675,6 +681,10 @@ export default function CollectionData({ platform = true }: {
 
   /** The selected campaign, or null on "All campaigns". Carries the link, so
    *  the row below can show it (ADR-424). */
+  // ADR-495. The promotion review for the selected campaign, company view only.
+  const [reviewing, setReviewing] = useState(false);
+  useEffect(() => { setReviewing(false); }, [activeToken]);
+
   const selected = useMemo(
     () => tokens.find((t) => t.id === activeToken) ?? null,
     [tokens, activeToken],
@@ -877,9 +887,32 @@ export default function CollectionData({ platform = true }: {
               </p>
             </div>
           )}
+
+          {/* ADR-495 D3. An open campaign reaches a company's Building
+              Profiles only after the platform hands it to that company. */}
+          {platform && selected && selected.scope === 'open' && selected.company_id === null
+            && selected.dataset === 'addresses' && (
+            <AssignCampaign token={selected} onAssigned={() => void loadTokens()} />
+          )}
+          {platform && selected?.assigned_at && (
+            <p className="text-[11px] text-muted-foreground">
+              Assigned to a company {formatDate(selected.assigned_at)}. Its admins review it from Building survey.
+            </p>
+          )}
+          {/* ADR-495 D2. The company reviews its own doors. */}
+          {!platform && selected && selected.dataset === 'addresses' && selected.submission_count > 0 && (
+            <button type="button" onClick={() => setReviewing(true)}
+              className="btn-secondary w-full text-xs">
+              Review for Building Profiles
+            </button>
+          )}
         </aside>
 
         {/* ── Rows ─────────────────────────────────────────────────────── */}
+        {reviewing && selected ? (
+          <CampaignPromotion tokenId={selected.id} label={selected.label}
+            onClose={() => setReviewing(false)} />
+        ) : (
         <section className="card p-4 space-y-3">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
@@ -1235,6 +1268,17 @@ export default function CollectionData({ platform = true }: {
                         {p.note && (
                           <span className="block text-[11px] text-muted-foreground">{p.note}</span>
                         )}
+                        {/* ADR-496. Accepted at submit but not trusted as an address. */}
+                        {p.address_flag && (
+                          <span
+                            className="mt-0.5 mr-1 inline-block rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning"
+                            title={p.address_flag === 'street_lost'
+                              ? 'The street name was dropped while tidying this address.'
+                              : 'This address has no street name.'}
+                          >
+                            check address
+                          </span>
+                        )}
                         {p.troublesome && (
                           <span className="mt-0.5 inline-block rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">
                             troublesome
@@ -1349,6 +1393,7 @@ export default function CollectionData({ platform = true }: {
           </>
           )}
         </section>
+        )}
       </div>
 
       {/* NAMES THE ADDRESS, and says plainly that it cannot be undone.

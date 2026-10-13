@@ -10,6 +10,23 @@ from app.services.notification_spec import Channel, Severity, Tone, resolve_spec
 logger = logging.getLogger(__name__)
 
 
+class NotificationActionOut(BaseModel):
+    """One control a notification carries (ADR-494).
+
+    A RESPONSE model, so the Dimension 9 rule about `Any` at the trust boundary
+    does not apply — nothing here is client-supplied. The shape mirrors
+    `notification_spec.NotificationAction` exactly; it is restated rather than
+    reused because that one is a frozen dataclass in a module with no Pydantic
+    dependency, and importing a schema there would invert the layering.
+    """
+
+    label: str
+    route: str
+    style: str = "default"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class NotificationResponse(BaseModel):
     """One notification, with its routing resolved from the registry (ADR-487 D4).
 
@@ -67,6 +84,16 @@ class NotificationResponse(BaseModel):
     # 18 of 80; the approved registry has 20 of 82), which is the argument.
     channels: list[str]
 
+    # ADR-494. The controls a PROMPT or GATE carries, resolved from the registry
+    # per read like `channels` is. Empty for the 80 types that declare none, so
+    # a client that ignores it sees exactly what it saw before.
+    #
+    # A list of objects rather than a single `redirect_to` string: ADR-494 D10
+    # approved two controls on some types, and a bare route cannot carry the
+    # label or the style. The `style` is a semantic role ("primary", "danger"),
+    # never a colour — the surfaces own different palettes.
+    actions: list[NotificationActionOut] = []
+
     model_config = ConfigDict(from_attributes=True)
 
     @classmethod
@@ -91,7 +118,35 @@ class NotificationResponse(BaseModel):
             # The SAME degrading resolution the SSE path uses. Calling
             # resolve_spec directly here would make one undeclared legacy row
             # 500 the whole list on REST while the stream rendered it fine.
-            **spec_fields(row.type),
+            #
+            # `row` is passed so ADR-494 D6's gate check can run. No session is
+            # available here — this is a classmethod on a schema — so only the
+            # checks that need no query apply (expiry), and the rest fail safe
+            # to a prompt. `from_row_scoped` is the session-aware entry point
+            # that routers use; this one stays for callers that have no db.
+            **spec_fields(row.type, row=row),
+        )
+
+    @classmethod
+    def from_row_scoped(cls, row, db) -> "NotificationResponse":
+        """`from_row` with a session, so every ADR-494 D6 check can run.
+
+        Two constructors rather than a default `db=None` on one, because the
+        difference is not a detail a caller should be able to miss: without a
+        session a gate degrades to a prompt, and a router that MEANT to verify
+        the gate would silently get the weaker answer. A separate name makes the
+        session a visible decision at the call site.
+        """
+        return cls(
+            id=row.id,
+            employee_id=row.employee_id,
+            type=row.type,
+            message=row.message,
+            is_read=row.is_read,
+            created_at=row.created_at,
+            dispatch_date=row.dispatch_date,
+            expires_at=row.expires_at,
+            **spec_fields(row.type, row=row, db=db),
         )
 
 
@@ -106,6 +161,9 @@ def _channel_names(channels: Channel) -> list[str]:
     `[]`, which is correct: no channel means nothing routes anywhere.
     """
     return sorted(c.name.lower() for c in Channel if c is not Channel.NONE and c in channels)
+
+
+from app.services.notification_degrade import degrade_channels, drop_if_settled
 
 
 # What an unrecognised type renders as. See `_resolve_for_read`.
@@ -152,21 +210,54 @@ def _resolve_for_read(notification_type: str) -> dict:
             notification_type,
         )
         return {**_UNKNOWN_FALLBACK, "label": notification_type}
-    return {
+    out = {
         "severity": spec.severity.value,
         "label": spec.label,
         "tone": spec.tone.value,
         "icon": spec.icon,
         "channels": _channel_names(spec.channels),
     }
+    # ADR-494: a PROMPT or GATE must name where the reader goes, so the controls
+    # travel with the notification rather than being a per-type `switch` in each
+    # client.
+    #
+    # ALWAYS present, `[]` for the 80 types that declare none. The first draft
+    # emitted it only when non-empty, which ADR-487 D4's contract test caught:
+    # `test_a_declared_type_resolves` asserts every type resolves to the SAME
+    # field set, because a key that appears per-type is a key the hand-built SSE
+    # dict and the Pydantic model can disagree about — the two-transport drift
+    # that file exists to prevent. A conditional key also makes the client write
+    # `n.actions?.map` on one transport and `n.actions.map` on the other.
+    out["actions"] = [
+        {"label": a.label, "route": a.route, "style": a.style}
+        for a in spec.actions
+    ]
+    return out
 
 
-def spec_fields(notification_type: str) -> dict:
-    """The four registry-resolved fields, as JSON-ready primitives.
+def spec_fields(notification_type: str, row=None, db=None) -> dict:
+    """The registry-resolved fields, as JSON-ready primitives.
 
     The single place both serialisation paths get them. `.value` on the enums
     because the SSE path hands its dict to `json.dumps`, which cannot serialise
     a StrEnum member on its own — and because the wire contract is the string,
     not Python's enum identity.
+
+    `row` and `db` are what ADR-494 D6 added: the server decides when a GATE
+    cannot be honoured and omits it, so neither client implements a downgrade
+    rule and they cannot disagree about one. Both are optional and the omission
+    fails SAFE — without them an unverifiable gate degrades to a prompt rather
+    than walling someone.
+
+    `actions` is included only when the type declares them, so the 80 types
+    that carry none keep their payload unchanged.
     """
-    return _resolve_for_read(notification_type)
+    fields = _resolve_for_read(notification_type)
+
+    if row is not None:
+        fields["channels"] = degrade_channels(db, row, fields["channels"])
+        # ADR-505 D2: a notification with a final answer stops interrupting.
+        # After degrade_channels, so a degraded gate (now a prompt) is settled too.
+        fields["channels"] = drop_if_settled(db, row, fields["channels"])
+
+    return fields

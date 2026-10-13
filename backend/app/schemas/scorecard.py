@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from typing import Optional, List, Literal
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class ScorecardMetricIn(BaseModel):
@@ -73,7 +73,42 @@ class ScorecardOut(BaseModel):
     source_file_url: Optional[str] = None
     created_at: datetime
     metrics: List[ScorecardMetricOut] = []
+    # ADR-492 — a declared retention hold. Both falsy = the 13-month clock runs.
+    retention_hold_until: Optional[date] = None
+    retention_hold_indefinite: bool = False
     model_config = ConfigDict(from_attributes=True)
+
+
+class ScorecardRetentionRow(BaseModel):
+    """ADR-492 D5 — one of a person's scorecards, as the retention screen sees it."""
+    id: UUID
+    week: str
+    overall_standing: Optional[str] = None
+    retention_hold_until: Optional[date] = None
+    retention_hold_indefinite: bool = False
+    # When the nightly purge will remove it if nothing changes. None while held
+    # indefinitely, or when the week label does not parse (never purged).
+    removed_after: Optional[date] = None
+    open_appeal: bool = False
+
+
+class RetentionHoldIn(BaseModel):
+    """ADR-492 D3. `personnel_decision` needs the decision's date (hold runs one
+    year from it, EEOC 29 CFR 1602.14); `legal_charge` holds until released."""
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["personnel_decision", "legal_charge"]
+    decision_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def _date_matches_kind(self):
+        if self.kind == "personnel_decision":
+            if self.decision_date is None:
+                raise ValueError("decision_date is required for a personnel decision.")
+            if self.decision_date > date.today():
+                raise ValueError("decision_date cannot be in the future — record the hold once the decision is made.")
+        elif self.decision_date is not None:
+            raise ValueError("decision_date applies only to a personnel decision.")
+        return self
 
 
 # ── Cross-check (ADR-204 Phase D): Amazon vs our data ───────────────────────────

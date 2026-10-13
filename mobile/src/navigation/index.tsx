@@ -40,6 +40,9 @@ import ReattemptScreen          from '@screens/Trainer/ReattemptScreen';
 // Re-exported for existing imports within this file's consumers.
 export * from './roles';
 import { TAB_GATES } from './roles';
+import MyRoleScreen from '@screens/MyRole/MyRoleScreen';
+import InterruptiveHost from '@components/notifications/InterruptiveHost';
+import { registerForPush } from '@api/pushRegistration';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
@@ -146,6 +149,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', component: PreferencesScreen, ...TAB_GATES['Preferences'] },
   { key: 'Notifications',   label: 'Notifications',    icon: '🔔', component: NotificationsScreen, ...TAB_GATES['Notifications'] },
   { key: 'Account',         label: 'Account',          icon: '👤', component: MyAccountScreen, ...TAB_GATES['Account'] },
+  { key: 'MyRole',          label: 'My Role',          icon: '📖', component: MyRoleScreen, ...TAB_GATES['MyRole'] },
 ];
 
 // ── Home stack navigator ──────────────────────────────────────────────────────
@@ -281,6 +285,19 @@ function MainShell() {
 
   const [activeKey, setActiveKey] = useState(visibleTabs[0]?.key ?? 'Home');
 
+  // ADR-487 D5. Register for push once per session. MainShell mounts only
+  // once signed in, so the Android permission prompt appears with context
+  // rather than on the login screen. Fire-and-forget: push is additive, and a
+  // failure (no Firebase config yet, permission denied) must not delay the UI.
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;
+    registerForPush().then(fn => {
+      if (cancelled) fn(); else unsubscribe = fn;
+    });
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, []);
+
   // Remap 'NotificationsTab' alias so HomeScreen can switch to it by a stable name
   const switchTab = useCallback((key: string) => {
     const target = key === 'NotificationsTab' ? 'Notifications' : key;
@@ -306,6 +323,12 @@ function MainShell() {
           may still work. Mounted here so it appears ONCE PER LAUNCH: MainShell
           mounts once per session, so "Not now" lasts exactly that long. */}
       <MfaGracePrompt />
+      {/* ADR-494. Mounted beside MfaGracePrompt and for the same reason:
+          MainShell mounts once per session, so an interruptive notification
+          appears once per launch rather than on every tab change. It renders
+          OVER the shell rather than replacing it, because a prompt is not a
+          wall — and the gate inside it is the one case that behaves like one. */}
+      <InterruptiveHost />
       <View style={{ flex: 1 }}>
         <View style={{ flex: 1 }}>
           <ActiveScreen />

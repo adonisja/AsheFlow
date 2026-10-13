@@ -87,12 +87,53 @@ class Tone(StrEnum):
 
 
 @dataclass(frozen=True)
+class NotificationAction:
+    """A control the notification CARRIES, rather than a page it names.
+
+    ADR-487 D10's Finding A: *naming the action in prose is not enough — the
+    message carries the control.* An ACTION notification whose remedy is a
+    sentence makes the reader go and find the page; one that carries the
+    affordance IS the remedy.
+
+    Named `NotificationAction` rather than `Action` deliberately: `ACTION` is
+    already the Severity constant in this module, and `Action`/`ACTION` differing
+    only by case is the kind of pair that reads correctly and imports wrongly.
+
+    `route` is a WEB PATH, and it is the same string for both surfaces by
+    contract: a gate's only exit is this link, so if web and mobile disagreed
+    about where it goes, one of them would lock the user against a dead end.
+
+    NOT YET CONSUMED BY EITHER CLIENT. Web resolves these paths directly
+    (every one is a real route in App.tsx -- checked, because a link to a 404
+    is the ADR-381 failure). Mobile navigates by SCREEN NAME, not by path, and
+    has no linking config, so it needs a path->screen map before these
+    resolve there. Until that exists the field is inert on mobile rather than
+    wrong, and the prompt/gate UI that reads it is the remaining ADR-494 work.
+    Stated here rather than implied, because a docstring claiming "mobile maps
+    the path to its own navigator" is how an unbuilt surface reads as shipped.
+
+    `style` is a semantic role, never a colour — the same reasoning as `tone`
+    (ADR-487 D4). The two surfaces own different palettes, so a hex here would
+    land in one of the two themes unreadable.
+    """
+
+    label: str                    # "Accept", "Assign truck", "Go to Field Ops"
+    route: str                    # the client path; identical on web and mobile
+    style: str = "default"        # "default" | "primary" | "danger"
+
+
+@dataclass(frozen=True)
 class Spec:
     severity: Severity
     channels: Channel
     label: str          # the short noun phrase a human reads
     tone: Tone
     icon: str           # one emoji; mobile renders it, web maps it to a glyph
+    #: Controls the client renders ON the notification (ADR-487 D10 Finding A).
+    #: A tuple so Spec stays hashable and frozen; empty for the ~75 types whose
+    #: remedy is "read it", because a control that goes nowhere useful is worse
+    #: than no control.
+    actions: tuple[NotificationAction, ...] = ()
 
 
 class UndeclaredNotificationType(RuntimeError):
@@ -123,11 +164,19 @@ SPEC: dict[str, Spec] = {
 
     # ── ACTION ────────────────────────────────────────────────────────────
     "assignment_change_request": Spec(ACTION, BANNER,
-        'Reassign Request', ACTIVE, '📨'),   # Dispatch
+        'Reassign Request', ACTIVE, '📨',   # Dispatch
+        actions=(NotificationAction('Open dispatch', '/dispatch', 'primary'),)),
     "captain_declined": Spec(ACTION, BANNER | PUSH | DISCORD,
-        'Captain Declined', WARN, '🔀'),   # Oversight
+        'Captain Declined', WARN, '🔀',   # Oversight
+        actions=(NotificationAction('Open dispatch', '/dispatch', 'primary'),)),
     "continuation_request": Spec(ACTION, BANNER,
-        'Continuation Request', ACTIVE, '📨'),   # The trainer
+        'Continuation Request', ACTIVE, '📨',   # The trainer
+        # Accept/Decline are the two answers, and the trainer's own page is
+        # where both are made. D10 wrote them as "{Accept} {Decline}"; the
+        # controls route to the same page because the page holds the pair —
+        # splitting them into two routes would need two endpoints that do not
+        # exist.
+        actions=(NotificationAction('Review request', '/trainer-dashboard', 'primary'),)),
     "dispatch_assignment": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Assignment', ACTIVE, '📋'),   # The assignee
     "dispatch_finalization_reminder": Spec(ACTION, BANNER,
@@ -141,7 +190,8 @@ SPEC: dict[str, Spec] = {
     "email_bounced": Spec(ACTION, BANNER,
         'Email Bounced', WARN, '📧'),   # Management + admin
     "fuel_log_reminder": Spec(ACTION, BANNER,
-        'Fuel Log Due', ACTIVE, '⛽'),   # The driver
+        'Fuel Log Due', ACTIVE, '⛽',   # The driver
+        actions=(NotificationAction('Go to Field Ops', '/field-ops', 'primary'),)),
     # ADDED 2026-10-06 (ADR-488). The whole NOTICE tier is ONE declared type,
     # because the label and body come from a `notice_templates` row rather than
     # from here — ADR-487 D4c's one narrow exception to "every type is
@@ -202,13 +252,24 @@ SPEC: dict[str, Spec] = {
     "quiz_unsubmitted_reminder": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Quiz Due', WARN, '📝'),   # The paired trainer
     "schedule_change_request": Spec(ACTION, BANNER,
-        'Schedule Request', ACTIVE, '📨'),   # The reviewer (mgmt/admin)
+        'Schedule Request', ACTIVE, '📨',   # The reviewer (mgmt/admin)
+        actions=(NotificationAction('View it here', '/schedule-changes', 'primary'),)),
     "sort_packages_dropped": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Packages Dropped', BAD, '⚠️'),   # Oversight
     "timecard_disputed": Spec(ACTION, BANNER,
         'Timecard Disputed', WARN, '🕐'),   # Admin + management
+    # ADR-494 D1. The ONE type that still gates — and it is a PROMPT until one
+    # day before the pay period's close_deadline, then a GATE. The deadline is
+    # external and already modelled (TimeCardAdjustment.pay_period_id ->
+    # ADPPayPeriod.close_deadline, both NOT NULL), so the escalation keys on it
+    # rather than on an invented N-day window.
+    #
+    # The server decides which state applies and omits GATE when it does not
+    # (ADR-494 D6), so the clients never implement a downgrade rule and cannot
+    # disagree about it.
     "timecard_mismatch": Spec(ACTION, BANNER | GATE,
-        'Timecard Mismatch', WARN, '🕐'),   # Admin + management
+        'Timecard Mismatch', WARN, '🕐',   # Admin + management
+        actions=(NotificationAction('Review my timecard', '/account', 'primary'),)),
     "timecard_pending_manager": Spec(ACTION, BANNER,
         'Timecard To Approve', ACTIVE, '🕐'),   # Admin + management
     "timecard_update_failed": Spec(ACTION, BANNER,
@@ -243,6 +304,10 @@ SPEC: dict[str, Spec] = {
         'Override Notice', WARN, '🔀'),   # Oversight
     "campaign_schedule_ended": Spec(INFO, BANNER,
         'Campaign Ended', NEUTRAL, '📋'),   # Management + admin
+    # ADR-494 D1: GATE from the start, and the only type with no deadline to
+    # escalate toward — they cannot use the app without the credentials, so
+    # there is nothing to work around it for. The gate carries the credentials
+    # themselves rather than a link.
     "credentials_sent": Spec(INFO, BANNER | PUSH | DISCORD | GATE,
         'Credentials', NEUTRAL, '🔑'),   # The trainee
     "crew_all_confirmed": Spec(INFO, TICKER,
@@ -259,8 +324,24 @@ SPEC: dict[str, Spec] = {
         'Trainer Noted', GOOD, '⭐'),   # Management
     "feedback_submitted": Spec(INFO, TICKER,
         'Feedback', NEUTRAL, '💬'),   # Admins
-    "graduation": Spec(INFO, BANNER | PUSH | DISCORD | GATE,
-        'Graduation', GOOD, '🎓'),   # The trainee who graduated
+    # The NEWLY PROMOTED WALKER's copy -- their own graduation, not a report
+    # that someone else graduated.
+    #
+    # D8 finding: this entry had NO RAISER. ADR-487 D8 declared it and the live
+    # flow sent `trainee_graduated` to BOTH audiences, so configuring this one
+    # changed nothing a walker would ever see. graduate_trainees now raises it
+    # for the trainee's own copy. The lesson: a registry entry is not a feature,
+    # and the check is `grep -c 'type="x"'` -- a declared type with zero raise
+    # sites is dead weight that reads as shipped.
+    #
+    # ADR-494 D1 drops GATE. ADR-487 D8 gave it one; its own research warns
+    # that a dismiss-only modal "trains users to close modals without reading
+    # them", and the permissions have ALREADY taken effect — so proceeding is
+    # not wrong, merely uninformed, and the remedy for uninformed is a link.
+    # PROMPT with a congratulatory sheet -> /my-role.
+    "graduation": Spec(INFO, BANNER | PUSH | DISCORD | PROMPT,
+        'Graduation', GOOD, '🎓',   # The trainee who graduated
+        actions=(NotificationAction('See what changes for me', '/my-role', 'primary'),)),
     "incident_info": Spec(INFO, TICKER,
         'Incident', NEUTRAL, '📄'),   # Oversight
     "incident_resolved": Spec(INFO, TICKER,
@@ -277,8 +358,12 @@ SPEC: dict[str, Spec] = {
         'Day Off Approved', GOOD, '✅'),   # The requester
     "offday_rejected": Spec(INFO, BANNER | PUSH | DISCORD,
         'Day Off Denied', BAD, '❌'),   # The requester
-    "operating_mode_change": Spec(INFO, BANNER | GATE,
-        'Mode Change', WARN, '⚙️'),   # Admin + management
+    # ADR-494 D1 drops GATE, same reasoning as graduation. Half the surface
+    # changes (ADR-305), so the reader needs the ROLE-SCOPED explanation rather
+    # than a wall — which is what /my-role is for.
+    "operating_mode_change": Spec(INFO, BANNER | PROMPT,
+        'Mode Change', WARN, '⚙️',   # Admin + management
+        actions=(NotificationAction('See what changes for my role', '/my-role', 'primary'),)),
     "phase4_failed": Spec(INFO, BANNER,
         'Phase 4 Result', BAD, '📊'),   # Management + the trainee
     "pto_approved": Spec(INFO, BANNER | PUSH | DISCORD,
@@ -293,8 +378,36 @@ SPEC: dict[str, Spec] = {
         'Your Trainee Submitted', NEUTRAL, '📝'),   # The paired trainer
     "role_change": Spec(INFO, BANNER,
         'Role Change', NEUTRAL, '👤'),   # The employee
-    "route_ready": Spec(INFO, TICKER | PROMPT,
-        'Your Route', ACTIVE, '🗺️'),   # The walker
+    # NOT RAISED ANYWHERE (ADR-494 D8). `route_ready` appears nowhere in this
+    # repo outside this line -- no raiser, no client, no test. ADR-487 D8
+    # declared it and nothing was ever built behind it.
+    #
+    # Left declared rather than RETIRED, deliberately, and the distinction
+    # matters: RETIRED means "was raised, stopped, keep it resolving for
+    # historical rows" (ADR-487 D1's two-step removal). Nothing ever raised
+    # this, so there are no historical rows and retiring it would record a
+    # history that did not happen.
+    #
+    # Its correction below is still worth making -- it is the shape the type
+    # should have WHEN a raiser is built -- but until dispatch release fires
+    # it, configuring it changes nothing anyone sees. That decision (when a
+    # route becomes "ready", and whether the walker is interrupted for it) is
+    # dispatch-release behaviour and belongs to its own ADR.
+    #
+    # ADR-494 D2 corrects BOTH halves of this entry.
+    #
+    # It was INFO | TICKER | PROMPT. NOTICE + PROMPT would have contradicted
+    # ADR-488 D8, which built the NOTICE tier ticker-only and deliberately never
+    # interruptive — and TICKER + PROMPT is the same contradiction one tier down:
+    # a strip that scrolls past AND a sheet that interrupts cannot both be the
+    # right register for one message.
+    #
+    # ACTION is the honest tier: it fires once per route, is about this reader,
+    # and awaits their tap. That is ACTION's definition, and it sits beside
+    # dispatch_assignment — the other "your day's work is ready" type.
+    "route_ready": Spec(ACTION, BANNER | PROMPT,
+        'Your Route', ACTIVE, '🗺️',   # The walker
+        actions=(NotificationAction('Open my route', '/my-route', 'primary'),)),
     "rts_approved": Spec(INFO, BANNER,
         'RTS Approved', GOOD, '✅'),   # The driver
     "rts_rejected": Spec(INFO, BANNER,
@@ -302,7 +415,8 @@ SPEC: dict[str, Spec] = {
     "rts_submitted": Spec(INFO, TICKER,
         'RTS Submitted', NEUTRAL, '📦'),   # Oversight
     "schedule_change_approved": Spec(INFO, BANNER,
-        'Schedule Approved', GOOD, '✅'),   # The requester
+        'Schedule Approved', GOOD, '✅',   # The requester
+        actions=(NotificationAction('Review your updated schedule', '/schedule'),)),
     "schedule_change_rejected": Spec(INFO, BANNER,
         'Schedule Denied', BAD, '❌'),   # The requester
     "timecard_applied": Spec(INFO, TICKER,
@@ -313,8 +427,14 @@ SPEC: dict[str, Spec] = {
         'Trainee Arrived', GOOD, '✅'),   # The paired trainer
     "trainee_bumped": Spec(INFO, BANNER,
         'Trainee Bumped', WARN, '⚠️'),   # Oversight
+    # Management's copy. ADR-494 D8 split this: it used to serve BOTH audiences
+    # -- graduate_trainees sent it to management AND to the new walker with two
+    # different message bodies -- so one Spec had to describe two unrelated
+    # notifications. Oversight wants a banner; the person promoted wants a
+    # congratulatory prompt and a link to what changed, and now gets
+    # `graduation` instead.
     "trainee_graduated": Spec(INFO, BANNER,
-        'Trainee Graduated', GOOD, '🎓'),   # Management
+        'Trainee Graduated', GOOD, '🎓'),   # Management + the trainer
     "trainee_ncns": Spec(INFO, BANNER,
         'No Call No Show', WARN, '⚠️'),   # Oversight
     "trainee_reassigned": Spec(INFO, BANNER,
