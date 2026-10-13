@@ -1,7 +1,7 @@
 """ADR-290 — BTR sheet parsing, checked against the real printed sheet.
 
 Every fixture here is taken from the photograph the operator supplied, not
-invented: BTR31 / Box Truck Parcel (26ft) NYC / NYCD / 30.87930 -44.27901 / 12
+invented: BTR31 / Box Truck Parcel (26ft) NYC / TSTD / 0.50800 -30.51700 / 12
 routes, then WE37 (56 pkgs, 3 bags, 6 OVs), WE38 and WE39.
 
 The wrapped-label case is the one worth having. A photographed Bag Labels cell
@@ -63,7 +63,7 @@ def test_ov_zones_empty_cell():
 # ── anchor point ──────────────────────────────────────────────────────────────
 
 def test_anchor_parses_lat_lng():
-    assert parse_anchor("30.87930 -44.27901") == (30.87930, -44.27901)
+    assert parse_anchor("0.50800 -30.51700") == (0.508, -30.517)
 
 
 def test_anchor_missing_is_none_not_zero():
@@ -77,10 +77,10 @@ def test_anchor_missing_is_none_not_zero():
 _CSV = (
     "Route,Service Type,DSP,Anchor Point,Total Routes,"
     "Name,Package Count,Bag Count,OV Count,OV Sort Zones,Bag Labels\n"
-    'BTR31,Box Truck Parcel (26ft) NYC,NYCD,30.87930 -44.27901,12,'
+    'BTR31,Box Truck Parcel (26ft) NYC,TSTD,0.50800 -30.51700,12,'
     'WE37,56,3,6,"A-27.2W | 2 A-27.3U | 2 A-28.2W | 1 A-27.3W | 1",'
     '"Green 5270, Green 7171, Orange 4772"\n'
-    'BTR31,Box Truck Parcel (26ft) NYC,NYCD,30.87930 -44.27901,12,'
+    'BTR31,Box Truck Parcel (26ft) NYC,TSTD,0.50800 -30.51700,12,'
     'WE38,43,2,5,"A-27.3W | 2 A-28.2X | 2 A-27.2Z | 1",'
     '"Yellow 0483, Orange 6218"\n'
 )
@@ -90,10 +90,10 @@ def test_csv_reads_the_header_row():
     sheet = CSVBTRIngestor(_CSV).ingest()
     assert sheet.btr_loading_zone == "BTR31"
     assert sheet.service_type == "Box Truck Parcel (26ft) NYC"
-    assert sheet.dsp == "NYCD"
+    assert sheet.dsp == "TSTD"
     assert sheet.amazon_route_count == 12
-    assert sheet.amazon_anchor_lat == 30.87930
-    assert sheet.amazon_anchor_lng == -44.27901
+    assert sheet.amazon_anchor_lat == 0.508
+    assert sheet.amazon_anchor_lng == -30.517
 
 
 def test_csv_reads_routes_and_bags():
@@ -116,7 +116,7 @@ def test_csv_headers_are_matched_loosely():
     """An exported header is rarely byte-exact — case and padding vary."""
     messy = _CSV.replace("Bag Labels", " bag labels ").replace("DSP", "dsp")
     sheet = CSVBTRIngestor(messy).ingest()
-    assert sheet.dsp == "NYCD"
+    assert sheet.dsp == "TSTD"
     assert [b.bag_id for b in sheet.routes[0].bags] == ["5270", "7171", "4772"]
 
 
@@ -127,7 +127,7 @@ def test_missing_counts_are_none_not_zero():
     reconciliation announce a discrepancy that is really a camera miss."""
     csv_no_counts = (
         "Route,DSP,Name,Package Count,Bag Count,OV Count,Bag Labels\n"
-        'BTR31,NYCD,WE40,,,,"Green 1111"\n'
+        'BTR31,TSTD,WE40,,,,"Green 1111"\n'
     )
     route = CSVBTRIngestor(csv_no_counts).ingest().routes[0]
     assert route.package_count is None
@@ -149,7 +149,7 @@ def test_reconcile_flags_ov_zone_mismatch():
 def test_reconcile_flags_bag_count_mismatch():
     sheet = CSVBTRIngestor(
         "Route,DSP,Name,Bag Count,Bag Labels\n"
-        'BTR31,NYCD,WE37,3,"Green 5270"\n'            # says 3, only 1 label
+        'BTR31,TSTD,WE37,3,"Green 5270"\n'            # says 3, only 1 label
     ).ingest()
     assert any("1 bag label(s) read but Bag Count says 3" in w for w in sheet.warnings)
 
@@ -172,7 +172,7 @@ def test_manual_matches_csv_for_the_same_sheet():
     dispatch's export produces, or the two paths are not interchangeable."""
     rows = [{
         "Route": "BTR31", "Service Type": "Box Truck Parcel (26ft) NYC",
-        "DSP": "NYCD", "Anchor Point": "30.87930 -44.27901", "Total Routes": "12",
+        "DSP": "TSTD", "Anchor Point": "0.50800 -30.51700", "Total Routes": "12",
         "Name": "WE37", "Package Count": "56", "Bag Count": "3", "OV Count": "6",
         "OV Sort Zones": "A-27.2W | 2 A-27.3U | 2 A-28.2W | 1 A-27.3W | 1",
         "Bag Labels": "Green 5270, Green 7171, Orange 4772",
@@ -214,7 +214,7 @@ class _StubTextract:
 def test_image_ingest_parses_a_table():
     response = _textract_table([
         ["Route", "DSP", "Name", "Package Count", "Bag Labels"],
-        ["BTR31", "NYCD", "WE37", "56", "Green 5270"],
+        ["BTR31", "TSTD", "WE37", "56", "Green 5270"],
     ])
     sheet = ImageBTRIngestor(b"fake", _textract_client=_StubTextract(response)).ingest()
     assert sheet.btr_loading_zone == "BTR31"
@@ -251,8 +251,8 @@ def test_more_routes_than_amazon_says_IS_a_warning():
     """The one direction a crop cannot explain — likely two sheets merged."""
     csv_extra = (
         "Route,DSP,Total Routes,Name\n"
-        "BTR31,NYCD,1,WE37\n"
-        "BTR31,NYCD,1,WE38\n"
+        "BTR31,TSTD,1,WE37\n"
+        "BTR31,TSTD,1,WE38\n"
     )
     sheet = CSVBTRIngestor(csv_extra).ingest()
     assert any("two sheets merged" in w for w in sheet.warnings)

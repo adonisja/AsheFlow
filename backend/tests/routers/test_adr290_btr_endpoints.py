@@ -84,19 +84,19 @@ def _company(db, slug: str, dsp_name=None) -> Company:
 
 
 def test_matching_dsp_passes(db):
-    c = _company(db, "co-match", dsp_name="NYCD")
-    assert _check_dsp(db, c.id, "NYCD") is None
+    c = _company(db, "co-match", dsp_name="TSTD")
+    assert _check_dsp(db, c.id, "TSTD") is None
 
 
 def test_dsp_match_ignores_case_and_padding(db):
-    c = _company(db, "co-case", dsp_name="nycd")
-    assert _check_dsp(db, c.id, "  NYCD ") is None
+    c = _company(db, "co-case", dsp_name="tstd")
+    assert _check_dsp(db, c.id, "  TSTD ") is None
 
 
 def test_foreign_dsp_is_rejected(db):
     """The realistic mistake: photographing another DSP's sheet at a shared
     station. Importing it would attribute their totes to this company."""
-    c = _company(db, "co-foreign", dsp_name="NYCD")
+    c = _company(db, "co-foreign", dsp_name="TSTD")
     msg = _check_dsp(db, c.id, "BOSD")
     assert msg is not None
     assert "another DSP's sheet" in msg
@@ -106,7 +106,7 @@ def test_unconfigured_dsp_name_is_not_a_free_pass(db):
     """With nothing configured we CANNOT validate. Treating that as a match
     would defeat the check for exactly the companies that never set it up."""
     c = _company(db, "co-unset", dsp_name=None)
-    msg = _check_dsp(db, c.id, "NYCD")
+    msg = _check_dsp(db, c.id, "TSTD")
     assert msg is not None
     assert "no Amazon DSP name is configured" in msg
 
@@ -114,7 +114,7 @@ def test_unconfigured_dsp_name_is_not_a_free_pass(db):
 def test_a_sheet_with_no_dsp_cell_is_not_blocked(db):
     """A cropped photo may miss the DSP cell entirely. That is unknown, not
     wrong — the reviewer still sees the sheet."""
-    c = _company(db, "co-nodsp", dsp_name="NYCD")
+    c = _company(db, "co-nodsp", dsp_name="TSTD")
     assert _check_dsp(db, c.id, None) is None
 
 
@@ -123,7 +123,7 @@ def test_a_sheet_with_no_dsp_cell_is_not_blocked(db):
 _CSV = (
     "Route,Service Type,DSP,Anchor Point,Total Routes,"
     "Name,Package Count,Bag Count,OV Count,OV Sort Zones,Bag Labels\n"
-    'BTR31,Box Truck Parcel (26ft) NYC,NYCD,30.87930 -44.27901,12,'
+    'BTR31,Box Truck Parcel (26ft) NYC,TSTD,0.50800 -30.51700,12,'
     'WE37,56,3,6,"A-27.2W | 2 A-27.3U | 2 A-28.2W | 1 A-27.3W | 1",'
     '"Green 5270, Green 7171, Orange 4772"\n'
 )
@@ -132,7 +132,7 @@ _CSV = (
 def test_preview_output_carries_everything_a_reviewer_needs():
     out = _to_out(CSVBTRIngestor(_CSV).ingest())
     assert out.btr_loading_zone == "BTR31"
-    assert out.dsp == "NYCD"
+    assert out.dsp == "TSTD"
     assert out.total_bags == 3
     assert out.routes[0].amazon_route_name == "WE37"
     assert [b.bag_id for b in out.routes[0].bags] == ["5270", "7171", "4772"]
