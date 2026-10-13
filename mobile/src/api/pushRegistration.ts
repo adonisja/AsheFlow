@@ -19,6 +19,17 @@ import apiClient from '@api/client';
 /** The token we last registered, so sign-out can revoke the same one. */
 const TOKEN_KEY = 'asheflow_push_token';
 
+/**
+ * The three calls this module makes, bound to one Messaging instance.
+ *
+ * MODULAR API ONLY. React Native Firebase v26 removed the namespaced default
+ * export, so `require(...).default()` is undefined and calling the module
+ * object throws. The first version of this file did exactly that: the throw
+ * was swallowed, `messaging()` returned null, and registration exited before
+ * the permission prompt, so push was silently off on every Android device.
+ * test_adr487_d5_mobile_push.py pins the modular names against the installed
+ * package so a future major cannot repeat it.
+ */
 type Messaging = {
   getToken(): Promise<string>;
   onTokenRefresh(listener: (token: string) => void): () => void;
@@ -36,9 +47,15 @@ function messaging(): Messaging | null {
   if (Platform.OS !== 'android') return null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('@react-native-firebase/messaging');
-    return (mod.default ?? mod)() as Messaging;
-  } catch {
+    const { getMessaging, getToken, onTokenRefresh } = require('@react-native-firebase/messaging');
+    const instance = getMessaging();
+    return {
+      getToken: () => getToken(instance),
+      onTokenRefresh: (listener: (token: string) => void) => onTokenRefresh(instance, listener),
+    };
+  } catch (e) {
+    // Logged, not just swallowed: this catch hid a removed API for a release.
+    if (__DEV__) console.warn('[push] messaging unavailable:', (e as Error)?.message);
     return null;
   }
 }

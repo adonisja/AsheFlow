@@ -112,3 +112,53 @@ class TestVersionsArePinned:
                 f"lets one drift from the other"
             )
         assert deps["@react-native-firebase/app"] == deps["@react-native-firebase/messaging"]
+
+
+class TestItUsesTheModularApi:
+    """React Native Firebase v26 has no default export.
+
+    The first version called `(mod.default ?? mod)()`. On v26 that calls the
+    module object, throws, and the throw was swallowed, so registration quit
+    before the permission prompt and push was silently off on every Android
+    device. Found only by signing in on a real emulator: no dialog, no row.
+
+    These read source and package.json rather than node_modules, because CI's
+    backend job does not install the mobile dependencies, and a test that only
+    runs where node_modules happens to exist is the environment-dependent
+    test this file exists to avoid.
+    """
+
+    def _code(self) -> str:
+        return re.sub(r"//[^\n]*|/\*.*?\*/", "", REG.read_text(), flags=re.S)
+
+    def test_the_pinned_major_is_one_without_a_default_export(self):
+        deps = json.loads((MOBILE / "package.json").read_text())["dependencies"]
+        major = int(re.match(r"\D*(\d+)", deps["@react-native-firebase/messaging"]).group(1))
+        assert major >= 22, (
+            "below v22 the modular API did not exist; this class assumes it does"
+        )
+
+    def test_it_calls_getMessaging_not_the_module(self):
+        code = self._code()
+        assert "getMessaging" in code, "the v26 entry point is getMessaging()"
+        assert ".default" not in code, (
+            "v26 has no default export — `.default` is undefined, and calling "
+            "the module object instead throws inside a catch that hides it"
+        )
+
+    def test_token_calls_take_the_instance(self):
+        code = self._code()
+        assert re.search(r"\bgetToken\(\s*instance\s*\)", code), (
+            "modular getToken takes the Messaging instance as its first argument"
+        )
+        assert re.search(r"\bonTokenRefresh\(\s*instance\s*,", code), (
+            "modular onTokenRefresh takes (instance, listener)"
+        )
+
+    def test_the_require_catch_is_not_silent(self):
+        code = REG.read_text()
+        fn = code[code.index("function messaging()"):code.index("async function ensurePermission")]
+        assert "console.warn" in fn, (
+            "the catch around the Firebase require must log in dev: a silent "
+            "catch is what hid the removed API"
+        )
