@@ -147,6 +147,31 @@ def main() -> int:
         print(f"\n── frequent words in {label} (used by ≥{args.min_word} rows; rarer words suppressed)")
         print("  " + (", ".join(f"{w} {c}" for w, c in common[:40]) or "(none above the threshold)"))
 
+    print("\n── cross-tabulations by building type (counts per type)")
+    by_type = collections.defaultdict(list)
+    for r in rows:
+        by_type[r.building_type or "unset"].append(r)
+    cols = [
+        ("rows", lambda r: True),
+        ("security", lambda r: bool(r.has_security_desk)),
+        ("hours", lambda r: r.opens_at is not None and r.closes_at is not None),
+        ("break", lambda r: r.break_start is not None or r.break_end is not None),
+        ("note", lambda r: bool((r.note or "").strip())),
+        ("d2d", lambda r: "door_to_door" in (r.workloads or [])),
+        ("hi_rise", lambda r: "high_rise" in (r.workloads or [])),
+        ("bulk", lambda r: "bulk_drop" in (r.workloads or [])),
+    ]
+    print("  " + f"{'type':<24}" + "".join(f"{name:>9}" for name, _ in cols))
+    for t, rs in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+        print("  " + f"{t:<24}" + "".join(f"{sum(1 for r in rs if f(r)):>9}" for _, f in cols))
+    for t, rs in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+        spans = [(r.closes_at.hour * 60 + r.closes_at.minute) - (r.opens_at.hour * 60 + r.opens_at.minute)
+                 for r in rs if r.opens_at and r.closes_at]
+        opens = sorted(r.opens_at.strftime("%H:%M") for r in rs if r.opens_at)
+        if spans:
+            print(f"  hours {t:<20} n={len(spans)} median span {statistics.median(spans) / 60:.1f} h; "
+                  f"earliest open {opens[0]}, latest open {opens[-1]}")
+
     print("\n── collection dates")
     days = collections.Counter(r.collected_on.isoformat() for r in rows if r.collected_on)
     print(f"  distinct days {len(days)}; busiest day {max(days.values()) if days else 0} rows")
