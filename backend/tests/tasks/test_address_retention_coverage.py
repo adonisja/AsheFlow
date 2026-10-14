@@ -86,6 +86,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("survey_observations", "address"): "ADR-504 register: a public city address, not a customer delivery address.",
     ("survey_walks", "addresses"):      "ADR-504 register: NYC AddressPoint snapshot for one block (public data).",
     ("survey_walks", "street"):         "ADR-504 register: a street name from public data.",
+    ("survey_receives_for", "address"): "ADR-504 D8: a same-block door from public data, not a delivery address.",
     ("building_profile_library", "street_frontages"): "Integer count of entrances.",
     ("street_segments", "x_low_address_end"):   "Projected coordinate (integer).",
     ("street_segments", "y_low_address_end"):   "Projected coordinate (integer).",

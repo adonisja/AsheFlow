@@ -36,8 +36,8 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.survey_register import (
-    DELIVERY_MODES, DELIVERY_POINTS, SOURCES,
-    SurveyContributor, SurveyObservation, SurveyWalk,
+    DAY_STATUS, DELIVERY_MODES, DELIVERY_POINTS, MAX_DELIVERY_POINTS, SOURCES, TRISTATE,
+    SurveyContributor, SurveyDeliveryPoint, SurveyObservation, SurveyReceivesFor, SurveyWalk,
 )
 from app.schemas.building_taxonomy import BUILDING_TYPES
 from app.services import survey_blocks
@@ -114,12 +114,21 @@ def get_writer(current_user: dict = Depends(get_current_user),
 
 # ── schemas ─────────────────────────────────────────────────────────────────
 
+class NeighbourOut(BaseModel):
+    address: str
+    bin: Optional[str] = None
+
+
 class AddressOut(BaseModel):
     index: int
     address: str
     bin: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    # ADR-504 D8, set when a walk starts (absent on the block-list preview).
+    city_block: Optional[str] = None
+    sides: list[str] = []                   # [B] the streets this block faces, ordered
+    neighbours: list[NeighbourOut] = []     # [A] doors on the same city block
 
 
 class BlockOut(BaseModel):
@@ -159,41 +168,100 @@ class WalkOut(BaseModel):
     recorded: list[int]          # indexes already observed on this walk
 
 
+class DeliveryPointIn(BaseModel):
+    """[B] One place deliveries go."""
+    model_config = ConfigDict(extra="forbid")
+    point: Literal[DELIVERY_POINTS]  # type: ignore[valid-type]
+    side: Optional[str] = Field(None, max_length=120)
+    floor: Optional[int] = Field(None, ge=-5, le=200)
+    which_packages: Optional[str] = Field(None, max_length=120)
+
+
+class DayHoursIn(BaseModel):
+    """[C] One day group: open (with both times), closed, or didn't find out."""
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[DAY_STATUS] = "unknown"  # type: ignore[valid-type]
+    open: Optional[time] = None
+    close: Optional[time] = None
+
+    @model_validator(mode="after")
+    def _times_match_status(self):
+        if self.status == "open" and (self.open is None or self.close is None):
+            raise ValueError("Open hours need both an opening and a closing time.")
+        if self.status != "open" and (self.open is not None or self.close is not None):
+            raise ValueError("Times are only given when the status is open.")
+        return self
+
+
 class ObservationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     address_index: int = Field(ge=0, le=5000)
-    source: Literal[SOURCES]  # type: ignore[valid-type]
-    building_type: str = Field(min_length=1, max_length=30)
-    delivery_point: Optional[Literal[DELIVERY_POINTS]] = None  # type: ignore[valid-type]
-    entrance_side: Optional[str] = Field(None, max_length=120)
-    security_desk: Optional[bool] = None
-    sign_in_required: Optional[bool] = None
+    source: Literal[SOURCES] = "observed"  # type: ignore[valid-type]
+    # [F] A door on the city list that is not a delivery point. Nothing else is
+    # required, and no delivery facts may be given.
+    not_a_delivery_point: bool = False
+    building_type: Optional[str] = Field(None, min_length=1, max_length=30)
+    delivery_points: list[DeliveryPointIn] = Field(default_factory=list, max_length=MAX_DELIVERY_POINTS)
+    # [A] Indexes into this door's `neighbours` (its city block), never addresses.
+    receives_for: list[int] = Field(default_factory=list, max_length=50)
+    security_desk: Literal[TRISTATE] = "unknown"  # type: ignore[valid-type]
+    sign_in_required: Literal[TRISTATE] = "unknown"  # type: ignore[valid-type]
     delivery_mode: Optional[Literal[DELIVERY_MODES]] = None  # type: ignore[valid-type]
     floors: Optional[int] = Field(None, ge=1, le=200)
-    opens_at: Optional[time] = None
-    closes_at: Optional[time] = None
+    weekday: DayHoursIn = Field(default_factory=DayHoursIn)
+    saturday: DayHoursIn = Field(default_factory=DayHoursIn)
+    sunday: DayHoursIn = Field(default_factory=DayHoursIn)
     break_start: Optional[time] = None
     break_end: Optional[time] = None
     note: Optional[str] = Field(None, max_length=500)
 
+    @model_validator(mode="after")
+    def _shape(self):
+        if self.not_a_delivery_point:
+            if self.delivery_points or self.receives_for or self.delivery_mode or self.floors:
+                raise ValueError("A door that is not a delivery point carries no delivery details.")
+        elif not self.building_type:
+            raise ValueError("Choose a building type.")
+        if len(set(self.receives_for)) != len(self.receives_for):
+            raise ValueError("Each door may be listed once.")
+        if (self.break_start is None) != (self.break_end is None):
+            raise ValueError("A break needs both a start and an end.")
+        return self
+
+
+class DeliveryPointOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    position: int
+    point: str
+    side: Optional[str] = None
+    floor: Optional[int] = None
+    which_packages: Optional[str] = None
+
+
+class DayHoursOut(BaseModel):
+    status: str
+    open: Optional[time] = None
+    close: Optional[time] = None
+
 
 class ObservationOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
     id: UUID
     walk_id: UUID
     address: str
     bin: Optional[str] = None
     observed_on: date
     source: str
+    not_a_delivery_point: bool
     building_type: str
-    delivery_point: Optional[str] = None
-    entrance_side: Optional[str] = None
-    security_desk: Optional[bool] = None
-    sign_in_required: Optional[bool] = None
+    delivery_points: list[DeliveryPointOut]
+    receives_for: list[NeighbourOut]
+    security_desk: str
+    sign_in_required: str
     delivery_mode: Optional[str] = None
     floors: Optional[int] = None
-    opens_at: Optional[time] = None
-    closes_at: Optional[time] = None
+    weekday: DayHoursOut
+    saturday: DayHoursOut
+    sunday: DayHoursOut
     break_start: Optional[time] = None
     break_end: Optional[time] = None
     note: Optional[str] = None
@@ -236,6 +304,26 @@ def _walk_out(db: Session, walk: SurveyWalk) -> WalkOut:
         started_at=walk.started_at, closed_at=walk.closed_at,
         addresses=_addresses(walk),
         recorded=[i for i, a in enumerate(walk.addresses or []) if a["address"] in done],
+    )
+
+
+def _obs_out(db: Session, r: SurveyObservation, writer: Writer) -> ObservationOut:
+    points = (db.query(SurveyDeliveryPoint).filter(SurveyDeliveryPoint.observation_id == r.id)
+              .order_by(SurveyDeliveryPoint.position).all())
+    rf = (db.query(SurveyReceivesFor).filter(SurveyReceivesFor.observation_id == r.id)
+          .order_by(SurveyReceivesFor.address).all())
+    day = lambda g: DayHoursOut(status=getattr(r, f"{g}_status"),
+                                open=getattr(r, f"{g}_open"), close=getattr(r, f"{g}_close"))
+    return ObservationOut(
+        id=r.id, walk_id=r.walk_id, address=r.address, bin=r.bin, observed_on=r.observed_on,
+        source=r.source, not_a_delivery_point=r.not_a_delivery_point, building_type=r.building_type,
+        delivery_points=[DeliveryPointOut.model_validate(p) for p in points],
+        receives_for=[NeighbourOut(address=x.address, bin=x.bin) for x in rf],
+        security_desk=r.security_desk, sign_in_required=r.sign_in_required,
+        delivery_mode=r.delivery_mode, floors=r.floors,
+        weekday=day("weekday"), saturday=day("saturday"), sunday=day("sunday"),
+        break_start=r.break_start, break_end=r.break_end, note=r.note,
+        mine=(r.writer_sub == writer.sub),
     )
 
 
@@ -311,9 +399,12 @@ def start_walk(body: StartWalkIn, writer: Writer = Depends(get_writer),
     if block is None or not block.doors:
         raise HTTPException(status_code=422, detail="That block is not on the city's list near this point.")
 
+    # D8: each door's city block, the streets that block faces, and its
+    # same-block neighbours, snapshotted with the list (best effort).
+    doors = survey_blocks.enrich_doors(block.doors)
     walk = SurveyWalk(
         writer_sub=writer.sub, block_key=block.block_key, street=block.street,
-        addresses=block.doors, source_dataset=settings.socrata_addresspoint_dataset,
+        addresses=doors, source_dataset=settings.socrata_addresspoint_dataset,
         fetched_at=datetime.now(timezone.utc),
         attest_off_shift=True, attest_unbranded=True, attest_as_self=True,
     )
@@ -352,13 +443,12 @@ def record_observation(walk_id: UUID, body: ObservationIn,
         raise HTTPException(status_code=409, detail="This walk is closed. Start a new one to re-visit.")
     if body.address_index >= len(walk.addresses or []):
         raise HTTPException(status_code=422, detail="That door is not on this walk's list.")
-    if body.building_type not in BUILDING_TYPES:
+    if body.building_type is not None and body.building_type not in BUILDING_TYPES:
         raise HTTPException(status_code=422, detail="Unknown building type.")
-    if body.note and _CODE_WORDS.search(body.note):
+    texts = [body.note] + [p.side for p in body.delivery_points] + [p.which_packages for p in body.delivery_points]
+    if any(t and _CODE_WORDS.search(t) for t in texts):
         raise HTTPException(status_code=422,
-                            detail="Notes can't hold access or door codes. Describe the entrance instead.")
-    if body.entrance_side and _CODE_WORDS.search(body.entrance_side):
-        raise HTTPException(status_code=422, detail="This field can't hold access or door codes.")
+                            detail="This can't hold access or door codes. Describe the entrance instead.")
 
     door = walk.addresses[body.address_index]
     already = (db.query(SurveyObservation.id)
@@ -366,20 +456,34 @@ def record_observation(walk_id: UUID, body: ObservationIn,
                        SurveyObservation.address == door["address"]).first())
     if already is not None:
         raise HTTPException(status_code=409, detail="Already recorded on this walk.")
+    neighbours = door.get("neighbours") or []
+    if any(i >= len(neighbours) for i in body.receives_for):
+        raise HTTPException(status_code=422, detail="Only doors on the same city block can be chosen.")
 
     obs = SurveyObservation(
         walk_id=walk.id, writer_sub=writer.sub,
         address=door["address"], bin=door.get("bin"),
         observed_on=date.today(), source=body.source,
-        building_type=body.building_type, delivery_point=body.delivery_point,
-        entrance_side=(body.entrance_side or None), security_desk=body.security_desk,
-        sign_in_required=body.sign_in_required, delivery_mode=body.delivery_mode,
-        floors=body.floors, opens_at=body.opens_at, closes_at=body.closes_at,
+        not_a_delivery_point=body.not_a_delivery_point,
+        building_type=body.building_type or "unknown",
+        security_desk=body.security_desk, sign_in_required=body.sign_in_required,
+        delivery_mode=body.delivery_mode, floors=body.floors,
+        weekday_status=body.weekday.status, weekday_open=body.weekday.open, weekday_close=body.weekday.close,
+        saturday_status=body.saturday.status, saturday_open=body.saturday.open, saturday_close=body.saturday.close,
+        sunday_status=body.sunday.status, sunday_open=body.sunday.open, sunday_close=body.sunday.close,
         break_start=body.break_start, break_end=body.break_end,
         note=scrub_note(body.note)[0] if body.note else None,
         attestation=ATTESTATION,
     )
     db.add(obs)
+    db.flush()
+    for i, p in enumerate(body.delivery_points, start=1):
+        db.add(SurveyDeliveryPoint(observation_id=obs.id, position=i, point=p.point,
+                                   side=(p.side or None), floor=p.floor,
+                                   which_packages=(p.which_packages or None)))
+    for i in body.receives_for:
+        n = neighbours[i]
+        db.add(SurveyReceivesFor(observation_id=obs.id, address=n["address"], bin=n.get("bin")))
     db.flush()
     # Ids and the source only: an address in an audit snapshot is a copy no
     # erasure or retention reaches (ADR-493 D8). The observation row IS the
@@ -390,9 +494,7 @@ def record_observation(walk_id: UUID, body: ObservationIn,
                         "writer": "owner" if writer.owner else "contributor"})
     db.commit()
     db.refresh(obs)
-    out = ObservationOut.model_validate(obs)
-    out.mine = True
-    return out
+    return _obs_out(db, obs, writer)
 
 
 @router.post("/walks/{walk_id}/close", response_model=WalkOut)
@@ -427,12 +529,7 @@ def list_observations(
         q = q.join(SurveyWalk, SurveyWalk.id == SurveyObservation.walk_id).filter(
             SurveyWalk.block_key == block_key)
     rows = q.order_by(SurveyObservation.observed_at.desc()).limit(limit).all()
-    out = []
-    for r in rows:
-        o = ObservationOut.model_validate(r)
-        o.mine = r.writer_sub == writer.sub
-        out.append(o)
-    return out
+    return [_obs_out(db, r, writer) for r in rows]
 
 
 # ── contributors (owner only) ───────────────────────────────────────────────

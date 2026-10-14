@@ -27,7 +27,9 @@ import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/
 
 // ── shapes (mirror backend/app/routers/survey_register.py) ──────────────────
 
-type Address = { index: number; address: string; bin: string | null };
+type Neighbour = { address: string; bin: string | null };
+type Address = { index: number; address: string; bin: string | null;
+                 sides?: string[]; neighbours?: Neighbour[] };   // ADR-504 D8
 type Block = { block_key: string; street: string; description: string; addresses: Address[] };
 type Walk = { id: string; street: string; closed_at: string | null; addresses: Address[]; recorded: number[] };
 type Point = { lat: number; lng: number };
@@ -173,27 +175,42 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
   );
 }
 
-// ── walk ────────────────────────────────────────────────────────────────────
+// ── walk (form version 2, ADR-504 D8) ──────────────────────────────────────
 
+type Tri = 'yes' | 'no' | 'unknown';
+type DayStatus = 'open' | 'closed' | 'unknown';
+type Day = { status: DayStatus; open: string; close: string };
+type DPoint = { point: string; side: string; floor: string; which: string };
 type Form = {
-  source: string; building_type: string; delivery_point: string | null; entrance_side: string;
-  security_desk: boolean | null; sign_in_required: boolean | null; delivery_mode: string | null;
-  floors: string; opens_at: string; closes_at: string; note: string;
+  source: string; building_type: string; points: DPoint[]; receives_for: number[];
+  security_desk: Tri; sign_in_required: Tri; delivery_mode: string | null; floors: string;
+  weekday: Day; saturday: Day; sunday: Day; note: string;
 };
-const blank: Form = {
-  source: 'observed', building_type: '', delivery_point: null, entrance_side: '',
-  security_desk: null, sign_in_required: null, delivery_mode: null,
-  floors: '', opens_at: '', closes_at: '', note: '',
+const TRI = [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }, { value: 'unknown', label: "Didn't find out" }];
+const DAY = [{ value: 'open', label: 'Open' }, { value: 'closed', label: 'Closed' }, { value: 'unknown', label: "Didn't find out" }];
+// [D] freight was each-unit 9 of 9; dock/mailroom one drop point 7 of 7.
+const MODE_FOR_TYPE: Record<string, string> = {
+  freight: 'each_unit', elevator: 'each_unit', walkup: 'each_unit', doorman_reception: 'each_unit',
+  public_housing: 'each_unit', loading_dock: 'one_drop_point', loading_dock_mailroom: 'one_drop_point',
+  mailroom: 'one_drop_point', lockers: 'one_drop_point',
 };
+const unknownDay: Day = { status: 'unknown', open: '', close: '' };
+const blankFor = (a: Address): Form => ({
+  source: 'observed', building_type: '',
+  points: [{ point: 'main_entrance', side: a.sides?.[0] ?? '', floor: '', which: '' }],
+  receives_for: [], security_desk: 'unknown', sign_in_required: 'unknown', delivery_mode: null,
+  floors: '', weekday: unknownDay, saturday: unknownDay, sunday: unknownDay, note: '',
+});
 
-function Pick({ options, value, onChange }: {
-  options: { value: string; label: string }[]; value: string | null; onChange: (v: string | null) => void;
+function Pick({ options, value, onChange, clearable = true }: {
+  options: { value: string; label: string }[]; value: string | null;
+  onChange: (v: string | null) => void; clearable?: boolean;
 }) {
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
       {options.map(o => (
         <Chip key={o.value} label={o.label} selected={value === o.value}
-          onPress={() => onChange(value === o.value ? null : o.value)} />
+          onPress={() => onChange(value === o.value && clearable ? null : o.value)} />
       ))}
     </View>
   );
@@ -205,7 +222,7 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
   const { walkId } = route.params;
   const [walk, setWalk] = useState<Walk | null>(null);
   const [door, setDoor] = useState<Address | null>(null);
-  const [f, setF] = useState<Form>(blank);
+  const [f, setF] = useState<Form | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -214,25 +231,17 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
   }, [walkId]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  const set = <K extends keyof Form>(k: K, v: Form[K]) => setF(p => ({ ...p, [k]: v }));
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => setF(p => (p ? { ...p, [k]: v } : p));
+  const setPoint = (i: number, v: Partial<DPoint>) =>
+    setF(p => (p ? { ...p, points: p.points.map((x, j) => (j === i ? { ...x, ...v } : x)) } : p));
 
-  const save = async () => {
-    if (!door) return;
-    for (const [k, v] of [['opens_at', f.opens_at], ['closes_at', f.closes_at]] as const) {
-      if (v && !HHMM.test(v)) { Alert.alert('Check the hours', `${k === 'opens_at' ? 'Opens' : 'Closes'} must be like 08:30.`); return; }
-    }
+  const post = async (body: Record<string, unknown>) => {
     setBusy(true);
     try {
-      await apiClient.post(`/survey/walks/${walkId}/observations`, {
-        address_index: door.index, source: f.source, building_type: f.building_type,
-        delivery_point: f.delivery_point, entrance_side: f.entrance_side.trim() || null,
-        security_desk: f.security_desk, sign_in_required: f.sign_in_required,
-        delivery_mode: f.delivery_mode, floors: f.floors ? Number(f.floors) : null,
-        opens_at: f.opens_at || null, closes_at: f.closes_at || null, note: f.note.trim() || null,
-      });
+      await apiClient.post(`/survey/walks/${walkId}/observations`, body);
       tick();
       setDoor(null);
-      setF(blank);
+      setF(null);
       await load();
     } catch (e) {
       Alert.alert("Couldn't save this door", errorText(e, 'Try again.'));
@@ -240,6 +249,38 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
       setBusy(false);
     }
   };
+
+  const save = () => {
+    if (!door || !f) return;
+    const day = (d: Day, label: string) => {
+      if (d.status !== 'open') return { status: d.status };
+      if (!HHMM.test(d.open) || !HHMM.test(d.close)) throw new Error(`${label}: hours must be like 08:30.`);
+      return { status: 'open', open: d.open, close: d.close };
+    };
+    let hours;
+    try {
+      hours = { weekday: day(f.weekday, 'Weekdays'), saturday: day(f.saturday, 'Saturday'), sunday: day(f.sunday, 'Sunday') };
+    } catch (e) {
+      Alert.alert('Check the hours', (e as Error).message);
+      return;
+    }
+    void post({
+      address_index: door.index, source: f.source, building_type: f.building_type,
+      delivery_points: f.points.map(p => ({
+        point: p.point, side: p.side.trim() || null, floor: p.floor ? Number(p.floor) : null,
+        which_packages: f.points.length > 1 ? (p.which.trim() || null) : null,
+      })),
+      receives_for: f.receives_for, security_desk: f.security_desk, sign_in_required: f.sign_in_required,
+      delivery_mode: f.delivery_mode, floors: f.floors ? Number(f.floors) : null,
+      ...hours, note: f.note.trim() || null,
+    });
+  };
+
+  const notADoor = (a: Address) => Alert.alert(
+    'Not a delivery point?', `${a.address} will be recorded as not a delivery point (for example a gate or a second entrance).`,
+    [{ text: 'Cancel', style: 'cancel' },
+     { text: 'Record it', onPress: () => void post({ address_index: a.index, source: 'observed', not_a_delivery_point: true }) }],
+  );
 
   const finish = () => Alert.alert('Finish this walk?', 'You can start a new walk to re-visit later.', [
     { text: 'Cancel', style: 'cancel' },
@@ -252,34 +293,97 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
   if (!walk) return <ScreenShell title="Walk" loading>{null}</ScreenShell>;
   const done = new Set(walk.recorded);
 
-  if (door) {
+  if (door && f) {
+    const sides = door.sides?.length ? door.sides : [door.address.split(' ').slice(1).join(' ')];
+    const neighbours = door.neighbours ?? [];
+    const dayRow = (k: 'weekday' | 'saturday' | 'sunday', label: string) => (
+      <View style={s.sub}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={s.body}>{label}</Text>
+          {k !== 'weekday' && (
+            <TouchableOpacity onPress={() => set(k, { ...f.weekday })} accessibilityRole="button">
+              <Text style={s.link}>Same as weekdays</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <Pick options={DAY} value={f[k].status} clearable={false}
+          onChange={v => set(k, { ...f[k], status: (v ?? 'unknown') as DayStatus })} />
+        {f[k].status === 'open' && (
+          <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+            <TextInput value={f[k].open} onChangeText={v => set(k, { ...f[k], open: v })} maxLength={5}
+              placeholder="08:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.placeholder}
+              style={[s.input, { flex: 1 }]} accessibilityLabel={`${label} opens`} />
+            <TextInput value={f[k].close} onChangeText={v => set(k, { ...f[k], close: v })} maxLength={5}
+              placeholder="17:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.placeholder}
+              style={[s.input, { flex: 1 }]} accessibilityLabel={`${label} closes`} />
+          </View>
+        )}
+      </View>
+    );
     return (
       <ScreenShell title={door.address} subtitle={walk.street}>
         <View style={s.card}>
           <Text style={s.h2}>Where did this come from?</Text>
-          <Pick options={SOURCES} value={f.source} onChange={v => set('source', v ?? 'observed')} />
+          <Pick options={SOURCES} value={f.source} clearable={false} onChange={v => set('source', v ?? 'observed')} />
           <Text style={s.muted}>The role that answered, never the person's name.</Text>
         </View>
         <View style={s.card}>
-          <Text style={s.h2}>Deliveries go to</Text>
-          <Pick options={POINTS} value={f.delivery_point} onChange={v => set('delivery_point', v)} />
-          <TextInput value={f.entrance_side} onChangeText={v => set('entrance_side', v)} maxLength={120}
-            placeholder="Which side? e.g. on 33rd St" placeholderTextColor={c.placeholder} style={s.input} />
-        </View>
-        <View style={s.card}>
           <Text style={s.h2}>Building type</Text>
-          <Pick options={TYPES} value={f.building_type || null} onChange={v => set('building_type', v ?? '')} />
+          <Pick options={TYPES} value={f.building_type || null}
+            onChange={v => setF(p => (p ? { ...p, building_type: v ?? '',
+              delivery_mode: p.delivery_mode ?? (v ? MODE_FOR_TYPE[v] ?? null : null) } : p))} />
         </View>
         <View style={s.card}>
-          <Text style={s.h2}>Security desk</Text>
-          <Pick options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]}
-            value={f.security_desk === null ? null : f.security_desk ? 'yes' : 'no'}
-            onChange={v => set('security_desk', v === null ? null : v === 'yes')} />
-          <Text style={s.h2}>Sign-in required</Text>
-          <Pick options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]}
-            value={f.sign_in_required === null ? null : f.sign_in_required ? 'yes' : 'no'}
-            onChange={v => set('sign_in_required', v === null ? null : v === 'yes')} />
+          <Text style={s.h2}>Deliveries go to</Text>
+          {f.points.map((p, i) => (
+            <View key={i} style={s.sub}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={s.muted}>Point {i + 1}</Text>
+                {f.points.length > 1 && (
+                  <TouchableOpacity onPress={() => set('points', f.points.filter((_, j) => j !== i))}
+                    accessibilityRole="button" accessibilityLabel={`Remove point ${i + 1}`}>
+                    <Text style={s.link}>Remove</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Pick options={POINTS} value={p.point} clearable={false} onChange={v => setPoint(i, { point: v ?? p.point })} />
+              <Text style={s.muted}>Which side</Text>
+              <Pick options={sides.map(sd => ({ value: sd, label: sd }))} value={sides.includes(p.side) ? p.side : null}
+                onChange={v => setPoint(i, { side: v ?? '' })} />
+              <TextInput value={sides.includes(p.side) ? '' : p.side} onChangeText={v => setPoint(i, { side: v })}
+                maxLength={120} placeholder="Or describe it, e.g. rear via the alley"
+                placeholderTextColor={c.placeholder} style={s.input} />
+              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+                <TextInput value={p.floor} onChangeText={v => setPoint(i, { floor: v.replace(/[^\d-]/g, '').slice(0, 4) })}
+                  keyboardType="numbers-and-punctuation" placeholder="Floor" placeholderTextColor={c.placeholder}
+                  style={[s.input, { width: 80 }]} accessibilityLabel="Floor" />
+                {f.points.length > 1 && (
+                  <TextInput value={p.which} onChangeText={v => setPoint(i, { which: v })} maxLength={120}
+                    placeholder="Which packages?" placeholderTextColor={c.placeholder}
+                    style={[s.input, { flex: 1 }]} accessibilityLabel="Which packages go here" />
+                )}
+              </View>
+            </View>
+          ))}
+          {f.points.length < 3 && (
+            <Button variant="ghost" onPress={() => set('points', [...f.points, { point: 'main_entrance', side: sides[0], floor: '', which: '' }])}>
+              Add another delivery point
+            </Button>
+          )}
         </View>
+        {neighbours.length > 0 && (
+          <View style={s.card}>
+            <Text style={s.h2}>Also receives for</Text>
+            <Text style={s.muted}>Other doors on this city block whose packages go here.</Text>
+            {neighbours.map((n, i) => (
+              <View key={n.address} style={s.switchRow}>
+                <Text style={[s.body, { flex: 1 }]}>{n.address}</Text>
+                <Switch value={f.receives_for.includes(i)} accessibilityLabel={`Also receives for ${n.address}`}
+                  onValueChange={on => { tick(); set('receives_for', on ? [...f.receives_for, i] : f.receives_for.filter(x => x !== i)); }} />
+              </View>
+            ))}
+          </View>
+        )}
         <View style={s.card}>
           <Text style={s.h2}>Each unit, or one drop point?</Text>
           <Pick options={[{ value: 'each_unit', label: 'Each unit' }, { value: 'one_drop_point', label: 'One drop point' }]}
@@ -288,15 +392,16 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
             keyboardType="number-pad" placeholder="Floors" placeholderTextColor={c.placeholder} style={s.input} />
         </View>
         <View style={s.card}>
+          <Text style={s.h2}>Security desk</Text>
+          <Pick options={TRI} value={f.security_desk} clearable={false} onChange={v => set('security_desk', (v ?? 'unknown') as Tri)} />
+          <Text style={s.h2}>Sign-in required</Text>
+          <Pick options={TRI} value={f.sign_in_required} clearable={false} onChange={v => set('sign_in_required', (v ?? 'unknown') as Tri)} />
+        </View>
+        <View style={s.card}>
           <Text style={s.h2}>Receiving hours</Text>
-          <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-            <TextInput value={f.opens_at} onChangeText={v => set('opens_at', v)} maxLength={5}
-              placeholder="08:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.placeholder}
-              style={[s.input, { flex: 1 }]} accessibilityLabel="Opens at" />
-            <TextInput value={f.closes_at} onChangeText={v => set('closes_at', v)} maxLength={5}
-              placeholder="17:00" keyboardType="numbers-and-punctuation" placeholderTextColor={c.placeholder}
-              style={[s.input, { flex: 1 }]} accessibilityLabel="Closes at" />
-          </View>
+          {dayRow('weekday', 'Weekdays')}
+          {dayRow('saturday', 'Saturday')}
+          {dayRow('sunday', 'Sunday')}
         </View>
         <View style={s.card}>
           <Text style={s.h2}>Note</Text>
@@ -304,8 +409,8 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
             style={[s.input, { minHeight: 80 }]} accessibilityLabel="Note" />
           <Text style={s.muted}>Building facts only. No door or gate codes, no names, no security details.</Text>
         </View>
-        <Button onPress={() => void save()} disabled={!f.building_type} loading={busy} fullWidth>Save this door</Button>
-        <Button variant="ghost" onPress={() => { setDoor(null); setF(blank); }}>Back to doors</Button>
+        <Button onPress={save} disabled={!f.building_type} loading={busy} fullWidth>Save this door</Button>
+        <Button variant="ghost" onPress={() => { setDoor(null); setF(null); }}>Back to doors</Button>
       </ScreenShell>
     );
   }
@@ -314,12 +419,20 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
     <ScreenShell title={walk.street} subtitle={`${done.size} of ${walk.addresses.length} doors recorded`}
       onRefresh={() => void load()}>
       {walk.addresses.map(a => (
-        <TouchableOpacity key={a.index} style={[s.row, done.has(a.index) && { opacity: 0.5 }]}
-          disabled={!!walk.closed_at || done.has(a.index)} accessibilityRole="button"
-          onPress={() => { tick(); setDoor(a); }}>
-          <Text style={[s.body, { flex: 1 }]}>{a.address}</Text>
-          {done.has(a.index) && <Text style={s.muted}>Recorded</Text>}
-        </TouchableOpacity>
+        <View key={a.index} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <TouchableOpacity style={[s.row, { flex: 1 }, done.has(a.index) && { opacity: 0.5 }]}
+            disabled={!!walk.closed_at || done.has(a.index)} accessibilityRole="button"
+            onPress={() => { tick(); setDoor(a); setF(blankFor(a)); }}>
+            <Text style={[s.body, { flex: 1 }]}>{a.address}</Text>
+            {done.has(a.index) && <Text style={s.muted}>Recorded</Text>}
+          </TouchableOpacity>
+          {!walk.closed_at && !done.has(a.index) && (
+            <TouchableOpacity onPress={() => notADoor(a)} accessibilityRole="button"
+              accessibilityLabel={`${a.address} is not a delivery point`} style={s.notDoor}>
+              <Text style={s.link}>Not a door</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       ))}
       {!walk.closed_at && <Button variant="secondary" onPress={finish} fullWidth>Finish walk</Button>}
     </ScreenShell>
@@ -345,6 +458,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
          paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderRadius: radius.md,
          borderWidth: 1, borderColor: c.border, marginBottom: spacing.sm, backgroundColor: c.card },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: MIN_TARGET },
+  sub: { gap: spacing.sm, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: c.border },
+  link: { fontSize: fontSize.xs, color: c.primary, fontWeight: fontWeight.semibold },
+  notDoor: { minHeight: MIN_TARGET, justifyContent: 'center', paddingHorizontal: spacing.sm, marginBottom: spacing.sm },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.md,
            paddingVertical: spacing.sm, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background },
 });

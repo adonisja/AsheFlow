@@ -231,6 +231,9 @@ class Settings(BaseSettings):
     # AddressPoint dataset id. Pinned rather than hardcoded so a dataset
     # migration is a config change, not a code change.
     socrata_addresspoint_dataset: str = "uf93-f8nk"
+    # ADR-504 D8. NYC Building Footprints: BIN -> base_bbl, whose borough+block
+    # digits name the city (tax) block a door is on.
+    socrata_footprints_dataset: str = "5zhs-2jue"
     # ADR-504 D1. The owner's delivery company. Its employees may never write the
     # survey register. When unset, the stricter rule applies: an account linked
     # to an employee of ANY tenant is refused.

@@ -196,7 +196,8 @@ export default function SurveyStart() {
               <li key={o.id} className="py-2">
                 <span className="font-medium">{o.address}</span>
                 <span className="block text-xs text-muted-foreground">
-                  {buildingTypeLabel(o.building_type)} · {o.source.replace('_', ' ')} · {o.observed_on}
+                  {o.not_a_delivery_point ? 'Not a delivery point' : buildingTypeLabel(o.building_type)}
+                  {' · '}{o.source.replace('_', ' ')} · {o.observed_on}
                   {o.mine ? '' : ' · contributor'}
                 </span>
               </li>

@@ -14,7 +14,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.models.audit_log import AuditLog
-from app.models.survey_register import SurveyContributor, SurveyObservation, SurveyWalk
+from app.models.survey_register import (
+    SurveyContributor, SurveyDeliveryPoint, SurveyObservation, SurveyReceivesFor, SurveyWalk,
+)
 from app.routers import survey_register as R
 from app.services import survey_blocks
 from tests.conftest import SEED_COMPANY_ID, make_employee, sqlite_mirror_with_defaults
@@ -25,7 +27,8 @@ BLOCK = "W_32_St_400"
 
 @pytest.fixture(autouse=True)
 def _tables(db):
-    for m in (SurveyContributor, SurveyWalk, SurveyObservation, AuditLog):
+    for m in (SurveyContributor, SurveyWalk, SurveyObservation, SurveyDeliveryPoint,
+              SurveyReceivesFor, AuditLog):
         sqlite_mirror_with_defaults(m.__table__).create(db.get_bind(), checkfirst=True)
 
 
@@ -46,6 +49,15 @@ def city(monkeypatch):
             ]),
         ]
     monkeypatch.setattr(survey_blocks, "blocks_near", fake)
+
+    def fake_enrich(doors):
+        """Block 1/01073 faces W 32 and W 31; its other door is on W 31 St."""
+        return [{**d, "city_block": "101073", "sides": ["W 32 ST", "W 31 ST", "9 AVE"],
+                 "neighbours": [{"address": o["address"], "bin": o["bin"]} for o in doors
+                                if o["address"] != d["address"]]
+                               + [{"address": "433 W 31 ST", "bin": "1000009"}]}
+                for d in doors]
+    monkeypatch.setattr(survey_blocks, "enrich_doors", fake_enrich)
     return calls
 
 
@@ -246,10 +258,14 @@ class TestWhatARecordMayHold:
             _obs(db, OWNER_W, w.id, note=note)
         assert e.value.status_code == 422 and "code" in e.value.detail
 
-    def test_a_code_in_the_entrance_field_is_refused_too(self, db):
+    def test_a_code_in_a_delivery_point_is_refused_too(self, db):
         w = _walk(db, OWNER_W)
         with pytest.raises(HTTPException):
-            _obs(db, OWNER_W, w.id, entrance_side="side door, code 99#")
+            _obs(db, OWNER_W, w.id, delivery_points=[{"point": "service_entrance",
+                                                      "side": "side door, code 99#"}])
+        with pytest.raises(HTTPException):
+            _obs(db, OWNER_W, w.id, delivery_points=[{"point": "mailroom",
+                                                      "which_packages": "buzz 4B"}])
 
     def test_a_phone_number_is_scrubbed(self, db):
         w = _walk(db, OWNER_W)
@@ -257,8 +273,11 @@ class TestWhatARecordMayHold:
         assert "555-0199" not in o.note and "service entrance" in o.note
 
     @pytest.mark.parametrize("over", [
-        {"source": "the doorman"}, {"delivery_point": "roof"}, {"floors": 0},
+        {"source": "the doorman"}, {"delivery_points": [{"point": "roof"}]}, {"floors": 0},
         {"floors": 500}, {"note": "x" * 501}, {"resident_name": "Bob"},
+        {"security_desk": True}, {"delivery_points": [{"point": "mailroom"}] * 4},
+        {"weekday": {"status": "open"}}, {"weekday": {"status": "closed", "open": "08:00"}},
+        {"receives_for": [0, 0]}, {"break_start": "12:00"},
     ])
     def test_malformed_observations_are_refused(self, over):
         body = {"address_index": 0, "source": "observed", "building_type": "freight", **over}
@@ -335,3 +354,98 @@ class TestLocate:
         with pytest.raises(HTTPException) as e:
             R.survey_locate(address="999 Nowhere St", borough="manhattan", writer=OWNER_W)
         assert e.value.status_code == 404
+
+
+# ── ADR-504 D8: the form, version 2 ─────────────────────────────────────────
+
+class TestFormV2:
+    def test_the_walk_snapshots_block_sides_and_neighbours(self, db):
+        w = _walk(db, OWNER_W)
+        a = w.addresses[1]
+        assert a.city_block == "101073" and a.sides[0] == "W 32 ST"
+        assert [n.address for n in a.neighbours] == ["401 W 32 ST", "433 W 31 ST"]
+
+    def test_up_to_three_delivery_points_are_kept_in_order(self, db):
+        w = _walk(db, OWNER_W)
+        o = _obs(db, OWNER_W, w.id, delivery_points=[
+            {"point": "service_entrance", "side": "W 31 ST", "floor": 1},
+            {"point": "front_desk", "which_packages": "for the ground-floor business", "floor": 2},
+        ])
+        assert [(p.position, p.point, p.side, p.floor) for p in o.delivery_points] == [
+            (1, "service_entrance", "W 31 ST", 1), (2, "front_desk", None, 2)]
+        assert o.delivery_points[1].which_packages == "for the ground-floor business"
+
+    def test_receives_for_takes_only_same_block_doors(self, db):
+        w = _walk(db, OWNER_W)
+        o = _obs(db, OWNER_W, w.id, receives_for=[0, 1])
+        assert [r.address for r in o.receives_for] == ["401 W 32 ST", "433 W 31 ST"]
+
+    def test_receives_for_outside_the_block_is_refused(self, db):
+        w = _walk(db, OWNER_W)
+        with pytest.raises(HTTPException) as e:
+            _obs(db, OWNER_W, w.id, receives_for=[2])
+        assert e.value.status_code == 422 and "city block" in e.value.detail
+
+    def test_the_request_cannot_name_an_address_to_receive_for(self):
+        with pytest.raises(ValidationError):
+            R.ObservationIn(address_index=0, building_type="freight", receives_for=["320 W 42 ST"])
+
+    def test_hours_by_day_group(self, db):
+        w = _walk(db, OWNER_W)
+        o = _obs(db, OWNER_W, w.id,
+                 weekday={"status": "open", "open": "08:00", "close": "17:00"},
+                 saturday={"status": "open", "open": "09:00", "close": "15:00"},
+                 sunday={"status": "closed"})
+        assert (o.weekday.status, str(o.weekday.open), o.saturday.status, o.sunday.status) == (
+            "open", "08:00:00", "open", "closed")
+
+    def test_unanswered_means_didnt_find_out(self, db):
+        w = _walk(db, OWNER_W)
+        o = _obs(db, OWNER_W, w.id)
+        assert (o.security_desk, o.sign_in_required, o.weekday.status, o.sunday.status) == (
+            "unknown", "unknown", "unknown", "unknown")
+
+    def test_not_a_delivery_point_needs_nothing_else(self, db):
+        w = _walk(db, OWNER_W)
+        o = _obs(db, OWNER_W, w.id, building_type=None, not_a_delivery_point=True)
+        assert o.not_a_delivery_point and o.building_type == "unknown"
+        assert R.get_walk(w.id, writer=OWNER_W, db=db).recorded == [1]
+
+    def test_not_a_delivery_point_carries_no_delivery_details(self):
+        with pytest.raises(ValidationError):
+            R.ObservationIn(address_index=0, not_a_delivery_point=True,
+                            delivery_points=[{"point": "mailroom"}])
+
+    def test_a_delivery_point_needs_a_building_type(self):
+        with pytest.raises(ValidationError):
+            R.ObservationIn(address_index=0)
+
+
+class TestSideOrdering:
+    """D8 [B]: the owner's rule orders the streets the block actually faces."""
+    def test_even_on_a_street_offers_one_street_down(self):
+        assert survey_blocks.order_sides("330 W 34 ST", {"8 AVE", "9 AVE", "PENN PLZ", "W 33 ST", "W 34 ST"}) == [
+            "W 34 ST", "W 33 ST", "8 AVE", "9 AVE", "PENN PLZ"]
+
+    def test_odd_on_a_street_offers_one_street_up(self):
+        assert survey_blocks.order_sides("331 W 34 ST", {"8 AVE", "9 AVE", "W 35 ST", "W 34 ST"})[:2] == [
+            "W 34 ST", "W 35 ST"]
+
+    def test_on_an_avenue_the_cross_streets_come_first(self):
+        assert survey_blocks.order_sides("481 8 AVE", {"8 AVE", "9 AVE", "PENN PLZ", "W 34 ST", "W 35 ST"}) == [
+            "8 AVE", "W 34 ST", "W 35 ST", "9 AVE", "PENN PLZ"]
+
+    def test_a_street_the_block_does_not_face_is_never_offered(self):
+        assert "W 33 ST" not in survey_blocks.order_sides("331 W 34 ST", {"W 34 ST", "W 35 ST"})
+
+
+class TestEnrichmentFallback:
+    def test_without_footprints_neighbours_are_same_street_side_and_hundred(self, monkeypatch):
+        from app.services import survey_blocks as SB
+        monkeypatch.undo()                                # the real enrich_doors
+        monkeypatch.setattr(SB, "_fetch", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+        doors = [{"address": a, "bin": None, "lat": 40.75, "lng": -73.99}
+                 for a in ("450 W 42 ST", "460 W 42 ST", "451 W 42 ST", "550 W 42 ST")]
+        out = {d["address"]: d for d in SB.enrich_doors(doors)}
+        assert [n["address"] for n in out["450 W 42 ST"]["neighbours"]] == ["460 W 42 ST"]
+        assert out["450 W 42 ST"]["sides"] == ["W 42 ST"] and out["450 W 42 ST"]["city_block"] is None

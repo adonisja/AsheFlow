@@ -3377,6 +3377,11 @@ export interface RoleGuideUpdate {
 export type SurveySource = 'observed' | 'front_desk' | 'mailroom' | 'security';
 export type SurveyDeliveryPoint = 'main_entrance' | 'service_entrance' | 'loading_dock' | 'mailroom' | 'front_desk';
 export type SurveyDeliveryMode = 'each_unit' | 'one_drop_point';
+/** ADR-504 D8 [E]: "didn't find out" is an answer, and the default. */
+export type SurveyTri = 'yes' | 'no' | 'unknown';
+export type SurveyDayStatus = 'open' | 'closed' | 'unknown';
+
+export interface SurveyNeighbour { address: string; bin: string | null }
 
 export interface SurveyAddress {
   index: number;
@@ -3384,6 +3389,12 @@ export interface SurveyAddress {
   bin: string | null;
   lat: number | null;
   lng: number | null;
+  /** Set when a walk starts (D8). The block list preview leaves them empty. */
+  city_block?: string | null;
+  /** [B] The streets this door's city block faces, own street first. */
+  sides?: string[];
+  /** [A] The other doors on the same city block. */
+  neighbours?: SurveyNeighbour[];
 }
 
 export interface SurveyBlock {
@@ -3415,29 +3426,61 @@ export interface SurveyWalk {
   recorded: number[];
 }
 
-/** POST /survey/walks/{id}/observations. The address comes from the walk, by index. */
+export interface SurveyDeliveryPointIn {
+  point: SurveyDeliveryPoint;
+  side?: string | null;            // ≤120
+  floor?: number | null;           // -5..200
+  which_packages?: string | null;  // ≤120
+}
+
+export interface SurveyDayHours {
+  status: SurveyDayStatus;
+  open?: string | null;            // "HH:MM"; both required when status is 'open'
+  close?: string | null;
+}
+
+/** POST /survey/walks/{id}/observations. Addresses come from the walk, by index. */
 export interface SurveyObservationIn {
   address_index: number;
   source: SurveySource;
-  building_type: string;
-  delivery_point?: SurveyDeliveryPoint | null;
-  entrance_side?: string | null;     // ≤120
-  security_desk?: boolean | null;
-  sign_in_required?: boolean | null;
+  /** [F] Nothing else is sent when true. */
+  not_a_delivery_point?: boolean;
+  building_type?: string | null;
+  delivery_points?: SurveyDeliveryPointIn[];   // ≤3
+  /** [A] Indexes into this door's `neighbours`. */
+  receives_for?: number[];
+  security_desk?: SurveyTri;
+  sign_in_required?: SurveyTri;
   delivery_mode?: SurveyDeliveryMode | null;
-  floors?: number | null;            // 1–200
-  opens_at?: string | null;          // "HH:MM"
-  closes_at?: string | null;
-  break_start?: string | null;
+  floors?: number | null;          // 1–200
+  weekday?: SurveyDayHours;
+  saturday?: SurveyDayHours;
+  sunday?: SurveyDayHours;
+  break_start?: string | null;     // weekdays; both or neither
   break_end?: string | null;
-  note?: string | null;              // ≤500; codes are refused
+  note?: string | null;            // ≤500; codes are refused
 }
 
-export interface SurveyObservation extends Omit<SurveyObservationIn, 'address_index'> {
+export interface SurveyObservation {
   id: string;
   walk_id: string;
   address: string;
   bin: string | null;
   observed_on: string;
+  source: SurveySource;
+  not_a_delivery_point: boolean;
+  building_type: string;
+  delivery_points: (SurveyDeliveryPointIn & { position: number })[];
+  receives_for: SurveyNeighbour[];
+  security_desk: SurveyTri;
+  sign_in_required: SurveyTri;
+  delivery_mode: SurveyDeliveryMode | null;
+  floors: number | null;
+  weekday: SurveyDayHours;
+  saturday: SurveyDayHours;
+  sunday: SurveyDayHours;
+  break_start: string | null;
+  break_end: string | null;
+  note: string | null;
   mine: boolean;
 }
