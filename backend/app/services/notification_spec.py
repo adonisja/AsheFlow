@@ -258,6 +258,11 @@ SPEC: dict[str, Spec] = {
     # captain reviews it, may edit any field, and signs a copy. ACTION because it
     # awaits their sign-off; PUSH because they are usually on the road;
     # DISCORD because every pushed type mirrors there (ADR-487 invariant).
+    # ADR-512 D20: management reopened an accepted report, with a reason. INFO:
+    # the DA acts on it from the report itself; the verifier only if the DA edits.
+    "stolen_package_reopened": Spec(INFO, BANNER,
+        'Report Reopened', NEUTRAL, '🔓',   # The DA and the employee who verified
+        actions=(NotificationAction('Open report', '/incidents', 'primary'),)),
     "stolen_package_review": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Report To Sign', WARN, '📦',   # The truck's driver or captain
         actions=(NotificationAction('Review and sign', '/incidents', 'primary'),)),

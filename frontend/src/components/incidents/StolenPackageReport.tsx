@@ -4,12 +4,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle, Copy, PenLine, X } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
+import ConfirmDialog from '../ui/ConfirmDialog';
+import { useConfirm } from '../../hooks/useConfirm';
 import { errorText } from '../../utils/errorText';
 import { formatDateShort, getLocalYMD } from '../../utils/date';
 import { FIELD_LABELS, MAX_TBAS, TBA_RE, displayValue, emptyReport, fieldsOf, splitTbas } from '../../utils/stolenPackage';
 import type {
   StolenPackageFields, StolenPackageFiled, StolenPackagePrefill,
-  StolenPackageReport, StolenPackageToSign,
+  StolenPackageReopenIn, StolenPackageReport, StolenPackageToSign, StolenReportState,
 } from '../../api/types';
 
 const BASE = '/incidents/stolen-package';
@@ -107,7 +109,7 @@ function TbaInput({ value, onChange, disabled }: {
 // The form: filing (DA), editing the DA's version, or signing (reviewer).
 // ---------------------------------------------------------------------------
 
-export type FormMode = 'file' | 'edit' | 'sign';
+export type FormMode = 'file' | 'edit' | 'sign' | 'reverify';
 
 export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, onCancel }: {
   mode: FormMode;
@@ -148,16 +150,19 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
     try {
       if (mode === 'file') {
         const r = await axiosClient.post<StolenPackageFiled>(BASE, body);
-        onDone(r.data.review_required
-          ? `Report filed. ${r.data.reviewers_notified === 1 ? 'Your driver has' : 'Your driver and captain have'} been asked to sign it.`
-          : 'Report filed.');
+        onDone(r.data.reviewers_notified === 0
+          ? 'Report signed and filed. No driver or captain is on your truck today, so dispatch will arrange the verification.'
+          : `Report signed and filed. ${r.data.reviewers_notified === 1 ? 'Your driver has' : 'Your driver and captain have'} been asked to verify it.`);
         setF(emptyReport()); anchorTouched.current = false;
       } else if (mode === 'edit') {
         await axiosClient.put(`${BASE}/${incidentId}/da`, body);
-        onDone('Report updated.');
+        onDone('Report signed and saved.');
+      } else if (mode === 'reverify') {
+        await axiosClient.put(`${BASE}/${incidentId}/reviewer`, { ...body, reviewer_comments: comments.trim() || null });
+        onDone('Report verified again.');
       } else {
         await axiosClient.post(`${BASE}/${incidentId}/sign`, { ...body, reviewer_comments: comments.trim() || null });
-        onDone('Report signed.');
+        onDone('Report verified and signed.');
       }
     } catch (err: unknown) {
       setError(errorText(err, 'Could not save the report. Try again.'));
@@ -172,7 +177,12 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
     <div className="space-y-4">
       {mode === 'sign' && (
         <p className="text-sm text-foreground p-3 rounded-xl bg-info/10 border border-info/20">
-          This is {daName ?? 'the DA'}&apos;s report. Correct anything that is off, then sign. The signed copy is yours.
+          This is {daName ?? 'the DA'}&apos;s report. Correct anything that is off, then verify and sign. The verified copy is yours.
+        </p>
+      )}
+      {mode === 'reverify' && (
+        <p className="text-sm text-foreground p-3 rounded-xl bg-warning/10 border border-warning/20">
+          {daName ?? 'The DA'} changed their report. Their new version is below. Correct anything that is off, then verify it again.
         </p>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -251,12 +261,15 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
           className={`${inputCls} resize-y`} />
       </div>
 
-      {mode === 'sign' && (
+      {(mode === 'sign' || mode === 'reverify') && (
         <div>
           <label htmlFor="sp-comments" className={labelCls}>Additional comments</label>
           <textarea id="sp-comments" value={comments} maxLength={2000} rows={3}
             onChange={e => setComments(e.target.value)} className={`${inputCls} resize-y`} />
-          <p className="text-xs text-subtle mt-1">Only dispatch and management see this. It is not part of the copied report.</p>
+          <p className="text-xs text-subtle mt-1">
+            Only dispatch and management see this. It is not part of the copied report.
+            {mode === 'reverify' && ' Your earlier comments stay on file; anything you write here is added to them.'}
+          </p>
         </div>
       )}
 
@@ -264,7 +277,7 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
       <div className="flex gap-2">
         {onCancel && <button type="button" onClick={onCancel} className="btn-secondary flex-1 min-h-[44px]">Cancel</button>}
         <button type="button" onClick={submit} disabled={saving} className="btn-primary flex-1 min-h-[44px] disabled:opacity-50">
-          {saving ? 'Saving…' : mode === 'file' ? 'File report' : mode === 'edit' ? 'Save changes' : 'Sign report'}
+          {saving ? 'Saving…' : { file: 'Sign and file', edit: 'Sign and save', sign: 'Verify and sign', reverify: 'Verify again' }[mode]}
         </button>
       </div>
     </div>
@@ -313,16 +326,42 @@ export function CopyReportButton({ incidentId }: { incidentId: string }) {
 // server says this person may take.
 // ---------------------------------------------------------------------------
 
-export function StolenPackageReportView({ incidentId, onChanged }: { incidentId: string; onChanged?: () => void }) {
+const STATE_PILL: Record<StolenReportState, { label: (verifier: string) => string; cls: string }> = {
+  submitted:            { label: () => 'Waiting for verification', cls: 'bg-warning/15 text-warning' },
+  verified:             { label: v => `Verified by ${v}`, cls: 'bg-info/15 text-info' },
+  needs_reverification: { label: v => `DA changed it. Waiting for ${v} to verify again`, cls: 'bg-warning/15 text-warning' },
+  accepted:             { label: () => 'Accepted', cls: 'bg-success/15 text-success' },
+};
+
+export function StatePill({ state, verifier }: { state: StolenReportState; verifier?: string | null }) {
+  const p = STATE_PILL[state];
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${p.cls}`}>
+      {state === 'accepted' && <CheckCircle className="w-3 h-3" />}{p.label(verifier ?? 'the driver or captain')}
+    </span>
+  );
+}
+
+export function StolenPackageReportView({ incidentId, onChanged, onLoaded }: {
+  incidentId: string; onChanged?: () => void; onLoaded?: (hasReport: boolean) => void;
+}) {
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
   const [rep, setRep] = useState<StolenPackageReport | null>(null);
   const [mode, setMode] = useState<FormMode | null>(null);
   const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
   const [missing, setMissing] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
 
+  // A ref, so a parent passing an inline callback cannot make every render refetch.
+  const onLoadedRef = useRef(onLoaded);
+  onLoadedRef.current = onLoaded;
   const load = useCallback(() => {
     axiosClient.get<StolenPackageReport>(`${BASE}/${incidentId}`)
-      .then(r => setRep(r.data))
-      .catch(() => setMissing(true));
+      .then(r => { setRep(r.data); onLoadedRef.current?.(true); })
+      .catch(() => { setMissing(true); onLoadedRef.current?.(false); });
   }, [incidentId]);
   useEffect(load, [load]);
 
@@ -333,42 +372,76 @@ export function StolenPackageReportView({ incidentId, onChanged }: { incidentId:
   const da = rep.versions.da;
   const rv = rep.versions.reviewer;
   const shown = rv ?? da;
-  if (!shown) return null;
+  if (!shown || !da) return null;
 
-  if (mode && da) {
+  const done = (msg: string) => { setMode(null); setReopening(false); setReason(''); setError(''); setNotice(msg); load(); onChanged?.(); };
+
+  if (mode) {
+    // Verifying (first time or again) starts from the DA's current version.
     return (
       <StolenPackageForm mode={mode} incidentId={incidentId} daName={da.da_name}
-        initial={fieldsOf(da)}
-        onCancel={() => setMode(null)}
-        onDone={msg => { setMode(null); setNotice(msg); load(); onChanged?.(); }} />
+        initial={fieldsOf(da)} onCancel={() => setMode(null)} onDone={done} />
     );
   }
 
+  const acceptReport = async () => {
+    const ok = await confirm({
+      title: 'Accept report',
+      message: 'Accept this report? The DA and driver can no longer edit it.',
+      confirmLabel: 'Accept report',
+      variant: 'default',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await axiosClient.post(`${BASE}/${incidentId}/accept`);
+      done('Report accepted.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not accept the report.'));
+    } finally { setBusy(false); }
+  };
+
+  const reopenReport = async () => {
+    if (reason.trim().length < 3) return setError('Say why the report is being reopened.');
+    setBusy(true);
+    try {
+      const body: StolenPackageReopenIn = { reason: reason.trim() };
+      await axiosClient.post(`${BASE}/${incidentId}/reopen`, body);
+      done('Report reopened. The DA has been told why.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not reopen the report.'));
+    } finally { setBusy(false); }
+  };
+
   const mismatched = new Set(rep.mismatches.map(m => m.field));
   const keys = Object.keys(FIELD_LABELS) as (keyof StolenPackageFields)[];
+  const verifier = rv?.author_name ?? null;
 
   return (
     <div className="space-y-3">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       {notice && <p role="status" className="text-xs text-success">{notice}</p>}
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        {rv
-          ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-success/15 text-success font-semibold"><CheckCircle className="w-3 h-3" />Signed by {rv.author_name ?? 'reviewer'}</span>
-          : <span className="px-2 py-0.5 rounded-full bg-warning/15 text-warning font-semibold">Waiting for the driver or captain to sign</span>}
+        <StatePill state={rep.state} verifier={verifier} />
         {rep.mismatches.length > 0 && (
           <span className="px-2 py-0.5 rounded-full bg-danger/15 text-danger font-semibold">
             {rep.mismatches.length} difference{rep.mismatches.length === 1 ? '' : 's'} between versions
           </span>
         )}
+        {rep.state === 'accepted' && rep.accepted_at && <span className="text-subtle">on {formatDateShort(rep.accepted_at)}</span>}
         {shown.pi_cleared_at && <span className="text-subtle">Address and TBAs cleared after 60 days.</span>}
       </div>
+      {rep.state === 'submitted' && !rep.reviewers_available && (
+        <p className="text-xs text-warning">No driver or captain on this truck to verify it. Add one to the truck&apos;s assignment for that day and it will appear in their reports to sign.</p>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-left text-subtle">
               <th className="py-1 pr-3 font-semibold">Field</th>
-              <th className="py-1 pr-3 font-semibold">{rv ? `DA (${da?.author_name ?? 'DA'})` : 'Report'}</th>
-              {rv && <th className="py-1 font-semibold">Signed ({rv.author_name ?? 'reviewer'})</th>}
+              <th className="py-1 pr-3 font-semibold">{rv ? `DA (${da.author_name ?? 'DA'})` : 'Report'}</th>
+              {rv && <th className="py-1 font-semibold">Verified by {verifier ?? 'driver or captain'}</th>}
             </tr>
           </thead>
           <tbody>
@@ -379,7 +452,7 @@ export function StolenPackageReportView({ incidentId, onChanged }: { incidentId:
               return (
                 <tr key={k} className={`border-t border-border/50 ${diff ? 'bg-danger/10' : ''}`}>
                   <td className="py-1.5 pr-3 text-subtle align-top">{FIELD_LABELS[k]}{diff && <span className="sr-only"> (differs)</span>}</td>
-                  <td className={`py-1.5 pr-3 align-top whitespace-pre-wrap break-words ${diff ? 'text-danger font-semibold' : 'text-foreground'}`}>{displayValue(k, da?.[k])}</td>
+                  <td className={`py-1.5 pr-3 align-top whitespace-pre-wrap break-words ${diff ? 'text-danger font-semibold' : 'text-foreground'}`}>{displayValue(k, da[k])}</td>
                   {rv && <td className={`py-1.5 align-top whitespace-pre-wrap break-words ${diff ? 'text-danger font-semibold' : 'text-foreground'}`}>{displayValue(k, rv[k])}</td>}
                 </tr>
               );
@@ -390,20 +463,46 @@ export function StolenPackageReportView({ incidentId, onChanged }: { incidentId:
 
       {rv?.reviewer_comments && (
         <div className="p-3 rounded-xl bg-accent/30 border border-border">
-          <p className="text-xs font-semibold text-subtle uppercase tracking-wider mb-1">Additional comments from {rv.author_name ?? 'the reviewer'}</p>
+          <p className="text-xs font-semibold text-subtle uppercase tracking-wider mb-1">Additional comments from {verifier ?? 'the verifier'}</p>
           <p className="text-sm text-foreground whitespace-pre-wrap">{rv.reviewer_comments}</p>
           <p className="text-xs text-subtle mt-1">Visible to dispatch and management only. Not in the copied report.</p>
         </div>
       )}
 
+      {reopening && (
+        <div className="space-y-2 p-3 rounded-xl border border-border">
+          <label htmlFor={`reopen-${incidentId}`} className={labelCls}>Why reopen it? *</label>
+          <textarea id={`reopen-${incidentId}`} value={reason} maxLength={300} rows={2}
+            onChange={e => setReason(e.target.value)} className={`${inputCls} resize-y`}
+            placeholder="What needs correcting" />
+          <p className="text-xs text-subtle">The DA and the person who verified it see this. Don&apos;t include a customer&apos;s address.</p>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => { setReopening(false); setReason(''); }} className="btn-secondary text-xs min-h-[44px]">Cancel</button>
+            <button type="button" onClick={reopenReport} disabled={busy} className="btn-primary text-xs min-h-[44px] disabled:opacity-50">Reopen for edits</button>
+          </div>
+        </div>
+      )}
+
+      {error && <p role="alert" className="text-xs text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">
         {rep.can_sign && (
           <button type="button" onClick={() => setMode('sign')} className="btn-primary text-xs min-h-[44px] inline-flex items-center gap-1.5">
-            <PenLine className="w-3.5 h-3.5" /> Review and sign
+            <PenLine className="w-3.5 h-3.5" /> Review and verify
+          </button>
+        )}
+        {rep.can_reverify && (
+          <button type="button" onClick={() => setMode('reverify')} className="btn-primary text-xs min-h-[44px] inline-flex items-center gap-1.5">
+            <PenLine className="w-3.5 h-3.5" /> Verify again
           </button>
         )}
         {rep.can_edit_da && (
-          <button type="button" onClick={() => setMode('edit')} className="btn-secondary text-xs min-h-[44px]">Edit DA report</button>
+          <button type="button" onClick={() => setMode('edit')} className="btn-secondary text-xs min-h-[44px]">Edit and sign again</button>
+        )}
+        {rep.can_accept && (
+          <button type="button" onClick={acceptReport} disabled={busy} className="btn-primary text-xs min-h-[44px] disabled:opacity-50">Accept report</button>
+        )}
+        {rep.can_reopen && !reopening && (
+          <button type="button" onClick={() => setReopening(true)} className="btn-secondary text-xs min-h-[44px]">Reopen for edits</button>
         )}
         <CopyReportButton incidentId={incidentId} />
       </div>
@@ -426,13 +525,15 @@ export function ReportsToSign({ refreshKey, onSigned }: { refreshKey: number; on
   if (!rows.length) return null;
   return (
     <div className="card space-y-3 border-warning/40">
-      <h2 className="section-title">Reports to sign</h2>
+      <h2 className="section-title">Reports to verify</h2>
       {rows.map(r => (
         <div key={r.incident_id} className="rounded-xl border border-border bg-background p-3 space-y-3">
           <button type="button" onClick={() => setOpen(open === r.incident_id ? null : r.incident_id)}
-            className="w-full min-h-[44px] flex items-center justify-between text-left">
-            <span className="text-sm font-medium text-foreground">Stolen packages: {r.da_name ?? 'DA'}</span>
-            <span className="text-xs text-subtle">{formatDateShort(r.incident_date)} · {r.packages_stolen} package{r.packages_stolen === 1 ? '' : 's'}</span>
+            className="w-full min-h-[44px] flex items-center justify-between gap-2 text-left">
+            <span className="text-sm font-medium text-foreground">
+              {r.kind === 'reverify' ? 'Changed, verify again' : 'Stolen packages'}: {r.da_name ?? 'DA'}
+            </span>
+            <span className="text-xs text-subtle shrink-0">{formatDateShort(r.incident_date)} · {r.packages_stolen} package{r.packages_stolen === 1 ? '' : 's'}</span>
           </button>
           {open === r.incident_id && <StolenPackageReportView incidentId={r.incident_id} onChanged={onSigned} />}
         </div>
@@ -440,4 +541,3 @@ export function ReportsToSign({ refreshKey, onSigned }: { refreshKey: number; on
     </div>
   );
 }
-

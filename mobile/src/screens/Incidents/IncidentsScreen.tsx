@@ -10,15 +10,18 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import PageHeader from '@components/ui/PageHeader';
-import { ReportsToSign, StolenPackageForm, StolenPackageReportView } from './StolenPackageReport';
+import { ReportsToSign, StateLine, StolenPackageForm, StolenPackageReportView, type State } from './StolenPackageReport';
 
 type Incident = {
   id: string;
   category: string;
   severity: string;
   description: string;
-  status: string;
+  resolved: boolean;
   created_at: string;
+  // ADR-512: on a stolen-package incident with a report
+  stolen_report_state?: State | null;
+  my_report_version?: 'da' | 'reviewer' | null;
 };
 
 const CATEGORIES = [
@@ -65,11 +68,13 @@ export default function IncidentsScreen() {
   const [loading,     setLoading]     = useState(false);
   const [refreshing,  setRefreshing]  = useState(false);
   const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
+  const [historyCat,  setHistoryCat]  = useState<string>('');
 
   const fetchHistory = useCallback(async (opts?: { refresh?: boolean }) => {
     if (opts?.refresh) setRefreshing(true); else setLoading(true);
     try {
-      const res = await apiClient.get('/incidents/my');
+      // Filtered on the server: the list is paginated.
+      const res = await apiClient.get('/incidents/my', { params: historyCat ? { category: historyCat } : {} });
       setIncidents(res.data ?? []);
     } catch {
       setIncidents([]);
@@ -77,9 +82,9 @@ export default function IncidentsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [historyCat]);
 
-  useEffect(() => { if (tab === 'history') fetchHistory(); }, [tab, fetchHistory]);
+  useEffect(() => { if (tab === 'history') fetchHistory(); }, [tab, fetchHistory, reportKey]);
 
   const submitIncident = useCallback(async () => {
     if (!description.trim()) { Alert.alert('Required', 'Please enter a description.'); return; }
@@ -228,23 +233,48 @@ export default function IncidentsScreen() {
         ) : (
           <>
             <Text style={s.pageTitle}>My Incidents</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: spacing.sm }}
+              accessibilityLabel="Filter by category">
+              {['', ...CATEGORIES].map(cat => (
+                <TouchableOpacity
+                  key={cat || 'all'}
+                  accessibilityRole="radio" accessibilityState={{ checked: historyCat === cat }}
+                  style={[s.chip, historyCat === cat && { backgroundColor: c.primary, borderColor: c.primary }]}
+                  onPress={() => setHistoryCat(cat)}
+                >
+                  <Text style={[s.chipText, historyCat === cat && { color: c.primaryForeground }]}>{cat ? CATEGORY_LABELS[cat] : 'All'}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            {(historyCat === 'stolen_packages' || incidents.some(i => i.category === 'stolen_packages')) && (
+              <Text style={s.incMeta}>Accepted stolen-package reports stay here for 7 days.</Text>
+            )}
             {loading ? (
               <ActivityIndicator color={c.primary} style={{ marginTop: spacing.xl }} />
             ) : incidents.length === 0 ? (
-              <View style={s.emptyCard}><Text style={s.emptyText}>No incidents filed</Text></View>
+              <View style={s.emptyCard}><Text style={s.emptyText}>{historyCat ? 'No incidents in this category' : 'No incidents yet'}</Text></View>
             ) : incidents.map(inc => (
               <TouchableOpacity key={inc.id} style={s.incCard} onPress={() => toggle(inc.id)} activeOpacity={0.8}>
                 <View style={s.incHeader}>
                   <View style={[s.sevDot, { backgroundColor: SEVERITY_COLOR[inc.severity]?.(c) ?? c.mutedForeground }]} />
                   <View style={{ flex: 1 }}>
                     <Text style={s.incCategory}>{CATEGORY_LABELS[inc.category] ?? inc.category}</Text>
-                    <Text style={s.incMeta}>{inc.created_at.split('T')[0]}</Text>
-                  </View>
-                  <View style={[s.statusBadge, { backgroundColor: inc.status === 'resolved' ? c.success + '22' : c.warning + '22' }]}>
-                    <Text style={[s.statusText, { color: inc.status === 'resolved' ? c.success : c.warning }]}>
-                      {inc.status}
+                    <Text style={s.incMeta}>
+                      {inc.created_at.split('T')[0]}{inc.my_report_version === 'reviewer' ? ' · Verified by you' : ''}
                     </Text>
+                    {inc.stolen_report_state && (
+                      <StateLine state={inc.stolen_report_state} verifier={inc.my_report_version === 'reviewer' ? 'you' : null} />
+                    )}
                   </View>
+                  {/* The API returns `resolved`, never `status`: this badge read a
+                      field that does not exist and was always blank (found ADR-512). */}
+                  {!inc.stolen_report_state && (
+                    <View style={[s.statusBadge, { backgroundColor: inc.resolved ? c.success + '22' : c.warning + '22' }]}>
+                      <Text style={[s.statusText, { color: inc.resolved ? c.success : c.warning }]}>
+                        {inc.resolved ? 'resolved' : 'open'}
+                      </Text>
+                    </View>
+                  )}
                   <Text style={s.chevron}>{expanded.has(inc.id) ? '▲' : '▼'}</Text>
                 </View>
                 {expanded.has(inc.id) && (

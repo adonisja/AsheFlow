@@ -1,5 +1,5 @@
 import { errorText } from '../utils/errorText';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import SelectMenu from '../components/ui/SelectMenu';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,7 +7,7 @@ import axiosClient from '../api/axiosClient';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
 import type { Incident } from '../api/types';
-import { ReportsToSign, StolenPackageForm, StolenPackageReportView } from '../components/incidents/StolenPackageReport';
+import { ReportsToSign, StatePill, StolenPackageForm, StolenPackageReportView } from '../components/incidents/StolenPackageReport';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -277,21 +277,37 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
 function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKey: number }) {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [category, setCategory] = useState('');
+  const [bump, setBump] = useState(0);
 
   useEffect(() => {
     if (!employeeId) return;
-    axiosClient.get('/incidents/my')
+    // The filter runs on the server: the list is paginated.
+    axiosClient.get('/incidents/my', { params: category ? { category } : {} })
       .then(res => setIncidents(res.data))
       .catch((e) => { console.error('Failed to load incidents:', e); });
-  }, [employeeId, refreshKey]);
-
-  if (incidents.length === 0) return (
-    <div className="card text-center py-8 text-subtle text-sm">No incidents submitted yet.</div>
-  );
+  }, [employeeId, refreshKey, category, bump]);
 
   return (
     <div className="card space-y-3">
-      <h2 className="section-title">My Submitted Incidents</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="section-title">My Incidents</h2>
+        <div className="w-full sm:w-56">
+          <SelectMenu
+            value={category}
+            options={[{ value: '', label: 'All categories' }, ...CATEGORIES.map(c => ({ value: c.value, label: c.label }))]}
+            placeholder="All categories"
+            ariaLabel="Filter my incidents by category"
+            onChange={setCategory}
+          />
+        </div>
+      </div>
+      {incidents.some(i => i.category === 'stolen_packages') && (
+        <p className="text-xs text-subtle">Accepted stolen-package reports stay here for 7 days.</p>
+      )}
+      {incidents.length === 0 && (
+        <p className="text-center py-6 text-subtle text-sm">{category ? 'No incidents in this category.' : 'No incidents yet.'}</p>
+      )}
       {incidents.map(inc => (
         <div key={inc.id} className="rounded-xl border border-border bg-background overflow-hidden">
           <button
@@ -302,9 +318,10 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
               <SeverityBadge severity={inc.severity} />
               <span className="text-sm font-medium text-foreground truncate"><CategoryLabel category={inc.category} /></span>
               <span className="text-xs text-subtle shrink-0">{inc.date}</span>
+              {inc.my_report_version === 'reviewer' && <span className="text-xs text-subtle shrink-0">Verified by you</span>}
             </div>
             <div className="flex items-center gap-2 shrink-0 ml-2">
-              {inc.resolved
+              {inc.stolen_report_state ? <StatePill state={inc.stolen_report_state} verifier={inc.my_report_version === 'reviewer' ? 'you' : null} /> : inc.resolved
                 ? <span className="text-xs text-success font-medium flex items-center gap-1"><CheckCircle className="w-3 h-3" />Resolved</span>
                 : <span className="text-xs text-subtle">Open</span>}
               {expanded === inc.id ? <ChevronUp className="w-4 h-4 text-subtle" /> : <ChevronDown className="w-4 h-4 text-subtle" />}
@@ -312,8 +329,8 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
           </button>
           {expanded === inc.id && (
             <div className="px-4 pb-4 space-y-2 border-t border-border/50 pt-3">
-              {inc.category === 'stolen_packages' && <StolenPackageReportView incidentId={inc.id} />}
-              <p className="text-sm text-foreground">{inc.description}</p>
+              {inc.category === 'stolen_packages' && <StolenPackageReportView incidentId={inc.id} onChanged={() => setBump(b => b + 1)} />}
+              {!inc.stolen_report_state && <p className="text-sm text-foreground">{inc.description}</p>}
               {inc.incident_location && <p className="text-xs text-subtle">Location: {inc.incident_location}</p>}
               {inc.packages_tba && <p className="text-xs text-subtle">Packages TBA: {inc.packages_tba}</p>}
               {inc.incident_time && <p className="text-xs text-subtle">Time of incident: {inc.incident_time}</p>}
@@ -348,6 +365,15 @@ function ManagementView() {
   const [filterResolved, setFilterResolved] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  // ADR-512 D14: an incident with a stolen-package report is accepted from the
+  // report (both signatures required), so its generic Mark Resolved is hidden.
+  const [withReport, setWithReport] = useState<Set<string>>(new Set());
+  const markReport = useCallback((id: string, has: boolean) => {
+    setWithReport(prev => {
+      if (has === prev.has(id)) return prev;
+      const n = new Set(prev); if (has) n.add(id); else n.delete(id); return n;
+    });
+  }, []);
 
   const load = () => {
     const params: Record<string, string | boolean> = {};
@@ -454,7 +480,10 @@ function ManagementView() {
 
               {expanded === inc.id && (
                 <div className="px-4 pb-4 border-t border-border/50 pt-3 space-y-3">
-                  {inc.category === 'stolen_packages' && <StolenPackageReportView incidentId={inc.id} />}
+                  {inc.category === 'stolen_packages' && (
+                    <StolenPackageReportView incidentId={inc.id} onChanged={load}
+                      onLoaded={has => markReport(inc.id, has)} />
+                  )}
                   <p className="text-sm text-foreground">{inc.description}</p>
                   <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-subtle">
                     {inc.incident_location && <p>Location: <span className="text-foreground">{inc.incident_location}</span></p>}
@@ -470,7 +499,7 @@ function ManagementView() {
                   {inc.photo_url && (
                     <img src={inc.photo_url} alt="Incident" className="rounded-xl max-h-48 object-cover border border-border" />
                   )}
-                  {!inc.resolved && (
+                  {!inc.resolved && !withReport.has(inc.id) && (
                     <button
                       onClick={() => handleResolve(inc.id)}
                       disabled={resolving === inc.id}

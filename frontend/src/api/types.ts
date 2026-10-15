@@ -738,6 +738,9 @@ export interface Incident {
   driver_name?: string;
   truck_name?: string;
   driver_id?: string;
+  /** ADR-512: from GET /incidents/my, on a stolen-package incident with a report. */
+  stolen_report_state?: StolenReportState | null;
+  my_report_version?: StolenReportVersionKey | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -785,14 +788,27 @@ export interface StolenPackageMismatch {
   reviewer: unknown;
 }
 
+/** Derived on the server (ADR-512 D12, D18). */
+export type StolenReportState = 'submitted' | 'verified' | 'needs_reverification' | 'accepted';
+
 export interface StolenPackageReport {
   incident_id: string;
   dsp: string | null;
+  state: StolenReportState;
   resolved: boolean;
+  accepted_at: string | null;
   versions: Partial<Record<StolenReportVersionKey, StolenPackageVersion>>;
   mismatches: StolenPackageMismatch[];
+  reviewers_available: boolean;
   can_sign: boolean;
+  can_reverify: boolean;
   can_edit_da: boolean;
+  can_accept: boolean;
+  can_reopen: boolean;
+}
+
+export interface StolenPackageReopenIn {
+  reason: string;   // 3..300, shown to the DA and the verifier
 }
 
 export interface StolenPackagePrefill {
@@ -806,6 +822,7 @@ export interface StolenPackagePrefill {
 export interface StolenPackageToSign {
   incident_id: string;
   incident_date: string;
+  kind: 'sign' | 'reverify';
   da_name: string | null;
   packages_stolen: number;
 }

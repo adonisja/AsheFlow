@@ -44,11 +44,15 @@ type Version = Fields & {
   signed_at: string | null;
   pi_cleared_at: string | null;
 };
+export type State = 'submitted' | 'verified' | 'needs_reverification' | 'accepted';
 type Report = {
   incident_id: string;
   dsp: string | null;
+  state: State;
+  accepted_at: string | null;
   versions: Partial<Record<'da' | 'reviewer', Version>>;
   can_sign: boolean;
+  can_reverify: boolean;
   can_edit_da: boolean;
 };
 type Prefill = {
@@ -57,7 +61,7 @@ type Prefill = {
   anchor_point_address: string | null;
   reviewers: Array<{ id: string; name: string | null }>;
 };
-export type ToSign = { incident_id: string; incident_date: string; da_name: string | null; packages_stolen: number };
+export type ToSign = { incident_id: string; incident_date: string; kind: 'sign' | 'reverify'; da_name: string | null; packages_stolen: number };
 
 const ymd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -166,7 +170,7 @@ function TbaInput({ value, onChange }: { value: string[]; onChange: (v: string[]
 
 // ─── The form ────────────────────────────────────────────────────────────────
 
-export type FormMode = 'file' | 'edit' | 'sign';
+export type FormMode = 'file' | 'edit' | 'sign' | 'reverify';
 
 export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, onCancel }: {
   mode: FormMode; incidentId?: string; initial?: Fields; daName?: string | null;
@@ -208,15 +212,18 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
       if (mode === 'file') {
         const r = await apiClient.post(BASE, body);
         tick();
-        onDone(r.data.review_required
-          ? `Report filed. ${r.data.reviewers_notified === 1 ? 'Your driver has' : 'Your driver and captain have'} been asked to sign it.`
-          : 'Report filed.');
+        onDone(r.data.reviewers_notified === 0
+          ? 'Report signed and filed. No driver or captain is on your truck today, so dispatch will arrange the verification.'
+          : `Report signed and filed. ${r.data.reviewers_notified === 1 ? 'Your driver has' : 'Your driver and captain have'} been asked to verify it.`);
       } else if (mode === 'edit') {
         await apiClient.put(`${BASE}/${incidentId}/da`, body);
-        tick(); onDone('Report updated.');
+        tick(); onDone('Report signed and saved.');
+      } else if (mode === 'reverify') {
+        await apiClient.put(`${BASE}/${incidentId}/reviewer`, { ...body, reviewer_comments: comments.trim() || null });
+        tick(); onDone('Report verified again.');
       } else {
         await apiClient.post(`${BASE}/${incidentId}/sign`, { ...body, reviewer_comments: comments.trim() || null });
-        tick(); onDone('Report signed.');
+        tick(); onDone('Report verified and signed.');
       }
     } catch (err: unknown) {
       Alert.alert('Not saved', errorText(err, 'Could not save the report. Try again.'));
@@ -229,7 +236,10 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
   return (
     <View>
       {mode === 'sign' && (
-        <Text style={s.note}>This is {daName ?? 'the DA'}'s report. Correct anything that is off, then sign. The signed copy is yours.</Text>
+        <Text style={s.note}>This is {daName ?? 'the DA'}'s report. Correct anything that is off, then verify and sign. The verified copy is yours.</Text>
+      )}
+      {mode === 'reverify' && (
+        <Text style={[s.note, { backgroundColor: c.warningLight }]}>{daName ?? 'The DA'} changed their report. Their new version is below. Correct anything that is off, then verify it again.</Text>
       )}
       <View style={s.pairRow}>
         <View style={s.pairCell}><Text style={s.label}>DSP</Text><Text style={s.value}>{prefill?.dsp ?? (mode === 'file' ? '…' : 'From company settings')}</Text></View>
@@ -298,12 +308,15 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
       <TextInput style={[input, s.area]} value={f.summary} maxLength={2000} multiline textAlignVertical="top"
         placeholder="What happened, in order" placeholderTextColor={c.placeholder} onChangeText={v => set('summary', v)} />
 
-      {mode === 'sign' && (
+      {(mode === 'sign' || mode === 'reverify') && (
         <>
           <Text style={s.label}>Additional comments</Text>
           <TextInput style={[input, s.area]} value={comments} maxLength={2000} multiline textAlignVertical="top"
             onChangeText={setComments} />
-          <Text style={s.hint}>Only dispatch and management see this. It is not part of the copied report.</Text>
+          <Text style={s.hint}>
+            Only dispatch and management see this. It is not part of the copied report.
+            {mode === 'reverify' ? ' Your earlier comments stay on file; anything you write here is added to them.' : ''}
+          </Text>
         </>
       )}
 
@@ -311,7 +324,7 @@ export function StolenPackageForm({ mode, incidentId, initial, daName, onDone, o
         {onCancel && <View style={s.grow}><Button variant="secondary" fullWidth onPress={onCancel}>Cancel</Button></View>}
         <View style={s.grow}>
           <Button fullWidth loading={saving} disabled={saving} onPress={submit}>
-            {mode === 'file' ? 'File report' : mode === 'edit' ? 'Save changes' : 'Sign report'}
+            {{ file: 'Sign and file', edit: 'Sign and save', sign: 'Verify and sign', reverify: 'Verify again' }[mode]}
           </Button>
         </View>
       </View>
@@ -367,19 +380,30 @@ export function StolenPackageReportView({ incidentId, onChanged }: { incidentId:
   return (
     <View>
       {!!notice && <Text style={[s.hint, { color: c.success }]}>{notice}</Text>}
-      <Text style={[s.status, { color: rv ? c.success : c.warning }]}>
-        {rv ? `Signed by ${rv.author_name ?? 'reviewer'}` : 'Waiting for the driver or captain to sign'}
-      </Text>
+      <StateLine state={rep.state} verifier={rv?.author_name ?? null} />
       {rows.map(([k, v]) => (
         <View key={k} style={s.kv}><Text style={s.k}>{k}</Text><Text style={s.v}>{v}</Text></View>
       ))}
       <View style={s.actions}>
-        {rep.can_sign && <View style={s.grow}><Button fullWidth onPress={() => setMode('sign')}>Review and sign</Button></View>}
-        {rep.can_edit_da && <View style={s.grow}><Button variant="secondary" fullWidth onPress={() => setMode('edit')}>Edit</Button></View>}
+        {rep.can_sign && <View style={s.grow}><Button fullWidth onPress={() => setMode('sign')}>Review and verify</Button></View>}
+        {rep.can_reverify && <View style={s.grow}><Button fullWidth onPress={() => setMode('reverify')}>Verify again</Button></View>}
+        {rep.can_edit_da && <View style={s.grow}><Button variant="secondary" fullWidth onPress={() => setMode('edit')}>Edit and sign again</Button></View>}
         <View style={s.grow}><Button variant="outline" fullWidth onPress={() => shareReport(incidentId)}>Copy report</Button></View>
       </View>
     </View>
   );
+}
+
+export function StateLine({ state, verifier }: { state: State; verifier: string | null }) {
+  const c = useColors(); const s = styles(c);
+  const who = verifier ?? 'the driver or captain';
+  const [text, color] = {
+    submitted:            ['Waiting for verification', c.warning],
+    verified:             [`Verified by ${who}`, c.info],
+    needs_reverification: [`DA changed it. Waiting for ${who} to verify again`, c.warning],
+    accepted:             ['Accepted', c.success],
+  }[state];
+  return <Text style={[s.status, { color }]}>{text}</Text>;
 }
 
 // ─── Reports waiting for this person's signature ─────────────────────────────
@@ -394,12 +418,12 @@ export function ReportsToSign({ refreshKey, onSigned }: { refreshKey: number; on
   if (!rows.length) return null;
   return (
     <View style={s.signCard}>
-      <Text style={s.signTitle}>Reports to sign</Text>
+      <Text style={s.signTitle}>Reports to verify</Text>
       {rows.map(r => (
         <View key={r.incident_id} style={s.signRow}>
           <TouchableOpacity style={s.signHead} onPress={() => setOpen(open === r.incident_id ? null : r.incident_id)}
             accessibilityRole="button" accessibilityState={{ expanded: open === r.incident_id }}>
-            <Text style={s.signName}>Stolen packages: {r.da_name ?? 'DA'}</Text>
+            <Text style={s.signName}>{r.kind === 'reverify' ? 'Changed, verify again' : 'Stolen packages'}: {r.da_name ?? 'DA'}</Text>
             <Text style={s.hint}>
               {new Date(`${r.incident_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {r.packages_stolen} pkg
             </Text>

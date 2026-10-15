@@ -5,12 +5,15 @@ from uuid import UUID
 from app.services.local_date import company_today
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import and_, not_, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.deps import RoleChecker, get_current_user, Pagination, get_caller_employee
 from app.services.audit import write_audit
 from app.models.incident import Incident
+from app.routers.registration import ROLE_TO_COGNITO_GROUP
+from app.models.stolen_package_report import ReportVersion, StolenPackageReport
 from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
@@ -25,6 +28,8 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 allow_field_staff = RoleChecker(["driver", "walker", "trainer", "trainee"])
 allow_management  = RoleChecker(["dispatch", "management", "admin"])
+#: Every tenant role, from the canonical map (ADR-512 audit D2: /my had no gate).
+allow_any_tenant_role = RoleChecker(sorted(ROLE_TO_COGNITO_GROUP))
 
 
 def _resolve_assignment(reporter_id: UUID, date, company_id: UUID, db: Session) -> tuple[Optional[UUID], Optional[UUID]]:
@@ -213,20 +218,68 @@ def submit_incident(
 @router.get("/my", response_model=List[IncidentResponse])
 def get_my_incidents(
     pg: Pagination = Depends(),
+    category: Optional[str] = Query(default=None, description="Only this category"),
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_any_tenant_role),
 ):
-    """Return all incidents submitted by the authenticated caller, newest first.
+    """The caller's incidents, newest first: those they reported, plus
+    stolen-package reports they verified (ADR-512). A stolen-package report is
+    shown while open and for 7 days after acceptance (ADR-512 D16).
 
     reporter_id is resolved from the JWT — callers cannot read another
     employee's incident history by supplying a different UUID.
     """
+    # Imported here: that router imports this one.
+    from app.routers.stolen_package_reports import FIELD_VIEW_DAYS_AFTER_ACCEPT, _state
+
+    if category is not None and category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Invalid category. Choose from: {', '.join(sorted(VALID_CATEGORIES))}")
+    verified = (
+        db.query(StolenPackageReport.incident_id)
+        .filter(StolenPackageReport.company_id == caller.company_id,
+                StolenPackageReport.author_id == caller.id,
+                StolenPackageReport.version == ReportVersion.REVIEWER)
+    )
+    with_report = (
+        db.query(StolenPackageReport.incident_id)
+        .filter(StolenPackageReport.company_id == caller.company_id)
+    )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FIELD_VIEW_DAYS_AFTER_ACCEPT)
     q = (
         db.query(Incident)
-        .filter(Incident.reporter_id == caller.id, Incident.company_id == caller.company_id)
+        .filter(Incident.company_id == caller.company_id,
+                or_(Incident.reporter_id == caller.id, Incident.id.in_(verified)))
+        # A stolen-package report accepted more than 7 days ago leaves field view.
+        .filter(not_(and_(Incident.category == "stolen_packages",
+                          Incident.resolved.is_(True),
+                          Incident.resolved_at < cutoff,
+                          Incident.id.in_(with_report))))
         .order_by(Incident.created_at.desc())
     )
-    return pg.apply(q).all()
+    if category is not None:
+        q = q.filter(Incident.category == category)
+    rows = pg.apply(q).all()
+
+    stolen_ids = [i.id for i in rows if i.category == "stolen_packages"]
+    versions: dict = {}
+    if stolen_ids:
+        for r in (db.query(StolenPackageReport)
+                  .filter(StolenPackageReport.company_id == caller.company_id,
+                          StolenPackageReport.incident_id.in_(stolen_ids)).all()):
+            versions.setdefault(r.incident_id, {})[r.version] = r
+    out = []
+    for inc in rows:
+        item = IncidentResponse.model_validate(inc)
+        v = versions.get(inc.id)
+        if v:
+            mine = [k for k, r in v.items() if r.author_id == caller.id]
+            item = item.model_copy(update={
+                "stolen_report_state": _state(inc, v),
+                "my_report_version": ("da" if "da" in mine else mine[0]) if mine else None,
+            })
+        out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +412,16 @@ def resolve_incident(
         raise HTTPException(status_code=404, detail="Incident not found.")
     if incident.resolved:
         raise HTTPException(status_code=400, detail="Incident is already resolved.")
+    if incident.category == "stolen_packages":
+        # ADR-512 D14: resolving IS accepting the report, so the same rule applies
+        # here or "Mark Resolved" is a way around it. Legacy incidents with no
+        # report rows resolve as before. Imported here: that router imports this one.
+        # One path, so both authors are told and the audit says "accepted".
+        from app.routers.stolen_package_reports import _load
+        _inc, versions = _load(db, incident.id, resolver)
+        if versions:
+            raise HTTPException(status_code=409,
+                                detail="Accept this stolen-package report from the report itself: both signatures are required.")
 
     incident.resolved = True
     incident.resolved_by = resolver.id

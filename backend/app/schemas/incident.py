@@ -83,6 +83,11 @@ class IncidentResponse(BaseModel):
     resolved_at: Optional[datetime] = None
     created_at: datetime
 
+    # ADR-512: set by GET /incidents/my on a stolen-package incident that has a
+    # report. The report's state, and which version the caller wrote.
+    stolen_report_state: Optional[Literal["submitted", "verified", "needs_reverification", "accepted"]] = None
+    my_report_version: Optional[Literal["da", "reviewer"]] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 

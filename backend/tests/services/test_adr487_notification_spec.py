@@ -282,7 +282,8 @@ class TestTheCountsMatchTheApprovedRegistry:
         # exception to "every type is declared": the TIER is declared, the
         # INSTANCES are data.
         # 87 since ADR-512: stolen_package_review asks a driver or captain to sign.
-        assert len(SPEC) == 87
+        # 88: stolen_package_reopened (ADR-512 D20).
+        assert len(SPEC) == 88
         assert len(RETIRED) == 4
 
     def test_severity_distribution(self):
@@ -296,7 +297,8 @@ class TestTheCountsMatchTheApprovedRegistry:
         # once per route, is about this reader, and awaits their tap.
         # ADR-512 adds stolen_package_review, ACTION (30->31): a report waits on
         # this reader's signature.
-        assert counts == {"urgent": 4, "action": 31, "notice": 1, "info": 51}, counts
+        # ADR-512 D20 adds stolen_package_reopened, INFO (51->52).
+        assert counts == {"urgent": 4, "action": 31, "notice": 1, "info": 52}, counts
 
     def test_only_two_types_gate(self):
         """ADR-494 D1 narrowed GATE from four types to two.

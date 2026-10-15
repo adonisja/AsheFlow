@@ -43,6 +43,12 @@ def array_as_json(monkeypatch):
     monkeypatch.setattr(PG_ARRAY, "result_processor", result)
 
 
+@pytest.fixture(autouse=True)
+def no_delivery():
+    with patch("app.services.notify._enqueue"):
+        yield
+
+
 @pytest.fixture
 def crew(db, array_as_json):
     for m in (Incident, StolenPackageReport, AnchorPoint):
@@ -108,12 +114,19 @@ class TestFiling:
         da = db.query(StolenPackageReport).one()
         assert da.version == "da" and da.author_id == crew["da"].id and da.tbas == [TBA1]
 
-    def test_a_da_who_is_the_only_driver_needs_no_review(self, db, crew):
+    def test_a_lone_driver_cannot_verify_their_own_and_the_report_waits(self, db, crew):
+        # D14: verification is always required. The filer is never their own
+        # verifier, so a truck with nobody else leaves the report waiting.
         lone = make_employee(db, role="driver", name="Solo")
         t2 = make_truck(db, "Truck 9"); ta2 = make_assignment(db, t2, TODAY)
         make_member(db, ta2, lone, "driver"); db.commit()
         out = _file(db, lone)
-        assert out["reviewers_notified"] == 0 and out["review_required"] is False
+        assert out["reviewers_notified"] == 0 and out["review_required"] is True
+        v = R.get_report(uuid.UUID(out["incident_id"]), db=db, caller=crew["dispatch"], _={})
+        assert v["reviewers_available"] is False and v["can_accept"] is False
+        with pytest.raises(HTTPException) as e:
+            R.accept(uuid.UUID(out["incident_id"]), db=db, caller=crew["dispatch"], _={})
+        assert e.value.status_code == 409
 
 
 class TestVisibility:
@@ -205,15 +218,251 @@ class TestToSign:
             assert len(R.to_sign(db=db, caller=crew["driver"], _={})) == 1
 
 
-class TestLocking:
-    def test_the_da_edits_until_signed_then_it_locks(self, db, crew):
+def _notes(db, type_, who):
+    from app.models.notification import Notification
+    return db.query(Notification).filter_by(type=type_, employee_id=who.id).all()
+
+
+def _audit(db, action):
+    from app.models.audit_log import AuditLog
+    return db.query(AuditLog).filter_by(action_type=action).all()
+
+
+def _verified(db, crew, signer="driver"):
+    iid = _file(db, crew["da"])["incident_id"]
+    _sign(db, crew[signer], iid)
+    return uuid.UUID(iid)
+
+
+def _accept(db, crew, iid, who="dispatch"):
+    return R.accept(iid, db=db, caller=crew[who], _={})
+
+
+def _my(db, who, category=None):
+    from app.api.deps import Pagination
+    from app.routers import incidents as I
+    return I.get_my_incidents(pg=Pagination(skip=0, limit=100), category=category, db=db, caller=who, _={})
+
+
+def _state(db, crew, iid):
+    return R.get_report(iid, db=db, caller=crew["dispatch"], _={})["state"]
+
+
+class TestSigningIsSaving:
+    def test_filing_is_the_das_signature(self, db, crew):
         iid = uuid.UUID(_file(db, crew["da"])["incident_id"])
+        da = db.query(StolenPackageReport).filter_by(version="da").one()
+        assert da.signed_at is not None
+        assert _state(db, crew, iid) == "submitted"
+
+    def test_a_da_edit_after_verification_asks_the_same_verifier_again(self, db, crew):
+        iid = _verified(db, crew, "driver")
+        assert _state(db, crew, iid) == "verified"
         R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        assert _state(db, crew, iid) == "needs_reverification"
+        # By employee id: the driver who verified, not the captain on the same truck.
+        assert len(_notes(db, "stolen_package_review", crew["driver"])) == 2   # first ask + again
+        assert len(_notes(db, "stolen_package_review", crew["captain"])) == 1  # first ask only
+
+    def test_saving_twice_asks_once(self, db, crew):
+        iid = _verified(db, crew)
+        R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        R.edit_da(iid, _body(packages_stolen=3), db=db, caller=crew["da"], _={})
+        assert len(_notes(db, "stolen_package_review", crew["driver"])) == 2
+
+    def test_the_audit_names_the_changed_fields_and_never_their_values(self, db, crew):
+        iid = _verified(db, crew)
+        R.edit_da(iid, _body(incident_address="402 W 25 St"), db=db, caller=crew["da"], _={})
+        row = _audit(db, "stolen_package.da_signed")[-1]
+        assert row.after_snapshot["fields_changed"] == ["incident_address"]
+        assert "402 W 25 St" not in json.dumps(row.after_snapshot)
+
+    def test_nobody_else_edits_the_das_account(self, db, crew):
+        iid = uuid.UUID(_file(db, crew["da"])["incident_id"])
+        for who in ("manager", "driver", "dispatch"):
+            with pytest.raises(HTTPException) as e:
+                R.edit_da(iid, _body(packages_stolen=9), db=db, caller=crew[who], _={})
+            assert e.value.status_code == 403, who
+
+
+class TestReverification:
+    def test_the_verifier_edits_only_when_the_da_has_changed_theirs(self, db, crew):
+        iid = _verified(db, crew)
+        with pytest.raises(HTTPException) as e:
+            R.reverify(iid, R.SignIn(**_body().model_dump()), db=db, caller=crew["driver"], _={})
+        assert e.value.status_code == 409
+        R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        R.reverify(iid, R.SignIn(**_body(packages_stolen=2).model_dump(), reviewer_comments="ok"),
+                   db=db, caller=crew["driver"], _={})
+        assert _state(db, crew, iid) == "verified"
+
+    def test_reverifying_adds_to_the_comments_and_a_blank_box_erases_nothing(self, db, crew):
+        iid = uuid.UUID(_file(db, crew["da"])["incident_id"])
+        _sign(db, crew["driver"], str(iid), reviewer_comments="DA was on the phone")
+        for n, text in enumerate([None, "Second look: count is right"]):
+            R.edit_da(iid, _body(packages_stolen=2 + n), db=db, caller=crew["da"], _={})
+            R.reverify(iid, R.SignIn(**_body(packages_stolen=2 + n).model_dump(), reviewer_comments=text),
+                       db=db, caller=crew["driver"], _={})
+        rv = db.query(StolenPackageReport).filter_by(version="reviewer").one()
+        assert rv.reviewer_comments.startswith("DA was on the phone")
+        assert rv.reviewer_comments.endswith("On re-verification: Second look: count is right")
+
+    def test_only_the_employee_who_verified_may_verify_again(self, db, crew):
+        iid = _verified(db, crew, "driver")
+        R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        with pytest.raises(HTTPException) as e:
+            R.reverify(iid, R.SignIn(**_body().model_dump()), db=db, caller=crew["captain"], _={})
+        assert e.value.status_code == 403
+
+    def test_the_list_shows_the_reverification_to_the_verifier_only(self, db, crew):
+        with patch.object(R, "company_today", return_value=TODAY):
+            iid = _verified(db, crew, "driver")
+            R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+            assert [(x["incident_id"], x["kind"]) for x in R.to_sign(db=db, caller=crew["driver"], _={})] \
+                == [(str(iid), "reverify")]
+            assert R.to_sign(db=db, caller=crew["captain"], _={}) == []
+
+
+class TestAccept:
+    def test_accept_needs_the_verification_and_then_locks_everyone(self, db, crew):
+        iid = uuid.UUID(_file(db, crew["da"])["incident_id"])
+        with pytest.raises(HTTPException) as e:
+            _accept(db, crew, iid)
+        assert e.value.status_code == 409
+        _sign(db, crew["driver"], str(iid))
+        _accept(db, crew, iid)
+        assert _state(db, crew, iid) == "accepted"
+        with pytest.raises(HTTPException) as e:
+            R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        assert e.value.status_code == 409
+        with pytest.raises(HTTPException) as e:
+            _accept(db, crew, iid)
+        assert e.value.status_code == 409
+        assert len(_notes(db, "incident_resolved", crew["da"])) == 1
+        assert len(_notes(db, "incident_resolved", crew["driver"])) == 1
+
+    def test_a_pending_reverification_blocks_accept(self, db, crew):
+        iid = _verified(db, crew)
+        R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        with pytest.raises(HTTPException) as e:
+            _accept(db, crew, iid)
+        assert e.value.status_code == 409
+
+    def test_mark_resolved_is_not_a_way_around_it_even_when_verified(self, db, crew):
+        # One path: accepting tells both authors; Mark Resolved told the reporter only.
+        from app.routers import incidents as I
+        iid = uuid.UUID(_file(db, crew["da"])["incident_id"])
+        with pytest.raises(HTTPException) as e:
+            I.resolve_incident(iid, resolver=crew["dispatch"], _={}, db=db)
+        assert e.value.status_code == 409
         _sign(db, crew["driver"], str(iid))
         with pytest.raises(HTTPException) as e:
-            R.edit_da(iid, _body(packages_stolen=3), db=db, caller=crew["da"], _={})
+            I.resolve_incident(iid, resolver=crew["dispatch"], _={}, db=db)
         assert e.value.status_code == 409
-        R.edit_da(iid, _body(packages_stolen=4), db=db, caller=crew["manager"], _={})
+
+    def test_who_may_accept_and_who_may_reopen(self):
+        assert _gate(R.accept) == {"dispatch", "management", "admin"}
+        assert _gate(R.reopen) == {"management", "admin"}
+
+
+class TestReopen:
+    def _reason(self, r="TBA list was incomplete"):
+        return R.ReopenIn(reason=r)
+
+    def test_a_reason_is_required(self):
+        with pytest.raises(ValidationError):
+            R.ReopenIn(reason="")
+        with pytest.raises(ValidationError):
+            R.ReopenIn(reason="x" * 301)
+
+    def test_reopen_tells_the_da_and_the_verifier_by_id_and_hands_back_the_pen(self, db, crew):
+        iid = _verified(db, crew, "driver")
+        _accept(db, crew, iid)
+        R.reopen(iid, self._reason(), db=db, caller=crew["manager"], _={})
+        assert _state(db, crew, iid) == "verified"
+        assert len(_notes(db, "stolen_package_reopened", crew["da"])) == 1
+        assert len(_notes(db, "stolen_package_reopened", crew["driver"])) == 1
+        assert _notes(db, "stolen_package_reopened", crew["captain"]) == []
+        assert "TBA list was incomplete" in _notes(db, "stolen_package_reopened", crew["da"])[0].message
+        assert _audit(db, "stolen_package.reopened")[-1].after_snapshot["reason"] == "TBA list was incomplete"
+        # The verifier waits for the DA (D18) …
+        with pytest.raises(HTTPException) as e:
+            R.reverify(iid, R.SignIn(**_body().model_dump()), db=db, caller=crew["driver"], _={})
+        assert e.value.status_code == 409
+        # … and the DA's edit is what hands it to them.
+        R.edit_da(iid, _body(packages_stolen=2), db=db, caller=crew["da"], _={})
+        assert _state(db, crew, iid) == "needs_reverification"
+
+    def test_not_after_seven_days(self, db, crew):
+        iid = _verified(db, crew)
+        _accept(db, crew, iid)
+        db.get(Incident, iid).resolved_at = datetime.now(timezone.utc) - timedelta(days=8)
+        db.commit()
+        with pytest.raises(HTTPException) as e:
+            R.reopen(iid, self._reason(), db=db, caller=crew["manager"], _={})
+        assert e.value.status_code == 409
+
+    def test_not_after_the_data_is_cleared(self, db, crew):
+        iid = _verified(db, crew)
+        _accept(db, crew, iid)
+        db.query(StolenPackageReport).filter_by(version="da").one().pi_cleared_at = datetime.now(timezone.utc)
+        db.commit()
+        with pytest.raises(HTTPException) as e:
+            R.reopen(iid, self._reason(), db=db, caller=crew["manager"], _={})
+        assert e.value.status_code == 409
+
+    def test_an_open_report_cannot_be_reopened(self, db, crew):
+        iid = _verified(db, crew)
+        with pytest.raises(HTTPException) as e:
+            R.reopen(iid, self._reason(), db=db, caller=crew["manager"], _={})
+        assert e.value.status_code == 409
+
+
+class TestSevenDayFieldWindow:
+    def _accepted_days_ago(self, db, crew, days):
+        iid = _verified(db, crew, "driver")
+        _accept(db, crew, iid)
+        db.get(Incident, iid).resolved_at = datetime.now(timezone.utc) - timedelta(days=days)
+        db.commit()
+        return iid
+
+    def test_field_staff_see_it_for_seven_days_then_only_oversight_does(self, db, crew):
+        iid = self._accepted_days_ago(db, crew, 6)
+        R.get_report(iid, db=db, caller=crew["da"], _={})
+        assert [x.id for x in _my(db, crew["driver"])] == [iid]
+        db.get(Incident, iid).resolved_at = datetime.now(timezone.utc) - timedelta(days=8)
+        db.commit()
+        for who in ("da", "driver"):
+            with pytest.raises(HTTPException) as e:
+                R.get_report(iid, db=db, caller=crew[who], _={})
+            assert e.value.status_code == 404
+        assert _my(db, crew["driver"]) == []
+        assert _my(db, crew["da"]) == [], "the DA's own incident list honours the window too"
+        R.get_report(iid, db=db, caller=crew["dispatch"], _={})
+
+    def test_the_verifier_finds_their_report_after_signing(self, db, crew):
+        # The gap the owner found: after signing, the report left the signer's lists.
+        iid = _verified(db, crew, "captain")
+        rows = _my(db, crew["captain"])
+        assert [(r.id, r.my_report_version, r.stolen_report_state) for r in rows] == [(iid, "reviewer", "verified")]
+        da_rows = _my(db, crew["da"])
+        assert [(r.id, r.my_report_version, r.stolen_report_state) for r in da_rows] == [(iid, "da", "verified")]
+
+    def test_my_incidents_filters_by_category(self, db, crew):
+        iid = uuid.UUID(_file(db, crew["da"])["incident_id"])
+        db.add(Incident(company_id=SEED_COMPANY_ID, reporter_id=crew["da"].id, date=TODAY,
+                        category="vehicle", severity="warning", description="Mirror clipped"))
+        db.commit()
+        assert {r.category for r in _my(db, crew["da"])} == {"stolen_packages", "vehicle"}
+        assert [r.id for r in _my(db, crew["da"], "stolen_packages")] == [iid]
+        assert [r.category for r in _my(db, crew["da"], "vehicle")] == ["vehicle"]
+        with pytest.raises(HTTPException) as e:
+            _my(db, crew["da"], "nonsense")
+        assert e.value.status_code == 422
+
+    def test_a_coworker_on_the_truck_who_did_not_verify_does_not_get_it_in_their_list(self, db, crew):
+        _verified(db, crew, "driver")
+        assert _my(db, crew["captain"]) == []
 
 
 class TestMismatches:
@@ -227,16 +476,19 @@ class TestMismatches:
 
 
 class TestTheIncidentFollowsTheReportOfRecord:
-    def test_signing_moves_the_incident_to_the_signed_numbers_and_a_late_da_edit_does_not(self, db, crew):
+    def test_the_verified_copy_is_the_record_until_it_is_verified_again(self, db, crew):
         iid = _file(db, crew["da"])["incident_id"]
         inc = db.get(Incident, uuid.UUID(iid))
         assert inc.packages_tba == 1
         _sign(db, crew["driver"], iid, packages_stolen=3, summary="Signed account.")
         db.refresh(inc)
         assert (inc.packages_tba, inc.description) == (3, "Signed account.")
-        R.edit_da(uuid.UUID(iid), _body(packages_stolen=9), db=db, caller=crew["manager"], _={})
+        R.edit_da(uuid.UUID(iid), _body(packages_stolen=9), db=db, caller=crew["da"], _={})
         db.refresh(inc)
-        assert inc.packages_tba == 3, "a correction to the superseded DA version is not the record"
+        assert inc.packages_tba == 3, "an unverified DA change is not the record"
+        R.reverify(uuid.UUID(iid), R.SignIn(**_body(packages_stolen=9).model_dump()), db=db, caller=crew["driver"], _={})
+        db.refresh(inc)
+        assert inc.packages_tba == 9
 
 
 class TestReportText:

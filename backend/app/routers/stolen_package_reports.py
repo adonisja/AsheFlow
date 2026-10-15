@@ -2,10 +2,20 @@
 
 One theft produces one `Incident` and up to two `StolenPackageReport` versions:
 
-    da        filed by the DA; editable by the DA until the reviewer signs
-    reviewer  the DA's version, reviewed, edited and SIGNED by the truck's driver
-              or captain that day (owner's amendment: either may), attributed to
-              the signer. The first to sign wins; a second sign is a 409.
+    da        filed by the DA; filing and every later save is the DA's signature
+    reviewer  "Verified by": the DA's version, reviewed, edited and signed by the
+              truck's driver or captain that day, attributed to the signer. The
+              first to sign wins; a second first-sign is a 409.
+
+States (derived, never stored; ADR-512 D12, D18):
+
+    submitted              da only
+    verified               reviewer signed after the DA's last save
+    needs_reverification   the DA saved after the reviewer signed: the SAME
+                           verifier is asked again and may then edit their copy
+    accepted               Incident.resolved; nobody edits. Management/admin may
+                           reopen with a reason, within 7 days, before the
+                           60-day clearing (D20)
 
 Dispatch, management and admin see both, the field-by-field mismatches (computed
 here at read time, never stored), and the reviewer's private comments. The
@@ -56,8 +66,13 @@ REVIEWER_ROLES = ("driver", "captain")
 #: How far back a reviewer's "to sign" list looks. A report is filed the day
 #: of the theft; two weeks covers a reviewer off for a week.
 TO_SIGN_DAYS = 14
-#: Management/admin may edit a version after the reviewer signs (ADR-512 D2).
-EDIT_AFTER_LOCK = ("management", "admin")
+#: Field staff read an accepted report for this many days after acceptance (D16).
+FIELD_VIEW_DAYS_AFTER_ACCEPT = 7
+#: An accepted report can be reopened for this many days after acceptance (D20).
+REOPEN_DAYS = 7
+allow_oversight = RoleChecker(list(OVERSIGHT))
+#: Only management reopens; admin included because admins have full access (D15).
+allow_reopen = RoleChecker(["management", "admin"])
 
 TBA_RE = re.compile(r"^TBA\d{12}$")
 
@@ -107,7 +122,57 @@ class SignIn(StolenPackageIn):
     reviewer_comments: Optional[str] = Field(default=None, max_length=2000)
 
 
+class ReopenIn(BaseModel):
+    """Why management is reopening: shown to the authors and kept in the audit."""
+
+    reason: str = Field(min_length=3, max_length=300)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 # ---------------------------------------------------------------- helpers ----
+
+def _aware(v: Optional[datetime]) -> Optional[datetime]:
+    """A naive value is UTC (the columns are timestamptz; some drivers drop the zone)."""
+    if v is None:
+        return None
+    return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+
+
+def _signed(r: Optional[StolenPackageReport]) -> Optional[datetime]:
+    """When this version was last signed. A DA row filed before D18 has no
+    signed_at; its filing time is its signature."""
+    if r is None:
+        return None
+    return _aware(r.signed_at or r.created_at)
+
+
+def _state(inc: Incident, versions: dict) -> str:
+    da, rv = versions.get(ReportVersion.DA), versions.get(ReportVersion.REVIEWER)
+    if inc.resolved:
+        return "accepted"
+    if rv is None:
+        return "submitted"
+    if da is not None and _signed(da) > _signed(rv):
+        return "needs_reverification"
+    return "verified"
+
+
+def _changed(r: StolenPackageReport, body: StolenPackageIn) -> list[str]:
+    """Names of the fields a save changes. Names only: values hold customer data."""
+    out = []
+    for f in COMPARED:
+        old, new = getattr(r, f), getattr(body, f)
+        if f == "tbas":
+            old, new = sorted(old or []), sorted(new or [])
+        if old != new:
+            out.append(f)
+    return out
+
+
+def _within(at: Optional[datetime], days: int) -> bool:
+    return at is not None and _aware(at) >= datetime.now(timezone.utc) - timedelta(days=days)
+
 
 def _dsp(db: Session, company_id) -> Optional[str]:
     c = db.query(Company.amazon_dsp_code, Company.amazon_dsp_name).filter(Company.id == company_id).first()
@@ -134,9 +199,6 @@ def _anchor_at(db: Session, company_id, truck_id, d: date, t: Optional[time]) ->
         return None
     if t is not None:
         at = company_datetime(company_tz(db, company_id), d, t)
-        # A naive value is UTC (the column is timestamptz; some drivers drop the zone).
-        def _aware(v):
-            return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
         before = [a for a in aps if a.submitted_at is not None and _aware(a.submitted_at) <= at]
         if before:
             return before[-1].location
@@ -193,10 +255,13 @@ def _load(db: Session, incident_id: UUID, caller: Employee):
 
 
 def _can_view(db: Session, inc: Incident, versions: dict, caller: Employee) -> bool:
+    """Oversight always. Field staff (an author, or a driver/captain on the truck
+    that day) while the report is open and for 7 days after acceptance (D16)."""
     if caller.role in OVERSIGHT:
         return True
-    da = versions.get(ReportVersion.DA)
-    if da is not None and da.author_id == caller.id:
+    if inc.resolved and not _within(inc.resolved_at, FIELD_VIEW_DAYS_AFTER_ACCEPT):
+        return False
+    if any(r.author_id == caller.id for r in versions.values()):
         return True
     return caller.id in _reviewer_ids(db, caller.company_id, inc.truck_id, inc.date)
 
@@ -286,7 +351,9 @@ def file_report(
     db.flush()
     report = StolenPackageReport(company_id=caller.company_id, incident_id=inc.id,
                                  version=ReportVersion.DA, author_id=caller.id,
-                                 da_employee_id=caller.id)
+                                 da_employee_id=caller.id,
+                                 # Filing is the DA's signature (D12, D18).
+                                 signed_at=datetime.now(timezone.utc))
     _apply(report, body)
     db.add(report)
     db.flush()
@@ -306,9 +373,10 @@ def file_report(
                 detail={"packages_stolen": body.packages_stolen, "tbas": len(body.tbas),
                         "reviewers_notified": len(reviewers)})
     db.commit()
+    # Verification is always required (D14). No reviewer on the truck means the
+    # report waits; oversight is shown why, and adding one to the truck fixes it.
     return {"incident_id": str(inc.id), "reviewers_notified": len(reviewers),
-            # The DA is the only driver/captain on the truck: their version is final.
-            "review_required": bool(reviewers)}
+            "review_required": True}
 
 
 @router.get("/to-sign")
@@ -354,12 +422,34 @@ def to_sign(
                 StolenPackageReport.incident_id.in_([i.id for i, _r in rows] or [None]))
         .all()
     }
-    names = _names(db, caller.company_id, [r.da_employee_id for _i, r in rows])
-    return [
-        {"incident_id": str(i.id), "incident_date": i.date.isoformat(),
-         "da_name": names.get(r.da_employee_id), "packages_stolen": r.packages_stolen}
-        for i, r in rows if i.id not in signed
-    ]
+    first = [(i, r) for i, r in rows if i.id not in signed and not i.resolved]
+
+    # Re-verifications: only for the employee who verified, by id (D18), on any
+    # truck, as long as the report is open.
+    verified_by_me = (
+        db.query(Incident)
+        .join(StolenPackageReport, StolenPackageReport.incident_id == Incident.id)
+        .filter(StolenPackageReport.company_id == caller.company_id,
+                Incident.company_id == caller.company_id,
+                StolenPackageReport.version == ReportVersion.REVIEWER,
+                StolenPackageReport.author_id == caller.id,
+                Incident.resolved.is_(False))
+        .all()
+    )
+    allv: dict = {}
+    for r in (db.query(StolenPackageReport)
+              .filter(StolenPackageReport.company_id == caller.company_id,
+                      StolenPackageReport.incident_id.in_([i.id for i in verified_by_me] or [None]))
+              .all()):
+        allv.setdefault(r.incident_id, {})[r.version] = r
+    again = [(i, allv[i.id][ReportVersion.DA]) for i in verified_by_me
+             if _state(i, allv.get(i.id, {})) == "needs_reverification"]
+
+    names = _names(db, caller.company_id, [r.da_employee_id for _i, r in first + again])
+    out = lambda i, r, kind: {   # noqa: E731
+        "incident_id": str(i.id), "incident_date": i.date.isoformat(), "kind": kind,
+        "da_name": names.get(r.da_employee_id), "packages_stolen": r.packages_stolen}
+    return [out(i, r, "reverify") for i, r in again] + [out(i, r, "sign") for i, r in first]
 
 
 @router.get("/{incident_id}")
@@ -376,18 +466,27 @@ def get_report(
     ids = {r.author_id for r in versions.values()} | {r.da_employee_id for r in versions.values()}
     names = _names(db, caller.company_id, ids)
     reviewer_ids = _reviewer_ids(db, caller.company_id, inc.truck_id, inc.date)
-    da = versions.get(ReportVersion.DA)
+    da, rv = versions.get(ReportVersion.DA), versions.get(ReportVersion.REVIEWER)
+    state = _state(inc, versions)
+    open_ = state != "accepted"
     return {
         "incident_id": str(inc.id),
         "dsp": _dsp(db, caller.company_id),
+        "state": state,
         "resolved": inc.resolved,
+        "accepted_at": _aware(inc.resolved_at).isoformat() if inc.resolved_at else None,
         "versions": {v: _out(r, oversight, names) for v, r in versions.items()},
         "mismatches": _mismatches(versions) if oversight else [],
-        "can_sign": (ReportVersion.REVIEWER not in versions and caller.id in reviewer_ids
+        # Somebody can still verify: a driver/captain on the truck who did not file.
+        "reviewers_available": any(i != (da.author_id if da else None) for i in reviewer_ids),
+        "can_sign": (open_ and rv is None and caller.id in reviewer_ids
                      and (da is None or da.author_id != caller.id)),
-        "can_edit_da": (da is not None and (
-            caller.role in EDIT_AFTER_LOCK
-            or (da.author_id == caller.id and ReportVersion.REVIEWER not in versions))),
+        "can_reverify": state == "needs_reverification" and rv.author_id == caller.id,
+        "can_edit_da": open_ and da is not None and da.author_id == caller.id,
+        "can_accept": caller.role in OVERSIGHT and state == "verified",
+        "can_reopen": (caller.role in ("management", "admin") and state == "accepted"
+                       and _within(inc.resolved_at, REOPEN_DAYS)
+                       and not any(r.pi_cleared_at for r in versions.values())),
     }
 
 
@@ -399,27 +498,42 @@ def edit_da(
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_any_role),
 ):
-    """The DA edits their version until the reviewer signs; management/admin any time."""
+    """The DA edits and re-signs their version until acceptance (D18). Nobody
+    else edits it: it is their signed account."""
     inc, versions = _load(db, incident_id, caller)
-    da = versions.get(ReportVersion.DA)
+    da, rv = versions.get(ReportVersion.DA), versions.get(ReportVersion.REVIEWER)
     if da is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
-    if caller.role not in EDIT_AFTER_LOCK:
-        if da.author_id != caller.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail="Only the DA who filed this report can edit it.")
-        if ReportVersion.REVIEWER in versions:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                detail="This report has been signed and is locked.")
+    if da.author_id != caller.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only the DA who filed this report can edit it.")
+    if inc.resolved:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="This report has been accepted. Ask a manager to reopen it.")
+    was = _state(inc, versions)
+    changed = _changed(da, body)
     _apply(da, body)
-    if ReportVersion.REVIEWER not in versions:   # else the signed copy is the record
+    da.signed_at = datetime.now(timezone.utc)   # saving is signing
+    if rv is None:   # else the verified copy stays the record until re-verified
         _mirror(inc, da)
+    # The verified copy now rests on an account that changed: ask the SAME
+    # verifier, by id, to look again (D18). Only on the transition, so a DA
+    # saving twice does not notify twice.
+    reverify = rv is not None and was == "verified"
+    if reverify:
+        write_notification(
+            db, company_id=caller.company_id, employee_id=rv.author_id, type="stolen_package_review",
+            message=(f"{caller.name} changed their stolen-package report for {da.incident_date:%a, %b %d}. "
+                     f"Review the changes and verify it again."),
+        )
     db.flush()
     write_audit(db=db, company_id=caller.company_id, actor_id=caller.id,
-                action_type="stolen_package.da_edited", target_table="stolen_package_reports",
-                target_id=str(da.id), detail={"incident_id": str(inc.id)})
+                action_type="stolen_package.da_signed", target_table="stolen_package_reports",
+                target_id=str(da.id),
+                detail={"incident_id": str(inc.id), "fields_changed": changed,
+                        "reverification_requested": reverify})
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "state": _state(inc, versions)}
 
 
 @router.post("/{incident_id}/sign", status_code=status.HTTP_201_CREATED)
@@ -463,6 +577,124 @@ def sign(
                 detail={"incident_id": str(inc.id), "mismatches": len(_mismatches({**versions, ReportVersion.REVIEWER: rv}))})
     db.commit()
     return {"ok": True, "signed_at": rv.signed_at.isoformat()}
+
+
+@router.put("/{incident_id}/reviewer")
+def reverify(
+    incident_id: UUID,
+    body: SignIn,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_any_role),
+):
+    """The verifier signs again after the DA changed their version (D18). Only
+    the employee who verified, and only when re-verification is needed."""
+    inc, versions = _load(db, incident_id, caller)
+    rv = versions.get(ReportVersion.REVIEWER)
+    if rv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    if rv.author_id != caller.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only the person who verified this report can verify it again.")
+    if _state(inc, versions) != "needs_reverification":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="There is nothing to verify again: the DA has not changed their report.")
+    changed = _changed(rv, body)
+    _apply(rv, body)
+    # The verifier cannot read their earlier comments (oversight only, D5), so a
+    # blank box must not erase them: new comments are added, never replaced.
+    new = (body.reviewer_comments or "").strip()
+    if new:
+        rv.reviewer_comments = f"{rv.reviewer_comments}\n\nOn re-verification: {new}" if rv.reviewer_comments else new
+    rv.signed_at = datetime.now(timezone.utc)
+    _mirror(inc, rv)
+    db.flush()
+    write_audit(db=db, company_id=caller.company_id, actor_id=caller.id,
+                action_type="stolen_package.reverified", target_table="stolen_package_reports",
+                target_id=str(rv.id), detail={"incident_id": str(inc.id), "fields_changed": changed})
+    db.commit()
+    return {"ok": True, "state": _state(inc, versions)}
+
+
+@router.post("/{incident_id}/accept")
+def accept(
+    incident_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_oversight),
+):
+    """Dispatch/management/admin accept a verified report. Both signatures are
+    required, with no exception (D14)."""
+    inc, versions = _load(db, incident_id, caller)
+    state = _state(inc, versions)
+    if state == "accepted":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This report is already accepted.")
+    if state != "verified":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACCEPT_BLOCKED[state])
+    inc.resolved, inc.resolved_by, inc.resolved_at = True, caller.id, datetime.now(timezone.utc)
+    for eid in {r.author_id for r in versions.values()}:
+        write_notification(
+            db, company_id=caller.company_id, employee_id=eid, type="incident_resolved",
+            message=f"Your stolen-package report for {inc.date:%a, %b %d} was accepted.",
+        )
+    db.flush()
+    write_audit(db=db, company_id=caller.company_id, actor_id=caller.id,
+                action_type="stolen_package.accepted", target_table="incidents",
+                target_id=str(inc.id), detail={"mismatches": len(_mismatches(versions))})
+    db.commit()
+    return {"ok": True, "state": "accepted"}
+
+
+#: Why a report cannot be accepted yet, by state. Shared with the generic
+#: incident resolve, which applies the same rule (D14).
+ACCEPT_BLOCKED = {
+    "submitted": "This report needs the driver's or captain's signature before it can be accepted.",
+    "needs_reverification": "The DA changed this report after it was verified. It needs verifying again.",
+}
+
+
+@router.post("/{incident_id}/reopen")
+def reopen(
+    incident_id: UUID,
+    body: ReopenIn,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_reopen),
+):
+    """Management/admin reopen an accepted report, with a reason, within 7 days
+    of acceptance and before the 60-day clearing (D20)."""
+    inc, versions = _load(db, incident_id, caller)
+    if not inc.resolved:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This report is not accepted.")
+    if any(r.pi_cleared_at for r in versions.values()):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="The address and TBAs have been cleared, so this report can no longer be reopened.")
+    if not _within(inc.resolved_at, REOPEN_DAYS):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Reports can be reopened for {REOPEN_DAYS} days after they are accepted.")
+    accepted_by, accepted_at = inc.resolved_by, inc.resolved_at
+    inc.resolved, inc.resolved_by, inc.resolved_at = False, None, None
+    reason = body.reason.strip()
+    da, rv = versions.get(ReportVersion.DA), versions.get(ReportVersion.REVIEWER)
+    when = f"{inc.date:%a, %b %d}"
+    if da is not None:
+        write_notification(
+            db, company_id=caller.company_id, employee_id=da.author_id, type="stolen_package_reopened",
+            message=f'Your stolen-package report for {when} was reopened ("{reason}"). Edit it and sign it again.',
+        )
+    if rv is not None:   # the employee who verified, by id (D18)
+        write_notification(
+            db, company_id=caller.company_id, employee_id=rv.author_id, type="stolen_package_reopened",
+            message=(f'The stolen-package report you verified for {when} was reopened ("{reason}"). '
+                     f"If the DA changes it, you will be asked to verify it again."),
+        )
+    db.flush()
+    write_audit(db=db, company_id=caller.company_id, actor_id=caller.id,
+                action_type="stolen_package.reopened", target_table="incidents", target_id=str(inc.id),
+                detail={"reason": reason, "accepted_by": str(accepted_by) if accepted_by else None,
+                        "accepted_at": _aware(accepted_at).isoformat() if accepted_at else None})
+    db.commit()
+    return {"ok": True, "state": _state(inc, versions)}
 
 
 def report_text(dsp: Optional[str], r: StolenPackageReport, da_name: Optional[str]) -> str:
