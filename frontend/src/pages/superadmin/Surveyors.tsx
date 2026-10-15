@@ -5,16 +5,24 @@
  * only create NEW accounts (an existing email is refused), never the caller's
  * own, and never an account linked to the excluded company's employees. The
  * server enforces all three; this page explains them.
+ *
+ * ADR-513: it also opens and closes SURVEY AREAS. An area is a boundary the city
+ * drew (an NTA or a Community District), named by its official code, never a
+ * shape drawn here: the choice of blocks must come from public data, not from
+ * where anyone delivers (ADR-504 D3).
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, Loader2, UserPlus } from 'lucide-react';
+import { Check, Copy, Loader2, MapPinned, UserPlus } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { errorText } from '../../utils/errorText';
 import { formatDate } from '../../utils/date';
-import type { SurveyContributor, SurveyContributorInvite, SurveyContributorInvited } from '../../api/types';
+import type {
+  SurveyArea, SurveyAreaIn, SurveyAreaKind, SurveyContributor, SurveyContributorInvite, SurveyContributorInvited,
+} from '../../api/types';
+import { ProgressBar } from '../survey/surveyUi';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const inputCls = 'w-full rounded-lg border border-input bg-background px-3 py-2 text-sm';
@@ -32,6 +40,13 @@ export default function Surveyors() {
   const [toRevoke, setToRevoke] = useState<SurveyContributor | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const [areas, setAreas] = useState<SurveyArea[] | null>(null);
+  const [kind, setKind] = useState<SurveyAreaKind>('nta');
+  const [code, setCode] = useState('');
+  const [reason, setReason] = useState('');
+  const [areaBusy, setAreaBusy] = useState(false);
+  const [toClose, setToClose] = useState<SurveyArea | null>(null);
+
   const load = useCallback(async () => {
     try {
       setRows((await axiosClient.get<SurveyContributor[]>('/survey/contributors')).data);
@@ -40,6 +55,46 @@ export default function Surveyors() {
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  const loadAreas = useCallback(async () => {
+    try {
+      setAreas((await axiosClient.get<SurveyArea[]>('/survey/areas')).data);
+    } catch (e) {
+      setAreas([]);
+      setError(errorText(e, "Couldn't load survey areas."));
+    }
+  }, []);
+  useEffect(() => { void loadAreas(); }, [loadAreas]);
+
+  const declare = async () => {
+    setAreaBusy(true);
+    setError(null);
+    try {
+      const body: SurveyAreaIn = { kind, code: code.trim().toUpperCase(), reason: reason.trim() };
+      await axiosClient.post('/survey/areas', body);
+      setCode(''); setReason('');
+      await loadAreas();
+    } catch (e) {
+      setError(errorText(e, "Couldn't open the area."));
+    } finally {
+      setAreaBusy(false);
+    }
+  };
+
+  const closeArea = async () => {
+    if (!toClose) return;
+    setAreaBusy(true);
+    setError(null);
+    try {
+      await axiosClient.post(`/survey/areas/${toClose.id}/close`);
+      setToClose(null);
+      await loadAreas();
+    } catch (e) {
+      setError(errorText(e, "Couldn't close the area."));
+    } finally {
+      setAreaBusy(false);
+    }
+  };
 
   const invite = async () => {
     setBusy(true);
@@ -151,6 +206,63 @@ export default function Surveyors() {
         </button>
       </section>
 
+      <section className="card p-4 space-y-3" aria-labelledby="areas-h">
+        <h2 id="areas-h" className="text-sm font-semibold">Survey areas</h2>
+        <p className="text-xs text-muted-foreground">
+          Surveyors claim blocks inside open areas. Use the city's own code: a neighbourhood (NTA) like
+          MN0401, or a community district like 104. The city's address list for it is saved when you open it.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-[auto_8rem_1fr]">
+          <div role="radiogroup" aria-label="Kind of area" className="inline-flex self-end rounded-full border border-border p-0.5">
+            {([['nta', 'Neighbourhood'], ['cd', 'Community district']] as const).map(([k, label]) => (
+              <button key={k} type="button" role="radio" aria-checked={kind === k} onClick={() => setKind(k)}
+                className={`rounded-full px-3 py-1.5 text-sm ${kind === k ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="space-y-1 text-sm">
+            <span className="text-muted-foreground">Code</span>
+            <input className={inputCls} value={code} maxLength={10} onChange={e => setCode(e.target.value)}
+              placeholder={kind === 'nta' ? 'MN0401' : '104'} />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-muted-foreground">Why this area</span>
+            <input className={inputCls} value={reason} maxLength={200} onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Dense commercial blocks with mailrooms" />
+          </label>
+        </div>
+        <button type="button" onClick={() => void declare()}
+          disabled={areaBusy || code.trim().length < 3 || reason.trim().length < 3}
+          className="btn-primary text-sm inline-flex items-center gap-2">
+          {areaBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
+          Open area
+        </button>
+        {areas === null ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : areas.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No areas are open. Surveyors have nothing to claim until one is.</p>
+        ) : (
+          <ul className="divide-y divide-border/60">
+            {areas.map(a => (
+              <li key={a.id} className="grid gap-2 py-3 sm:grid-cols-[1fr_14rem_auto] sm:items-center">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{a.name} <span className="font-mono text-xs text-muted-foreground">{a.code}</span></p>
+                  <p className="text-xs text-muted-foreground">
+                    {a.reason} · opened {formatDate(a.declared_at)} by {a.declared_by_kind === 'platform_support' ? 'support' : 'the owner'}
+                  </p>
+                </div>
+                <ProgressBar done={a.blocks_done} total={a.blocks_total} label="blocks done" />
+                <button type="button" className="btn-ghost justify-self-start text-xs text-danger sm:justify-self-end"
+                  onClick={() => setToClose(a)}>
+                  Close
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section className="card p-4 space-y-2" aria-labelledby="list-h">
         <h2 id="list-h" className="text-sm font-semibold">Contributors</h2>
         {rows === null ? (
@@ -200,6 +312,15 @@ export default function Surveyors() {
         variant="danger"
         onConfirm={() => void revoke()}
         onCancel={() => setToRevoke(null)}
+      />
+      <ConfirmDialog
+        open={toClose !== null}
+        title={`Close ${toClose?.name ?? ''}?`}
+        message="Surveyors can no longer claim its blocks, and blocks held now are released. Everything already recorded stays."
+        confirmLabel="Close area"
+        variant="danger"
+        onConfirm={() => void closeArea()}
+        onCancel={() => setToClose(null)}
       />
     </div>
   );

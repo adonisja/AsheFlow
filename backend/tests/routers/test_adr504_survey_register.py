@@ -7,7 +7,7 @@ it, not the HTTP call itself.
 import ast
 import pathlib
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -15,7 +15,8 @@ from pydantic import ValidationError
 
 from app.models.audit_log import AuditLog
 from app.models.survey_register import (
-    SurveyContributor, SurveyDeliveryPoint, SurveyObservation, SurveyReceivesFor, SurveyWalk,
+    SurveyArea, SurveyAreaBlock, SurveyBlockClaim, SurveyContributor, SurveyDeliveryPoint,
+    SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
 )
 from app.routers import survey_register as R
 from app.services import survey_blocks
@@ -27,8 +28,8 @@ BLOCK = "W_32_St_400"
 
 @pytest.fixture(autouse=True)
 def _tables(db):
-    for m in (SurveyContributor, SurveyWalk, SurveyObservation, SurveyDeliveryPoint,
-              SurveyReceivesFor, AuditLog):
+    for m in (SurveyContributor, SurveyArea, SurveyAreaBlock, SurveyWalk, SurveyObservation,
+              SurveyDeliveryPoint, SurveyReceivesFor, SurveyBlockClaim, SurveyDoorUnlock, AuditLog):
         sqlite_mirror_with_defaults(m.__table__).create(db.get_bind(), checkfirst=True)
 
 
@@ -302,8 +303,17 @@ class TestWhoReads:
     def test_a_contributor_reads_only_their_own_and_the_owner_reads_all(self, db):
         _admit(db)
         me = R.Writer(sub="surveyor-sub-01", owner=False)
-        _obs(db, OWNER_W, _walk(db, OWNER_W).id, address_index=0)
-        _obs(db, me, _walk(db, me).id, address_index=1)
+        owner_walk = _walk(db, OWNER_W)
+        _obs(db, OWNER_W, owner_walk.id, address_index=0)
+        # Since ADR-513 a contributor walks from a claim in an area, never by
+        # scouting; this test is about READS, so the walk row is made directly.
+        mine_walk = SurveyWalk(writer_sub=me.sub, block_key=BLOCK, street="W 32 ST",
+                               addresses=db.get(SurveyWalk, owner_walk.id).addresses,
+                               source_dataset="uf93-f8nk", fetched_at=datetime.now(timezone.utc),
+                               attest_off_shift=True, attest_unbranded=True, attest_as_self=True)
+        db.add(mine_walk)
+        db.commit()
+        _obs(db, me, mine_walk.id, address_index=1)
         mine = R.list_observations(bin=None, block_key=None, limit=200, writer=me, db=db)
         everything = R.list_observations(bin=None, block_key=None, limit=200, writer=OWNER_W, db=db)
         assert [o.address for o in mine] == ["433 W 32 ST"] and all(o.mine for o in mine)

@@ -18,6 +18,15 @@ How a door gets recorded (D2, D3):
   4. POST /survey/walks/{id}/close
 
 Reads (D7): the owner sees every observation; a contributor sees their own.
+
+Who walks what (ADR-513):
+  * the owner or platform support declares AREAS from public boundaries;
+  * writers CLAIM a block in an open area for 48 hours, then start its walk
+    from the claim. A block inside an open area cannot be walked any other way;
+    outside every area, only the owner may walk (scouting, D5);
+  * progress is derived (services/survey_progress.py): a done door is locked for
+    every writer, a block is done when its last door is, and it re-opens whole
+    after REVISIT_DAYS. "Finish walk" with doors left is a pause, not a finish.
 """
 from __future__ import annotations
 
@@ -26,7 +35,7 @@ import re
 import secrets
 import string
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -34,6 +43,8 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_platform_staff, get_super_admin
@@ -41,11 +52,13 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.survey_register import (
-    DAY_STATUS, DELIVERY_MODES, DELIVERY_POINTS, MAX_DELIVERY_POINTS, SOURCES, TRISTATE,
-    SurveyContributor, SurveyDeliveryPoint, SurveyObservation, SurveyReceivesFor, SurveyWalk,
+    AREA_KINDS, CLAIM_HOURS, DAY_STATUS, DELIVERY_MODES, DELIVERY_POINTS, MAX_ACTIVE_CLAIMS,
+    MAX_DELIVERY_POINTS, REVISIT_DAYS, SOURCES, TRISTATE,
+    SurveyArea, SurveyAreaBlock, SurveyBlockClaim, SurveyContributor, SurveyDeliveryPoint,
+    SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
 )
 from app.schemas.building_taxonomy import BUILDING_TYPES
-from app.services import survey_blocks
+from app.services import survey_blocks, survey_progress
 from app.services.address_inventory import AddressSourceUnavailable
 from app.services.audit import super_admin_identity, write_audit
 from app.services.email import send_credentials_email
@@ -172,7 +185,12 @@ class WalkOut(BaseModel):
     started_at: datetime
     closed_at: Optional[datetime] = None
     addresses: list[AddressOut]
-    recorded: list[int]          # indexes already observed on this walk
+    # ADR-513 D6: indexes of doors DONE on this block, by any writer on any walk
+    # in the current cycle, and therefore locked. Walks from before ADR-513 have
+    # no borough and keep the old meaning (this walk only).
+    recorded: list[int]
+    area_id: Optional[UUID] = None
+    block_state: Literal["open", "in_progress", "done"] = "open"
 
 
 class DeliveryPointIn(BaseModel):
@@ -333,14 +351,47 @@ def _addresses(walk: SurveyWalk) -> list[AddressOut]:
 
 
 def _walk_out(db: Session, walk: SurveyWalk) -> WalkOut:
-    done = {a for (a,) in db.query(SurveyObservation.address)
-            .filter(SurveyObservation.walk_id == walk.id).all()}
+    if walk.borough is None:
+        done = {a for (a,) in db.query(SurveyObservation.address)
+                .filter(SurveyObservation.walk_id == walk.id).all()}
+        state = "in_progress" if done else "open"
+    else:
+        p = survey_progress.progress_for(db, walk.borough, walk.block_key, [], _now())
+        done, state = p.done, p.state
     return WalkOut(
         id=walk.id, block_key=walk.block_key, street=walk.street,
         started_at=walk.started_at, closed_at=walk.closed_at,
         addresses=_addresses(walk),
         recorded=[i for i, a in enumerate(walk.addresses or []) if a["address"] in done],
+        area_id=walk.area_id, block_state=state,
     )
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _active_claims(db: Session):
+    """Claims in force: not released and not lapsed. A lapse needs no write."""
+    return db.query(SurveyBlockClaim).filter(SurveyBlockClaim.released_at.is_(None),
+                                            SurveyBlockClaim.expires_at > _now())
+
+
+def _open_area_block(db: Session, borough: str, block_key: str) -> Optional[SurveyAreaBlock]:
+    return (db.query(SurveyAreaBlock)
+            .join(SurveyArea, SurveyArea.id == SurveyAreaBlock.area_id)
+            .filter(SurveyArea.closed_at.is_(None),
+                    SurveyAreaBlock.borough == borough, SurveyAreaBlock.block_key == block_key)
+            .first())
+
+
+def _lock_block(db: Session, borough: str, block_key: str) -> None:
+    """Serialise claims on one block across every area (an NTA and a Community
+    District can overlap). A transaction-scoped advisory lock on Postgres; SQLite
+    has one writer anyway."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                   {"k": f"survey-block:{borough}:{block_key}"})
 
 
 def _obs_out(db: Session, r: SurveyObservation, writer: Writer) -> ObservationOut:
@@ -434,7 +485,19 @@ def start_walk(body: StartWalkIn, writer: Writer = Depends(get_writer),
     block = next((b for b in blocks if b.block_key == body.block_key), None)
     if block is None or not block.doors:
         raise HTTPException(status_code=422, detail="That block is not on the city's list near this point.")
+    # ADR-513 D3/D5: a block in an open area is walked from a claim, by anyone;
+    # outside every area, only the owner walks (scouting).
+    if block.borough and _open_area_block(db, block.borough, block.block_key) is not None:
+        raise HTTPException(status_code=409,
+                            detail="This block is in a survey area. Claim it there to walk it.")
+    if not writer.owner:
+        raise HTTPException(status_code=403,
+                            detail="Contributors walk blocks inside survey areas. Claim one from the list.")
+    return _create_walk(db, writer, block, area_id=None)
 
+
+def _create_walk(db: Session, writer: Writer, block: survey_blocks.Block,
+                 area_id: Optional[UUID], claim: Optional[SurveyBlockClaim] = None) -> WalkOut:
     # D8: each door's city block, the streets that block faces, and its
     # same-block neighbours, snapshotted with the list (best effort).
     doors = survey_blocks.enrich_doors(block.doors)
@@ -443,12 +506,16 @@ def start_walk(body: StartWalkIn, writer: Writer = Depends(get_writer),
         addresses=doors, source_dataset=settings.socrata_addresspoint_dataset,
         fetched_at=datetime.now(timezone.utc),
         attest_off_shift=True, attest_unbranded=True, attest_as_self=True,
+        borough=block.borough or None, area_id=area_id,
     )
     db.add(walk)
     db.flush()
+    if claim is not None:
+        claim.walk_id = walk.id      # same transaction: never a walk without its claim
     write_audit(db, action_type="survey.walk.start", target_table="survey_walks",
                 target_id=str(walk.id), actor_id=None, company_id=None,
                 detail={"block_key": block.block_key, "doors": len(block.doors),
+                        "area_id": str(area_id) if area_id else None,
                         "writer": "owner" if writer.owner else "contributor"})
     db.commit()
     db.refresh(walk)
@@ -492,6 +559,14 @@ def record_observation(walk_id: UUID, body: ObservationIn,
                        SurveyObservation.address == door["address"]).first())
     if already is not None:
         raise HTTPException(status_code=409, detail="Already recorded on this walk.")
+    # ADR-513 D6: done on ANY walk of this block in the current cycle is locked.
+    # The tick in the list is the convenience; this is the lock.
+    if walk.borough is not None:
+        p = survey_progress.progress_for(db, walk.borough, walk.block_key,
+                                         [d["address"] for d in walk.addresses], _now())
+        if door["address"] in p.done:
+            raise HTTPException(status_code=409,
+                                detail="Someone has already recorded this door. It's locked until the block re-opens.")
     neighbours = door.get("neighbours") or []
     if any(i >= len(neighbours) for i in body.receives_for):
         raise HTTPException(status_code=422, detail="Only doors on the same city block can be chosen.")
@@ -539,6 +614,11 @@ def close_walk(walk_id: UUID, writer: Writer = Depends(get_writer), db: Session 
     if walk.closed_at is not None:
         raise HTTPException(status_code=409, detail="This walk is already closed.")
     walk.closed_at = datetime.now(timezone.utc)
+    # ADR-513 D6: finishing with doors left is a PAUSE. The claim goes back, the
+    # block stays in progress, and the next claim continues it.
+    for c in (db.query(SurveyBlockClaim)
+              .filter(SurveyBlockClaim.walk_id == walk.id, SurveyBlockClaim.released_at.is_(None))):
+        c.released_at, c.release_reason = walk.closed_at, "walk_closed"
     db.flush()
     write_audit(db, action_type="survey.walk.close", target_table="survey_walks",
                 target_id=str(walk.id), actor_id=None, company_id=None,
@@ -754,3 +834,419 @@ def revoke_contributor(contributor_id: UUID, staff: dict = Depends(get_platform_
         except (ClientError, BotoCoreError) as exc:
             logger.warning("survey revoke: group removal failed: %s", type(exc).__name__)
     return c
+
+
+# ── ADR-513: areas, claims, and locked doors ────────────────────────────────
+
+_NTA_CODE = re.compile(r"^(MN|BX|BK|QN|SI)\d{4}$")
+_CD_CODE = re.compile(r"^[1-5]\d{2}$")
+
+
+class AreaIn(BaseModel):
+    """D1: a public boundary by its official code, and why it is being surveyed."""
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal[AREA_KINDS]  # type: ignore[valid-type]
+    code: str = Field(min_length=3, max_length=10)
+    reason: str = Field(min_length=3, max_length=200)
+
+    @model_validator(mode="after")
+    def _code_shape(self):
+        self.code = self.code.strip().upper()
+        self.reason = self.reason.strip()
+        pattern = _NTA_CODE if self.kind == "nta" else _CD_CODE
+        if not pattern.match(self.code):
+            raise ValueError("Use the city's code: an NTA like MN0401, or a community district like 104.")
+        if len(self.reason) < 3:
+            raise ValueError("Say why this area is being surveyed.")
+        return self
+
+
+class AreaOut(BaseModel):
+    id: UUID
+    kind: str
+    code: str
+    name: str
+    reason: str
+    declared_by_kind: str
+    declared_at: datetime
+    closed_at: Optional[datetime] = None
+    blocks_total: int
+    blocks_done: int
+    blocks_in_progress: int
+    doors_total: int
+    doors_done: int
+    last_activity: Optional[datetime] = None
+
+
+class AreaBlockOut(BaseModel):
+    id: UUID
+    borough: str
+    block_key: str
+    street: str
+    description: str
+    state: Literal["open", "in_progress", "done"]
+    doors_done: int
+    doors_total: int
+    reopens_on: Optional[date] = None
+    last_activity: Optional[datetime] = None
+    # "mine" | "taken" | None. Who holds it is never shown to other writers.
+    claim: Optional[Literal["mine", "taken"]] = None
+    claim_id: Optional[UUID] = None
+    distance_m: Optional[int] = None
+
+
+class AttestIn(BaseModel):
+    """ADR-504 D2, re-confirmed at the start of every walk."""
+    model_config = ConfigDict(extra="forbid")
+    attest_off_shift: bool
+    attest_unbranded: bool
+    attest_as_self: bool
+
+    @model_validator(mode="after")
+    def _all_attested(self):
+        if not (self.attest_off_shift and self.attest_unbranded and self.attest_as_self):
+            raise ValueError(
+                "All three must be true: off-shift; no branded vehicle, uniform or work "
+                "device; asking as yourself, not as a driver (ADR-504 D2)."
+            )
+        return self
+
+
+class ClaimOut(BaseModel):
+    id: UUID
+    area_id: UUID
+    area_name: str
+    area_block_id: UUID
+    street: str
+    description: str
+    claimed_at: datetime
+    expires_at: datetime
+    walk_id: Optional[UUID] = None
+    walk_open: bool = False
+    doors_done: int
+    doors_total: int
+
+
+class UnlockIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    walk_id: UUID                       # identifies borough + block without trusting either
+    address_index: int = Field(ge=0, le=5000)
+    reason: str = Field(min_length=3, max_length=200)
+
+
+class UnlockOut(BaseModel):
+    address: str
+    block_state: Literal["open", "in_progress", "done"]
+
+
+@dataclass
+class AreaViewer:
+    sub: str
+    writer: Optional[Writer]            # None for platform support: it reads areas, never walks
+
+
+def get_area_viewer(current_user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)) -> AreaViewer:
+    groups = current_user.get("cognito_groups", [])
+    if "platform_support" in groups and "super_admin" not in groups:
+        return AreaViewer(sub=current_user.get("id") or "", writer=None)
+    writer = get_writer(current_user, db)
+    return AreaViewer(sub=writer.sub, writer=writer)
+
+
+def _area_out(area: SurveyArea, blocks: list[SurveyAreaBlock], progress: dict) -> AreaOut:
+    ps = [progress[b.id] for b in blocks]
+    acts = [p.last_activity for p in ps if p.last_activity is not None]
+    return AreaOut(
+        id=area.id, kind=area.kind, code=area.code, name=area.name, reason=area.reason,
+        declared_by_kind=area.declared_by_kind, declared_at=area.declared_at, closed_at=area.closed_at,
+        blocks_total=len(blocks),
+        blocks_done=sum(p.state == "done" for p in ps),
+        blocks_in_progress=sum(p.state == "in_progress" for p in ps),
+        doors_total=sum(p.total for p in ps), doors_done=sum(len(p.done) for p in ps),
+        last_activity=max(acts) if acts else None,
+    )
+
+
+def _distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> int:
+    from math import asin, cos, radians, sin, sqrt
+    dlat, dlng = radians(lat2 - lat1), radians(lng2 - lng1)
+    h = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return int(2 * 6371000 * asin(sqrt(h)))
+
+
+@router.get("/areas", response_model=list[AreaOut])
+def list_areas(include_closed: bool = Query(False), viewer: AreaViewer = Depends(get_area_viewer),
+               db: Session = Depends(get_db)):
+    q = db.query(SurveyArea)
+    if not include_closed:
+        q = q.filter(SurveyArea.closed_at.is_(None))
+    out = []
+    now = _now()
+    for area in q.order_by(SurveyArea.declared_at.desc()).all():
+        blocks = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.area_id == area.id).all()
+        out.append(_area_out(area, blocks, survey_progress.area_progress(db, blocks, now)))
+    return out
+
+
+@router.post("/areas", response_model=AreaOut, status_code=status.HTTP_201_CREATED)
+def declare_area(body: AreaIn, staff: dict = Depends(get_platform_staff), db: Session = Depends(get_db)):
+    """D1/D2: the owner or platform support opens an area. Its blocks are fetched
+    from the city and snapshotted now; nothing about it is ever edited."""
+    if (db.query(SurveyArea.id).filter(SurveyArea.kind == body.kind, SurveyArea.code == body.code,
+                                       SurveyArea.closed_at.is_(None)).first()) is not None:
+        raise HTTPException(status_code=409, detail="That area is already open.")
+    try:
+        boundary = survey_blocks.fetch_boundary(body.kind, body.code)
+        blocks = survey_blocks.blocks_in_area(boundary)
+    except survey_blocks.UnknownBoundary:
+        raise HTTPException(status_code=422, detail="The city has no area with that code.")
+    except survey_blocks.AreaTooLarge:
+        raise HTTPException(status_code=422,
+                            detail="That area is too large to walk. Choose a neighbourhood (NTA) instead.")
+    except AddressSourceUnavailable:
+        raise HTTPException(status_code=503, detail="The city's data is unavailable. Try again shortly.")
+    # A block with no borough or no position cannot be claimed or walked from a
+    # claim. Counted into the audit rather than dropped silently.
+    usable = [b for b in blocks if b.doors and b.borough and b.centre is not None]
+    skipped = len(blocks) - len(usable)
+    blocks = usable
+    if not blocks:
+        raise HTTPException(status_code=422, detail="The city lists no addresses in that area.")
+
+    ident = _staff_identity(staff)
+    area = SurveyArea(kind=body.kind, code=body.code, name=boundary.name[:120],
+                      boundary_dataset=boundary.dataset,
+                      address_dataset=settings.socrata_addresspoint_dataset,
+                      fetched_at=_now(), reason=body.reason,
+                      declared_by=staff.get("id") or "", declared_by_kind=ident["actor_kind"])
+    db.add(area)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That area is already open.")
+    for b in blocks:
+        lat, lng = b.centre
+        db.add(SurveyAreaBlock(area_id=area.id, borough=b.borough, block_key=b.block_key,
+                               street=b.street, description=b.description[:160], lat=lat, lng=lng,
+                               door_snapshot=[{"address": d["address"], "bin": d.get("bin")} for d in b.doors]))
+    db.flush()
+    write_audit(db, action_type="survey.area.declare", target_table="survey_areas",
+                target_id=str(area.id), actor_id=None, company_id=None,
+                detail={**ident, "kind": area.kind, "code": area.code, "blocks": len(blocks),
+                        "blocks_skipped": skipped, "doors": sum(len(b.doors) for b in blocks)})
+    db.commit()
+    db.refresh(area)
+    rows = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.area_id == area.id).all()
+    return _area_out(area, rows, survey_progress.area_progress(db, rows, _now()))
+
+
+@router.post("/areas/{area_id}/close", response_model=AreaOut)
+def close_area(area_id: UUID, staff: dict = Depends(get_platform_staff), db: Session = Depends(get_db)):
+    area = db.query(SurveyArea).filter(SurveyArea.id == area_id).first()
+    if area is None:
+        raise HTTPException(status_code=404, detail="Area not found.")
+    if area.closed_at is not None:
+        raise HTTPException(status_code=409, detail="This area is already closed.")
+    area.closed_at, area.closed_by = _now(), staff.get("id")
+    released = 0
+    for c in _active_claims(db).filter(SurveyBlockClaim.area_id == area.id):
+        c.released_at, c.release_reason = area.closed_at, "area_closed"
+        released += 1
+    db.flush()
+    write_audit(db, action_type="survey.area.close", target_table="survey_areas",
+                target_id=str(area.id), actor_id=None, company_id=None,
+                detail={**_staff_identity(staff), "claims_released": released})
+    db.commit()
+    db.refresh(area)
+    rows = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.area_id == area.id).all()
+    return _area_out(area, rows, survey_progress.area_progress(db, rows, _now()))
+
+
+@router.get("/areas/{area_id}/blocks", response_model=list[AreaBlockOut])
+def area_blocks(area_id: UUID,
+                lat: Optional[float] = Query(None, ge=40.4, le=41.0),
+                lng: Optional[float] = Query(None, ge=-74.3, le=-73.6),
+                viewer: AreaViewer = Depends(get_area_viewer), db: Session = Depends(get_db)):
+    """D3: an area's blocks with their state and claim, nearest first when a
+    location is given, otherwise in the city's street order."""
+    area = db.query(SurveyArea).filter(SurveyArea.id == area_id).first()
+    if area is None:
+        raise HTTPException(status_code=404, detail="Area not found.")
+    blocks = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.area_id == area.id).all()
+    progress = survey_progress.area_progress(db, blocks, _now())
+    keys = {b.block_key for b in blocks}
+    claims = {(c.borough, c.block_key): c for c in _active_claims(db)
+              .filter(SurveyBlockClaim.block_key.in_(keys)).all()} if keys else {}
+    out = []
+    for b in blocks:
+        p = progress[b.id]
+        c = claims.get((b.borough, b.block_key))
+        mine = c is not None and viewer.writer is not None and c.writer_sub == viewer.sub
+        out.append(AreaBlockOut(
+            id=b.id, borough=b.borough, block_key=b.block_key, street=b.street, description=b.description,
+            state=p.state, doors_done=len(p.done), doors_total=p.total,
+            reopens_on=(p.completed_at + timedelta(days=REVISIT_DAYS)).date() if p.completed_at else None,
+            last_activity=p.last_activity,
+            claim=("mine" if mine else "taken") if c is not None else None,
+            claim_id=c.id if mine else None,
+            distance_m=_distance_m(lat, lng, b.lat, b.lng) if lat is not None and lng is not None else None,
+        ))
+    if lat is not None and lng is not None:
+        out.sort(key=lambda x: x.distance_m or 0)
+    else:
+        out.sort(key=lambda x: (x.street, x.block_key))
+    return out
+
+
+@router.post("/areas/{area_id}/blocks/{block_id}/claim", response_model=ClaimOut,
+             status_code=status.HTTP_201_CREATED)
+def claim_block(area_id: UUID, block_id: UUID, writer: Writer = Depends(get_writer),
+                db: Session = Depends(get_db)):
+    """D3: hold one block for CLAIM_HOURS. One active claim per block across
+    every area; at most MAX_ACTIVE_CLAIMS per writer."""
+    row = (db.query(SurveyAreaBlock, SurveyArea)
+           .join(SurveyArea, SurveyArea.id == SurveyAreaBlock.area_id)
+           .filter(SurveyAreaBlock.id == block_id, SurveyAreaBlock.area_id == area_id).first())
+    if row is None:
+        raise HTTPException(status_code=404, detail="Block not found in this area.")
+    block, area = row
+    if area.closed_at is not None:
+        raise HTTPException(status_code=409, detail="This area is closed.")
+
+    _lock_block(db, block.borough, block.block_key)
+    held = _active_claims(db).filter(SurveyBlockClaim.borough == block.borough,
+                                     SurveyBlockClaim.block_key == block.block_key).first()
+    if held is not None:
+        raise HTTPException(status_code=409, detail=(
+            "You already hold this block." if held.writer_sub == writer.sub
+            else "Someone else is walking this block."))
+    if _active_claims(db).filter(SurveyBlockClaim.writer_sub == writer.sub).count() >= MAX_ACTIVE_CLAIMS:
+        raise HTTPException(status_code=409, detail=(
+            f"You can hold {MAX_ACTIVE_CLAIMS} blocks at a time. Finish or release one first."))
+    p = survey_progress.progress_for(db, block.borough, block.block_key,
+                                     [d["address"] for d in block.door_snapshot], _now())
+    if p.state == "done":
+        reopens = (p.completed_at + timedelta(days=REVISIT_DAYS)).date() if p.completed_at else None
+        raise HTTPException(status_code=409, detail=(
+            f"This block is done. It re-opens on {reopens.isoformat()}." if reopens
+            else "This block is done."))
+
+    claim = SurveyBlockClaim(area_id=area.id, area_block_id=block.id, borough=block.borough,
+                             block_key=block.block_key, writer_sub=writer.sub,
+                             claimed_at=_now(), expires_at=_now() + timedelta(hours=CLAIM_HOURS))
+    db.add(claim)
+    db.flush()
+    write_audit(db, action_type="survey.claim.create", target_table="survey_block_claims",
+                target_id=str(claim.id), actor_id=None, company_id=None,
+                detail={"area_id": str(area.id), "block_key": block.block_key,
+                        "writer": "owner" if writer.owner else "contributor"})
+    db.commit()
+    db.refresh(claim)
+    return _claim_out(db, claim)
+
+
+def _claim_out(db: Session, c: SurveyBlockClaim) -> ClaimOut:
+    block = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.id == c.area_block_id).one()
+    area = db.query(SurveyArea).filter(SurveyArea.id == c.area_id).one()
+    walk = db.query(SurveyWalk).filter(SurveyWalk.id == c.walk_id).first() if c.walk_id else None
+    p = survey_progress.progress_for(db, c.borough, c.block_key, [d["address"] for d in block.door_snapshot], _now())
+    return ClaimOut(id=c.id, area_id=area.id, area_name=area.name, area_block_id=block.id,
+                    street=block.street, description=block.description,
+                    claimed_at=c.claimed_at, expires_at=c.expires_at, walk_id=c.walk_id,
+                    walk_open=walk is not None and walk.closed_at is None,
+                    doors_done=len(p.done), doors_total=p.total)
+
+
+def _own_claim(db: Session, claim_id: UUID, writer: Writer) -> SurveyBlockClaim:
+    c = (db.query(SurveyBlockClaim)
+         .filter(SurveyBlockClaim.id == claim_id, SurveyBlockClaim.writer_sub == writer.sub).first())
+    if c is None:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    return c
+
+
+def _in_force(c: SurveyBlockClaim) -> bool:
+    return c.released_at is None and survey_progress._aware(c.expires_at) > _now()
+
+
+@router.get("/claims", response_model=list[ClaimOut])
+def my_claims(writer: Writer = Depends(get_writer), db: Session = Depends(get_db)):
+    claims = (_active_claims(db).filter(SurveyBlockClaim.writer_sub == writer.sub)
+              .order_by(SurveyBlockClaim.expires_at).all())
+    return [_claim_out(db, c) for c in claims]
+
+
+@router.post("/claims/{claim_id}/release", response_model=ClaimOut)
+def release_claim(claim_id: UUID, writer: Writer = Depends(get_writer), db: Session = Depends(get_db)):
+    c = _own_claim(db, claim_id, writer)
+    if not _in_force(c):
+        raise HTTPException(status_code=409, detail="This claim has already ended.")
+    c.released_at, c.release_reason = _now(), "released"
+    db.flush()
+    write_audit(db, action_type="survey.claim.release", target_table="survey_block_claims",
+                target_id=str(c.id), actor_id=None, company_id=None,
+                detail={"writer": "owner" if writer.owner else "contributor"})
+    db.commit()
+    db.refresh(c)
+    return _claim_out(db, c)
+
+
+@router.post("/claims/{claim_id}/walk", response_model=WalkOut, status_code=status.HTTP_201_CREATED)
+def start_claimed_walk(claim_id: UUID, body: AttestIn, writer: Writer = Depends(get_writer),
+                       db: Session = Depends(get_db)):
+    """Start the walk of a claimed block. The city's list is fetched fresh around
+    the block's centre, so a door the city added since the area was declared is
+    on it (D6)."""
+    c = _own_claim(db, claim_id, writer)
+    if not _in_force(c):
+        raise HTTPException(status_code=409, detail="This claim has ended. Claim the block again.")
+    if c.walk_id is not None:
+        walk = db.query(SurveyWalk).filter(SurveyWalk.id == c.walk_id).one()
+        if walk.closed_at is None:
+            raise HTTPException(status_code=409, detail="You already have a walk on this block. Continue it.")
+    block = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.id == c.area_block_id).one()
+    try:
+        nearby = survey_blocks.blocks_near(block.lat, block.lng, survey_blocks.MAX_RADIUS_M)
+    except AddressSourceUnavailable:
+        raise HTTPException(status_code=503, detail="The city's address list is unavailable. Try again shortly.")
+    fresh = next((b for b in nearby if b.block_key == block.block_key
+                  and (b.borough or block.borough) == block.borough), None)
+    if fresh is None or not fresh.doors:
+        raise HTTPException(status_code=422, detail="The city's list no longer has this block.")
+    fresh.borough = block.borough
+    return _create_walk(db, writer, fresh, area_id=c.area_id, claim=c)
+
+
+@router.post("/doors/unlock", response_model=UnlockOut)
+def unlock_door(body: UnlockIn, writer: Writer = Depends(get_writer), db: Session = Depends(get_db)):
+    """D6: the owner re-opens one done door for a correction. The earlier
+    observation stays (ADR-504 D5); it just stops locking the door."""
+    if not writer.owner:
+        raise HTTPException(status_code=403, detail="Only the owner can unlock a door.")
+    walk = db.query(SurveyWalk).filter(SurveyWalk.id == body.walk_id).first()
+    if walk is None:
+        raise HTTPException(status_code=404, detail="Walk not found.")
+    if walk.borough is None:
+        raise HTTPException(status_code=422, detail="Walks from before survey areas have no lock to undo.")
+    if body.address_index >= len(walk.addresses or []):
+        raise HTTPException(status_code=422, detail="That door is not on this walk's list.")
+    address = walk.addresses[body.address_index]["address"]
+    doors = [d["address"] for d in walk.addresses]
+    p = survey_progress.progress_for(db, walk.borough, walk.block_key, doors, _now())
+    if address not in p.done:
+        raise HTTPException(status_code=409, detail="That door isn't locked.")
+    if _CODE_WORDS.search(body.reason):
+        raise HTTPException(status_code=422, detail="This can't hold access or door codes.")
+    u = SurveyDoorUnlock(borough=walk.borough, block_key=walk.block_key, address=address,
+                         reason=body.reason.strip(), unlocked_by=writer.sub, unlocked_at=_now())
+    db.add(u)
+    db.flush()
+    # Ids only: the address stays out of the audit (ADR-493 D8).
+    write_audit(db, action_type="survey.door.unlock", target_table="survey_door_unlocks",
+                target_id=str(u.id), actor_id=None, company_id=None,
+                detail={"walk_id": str(walk.id), "writer": "owner"})
+    db.commit()
+    p = survey_progress.progress_for(db, walk.borough, walk.block_key, doors, _now())
+    return UnlockOut(address=address, block_state=p.state)

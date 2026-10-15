@@ -169,6 +169,10 @@ EXEMPT: dict[tuple[str, str], str] = {
         "ADR-504 register: a snapshot of NYC AddressPoint for one block (public data)",
     ("survey_receives_for", "address"):
         "ADR-504 D8: a same-block door from the walk's AddressPoint snapshot (public data)",
+    ("survey_door_unlocks", "address"):
+        "ADR-513 D6: a door from a walk's AddressPoint snapshot (public data), re-opened by the owner",
+    ("survey_areas", "address_dataset"):
+        "ADR-513: the id of the city dataset an area's blocks came from, not an address",
     ("incidents", "packages_tba"):
         "an INTEGER count of packages involved, not a package id",
     ("street_segments", "x_low_address_end"):  "public NYC street topology (house-number ranges)",

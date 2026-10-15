@@ -4,9 +4,11 @@
  * Shown INSTEAD of the tab shell to accounts with no Employee row (surveyors and
  * the platform owner): every tab there calls employee endpoints they cannot use.
  *
- * Blocks are found from a typed address. GPS needs a native location module this
- * app does not have yet; adding one is a native dependency (pod install, rebuild),
- * so it is a separate step. The typed path is the plain fallback that always works.
+ * ADR-513: surveyors claim blocks inside survey areas, then walk them from the
+ * claim. Only the owner can scout a block outside every area, from a typed
+ * address. GPS needs a native location module this app does not have yet
+ * (a native dependency: pod install, rebuild), so the area list here stays in
+ * the city's street order; the web page can sort it nearest first.
  *
  * Field order and choices match the web form (pages/survey/SurveyWalk.tsx), which
  * follows the 2026-10-13 usage analysis of the old collection form.
@@ -38,7 +40,15 @@ type Neighbour = { address: string; bin: string | null };
 type Address = { index: number; address: string; bin: string | null;
                  sides?: string[]; neighbours?: Neighbour[] };   // ADR-504 D8
 type Block = { block_key: string; street: string; description: string; addresses: Address[] };
-type Walk = { id: string; street: string; closed_at: string | null; addresses: Address[]; recorded: number[] };
+type BlockState = 'open' | 'in_progress' | 'done';
+type Walk = { id: string; street: string; closed_at: string | null; addresses: Address[]; recorded: number[];
+              area_id: string | null; block_state: BlockState };   // ADR-513 D6: recorded = done on the block
+type Claim = { id: string; area_name: string; description: string; expires_at: string;
+               walk_id: string | null; walk_open: boolean; doors_done: number; doors_total: number };
+type Area = { id: string; name: string; reason: string; blocks_done: number; blocks_total: number;
+              blocks_in_progress: number };
+type AreaBlock = { id: string; description: string; state: BlockState; doors_done: number; doors_total: number;
+                   reopens_on: string | null; claim: 'mine' | 'taken' | null };
 type Point = { lat: number; lng: number };
 
 // The server's building types (app/schemas/building_taxonomy.py), commercial
@@ -75,7 +85,8 @@ const CONFIRMATIONS = [
 ] as const;
 type ConfirmKey = typeof CONFIRMATIONS[number]['key'];
 
-type StackParams = { SurveyStart: undefined; SurveyWalk: { walkId: string } };
+type StackParams = { SurveyStart: undefined; SurveyWalk: { walkId: string };
+                     SurveyArea: { areaId: string; name: string } };
 const Stack = createNativeStackNavigator<StackParams>();
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -84,24 +95,79 @@ const STEPS = ['The building', 'Deliveries', 'Hours and note'] as const;
 
 // ── start ───────────────────────────────────────────────────────────────────
 
+/** "Apr 12, 2027" from a calendar date. Parsed as local parts, because
+ *  new Date('2027-04-12') is UTC midnight and reads as the 11th in New York. */
+function calendarDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function hoursLeft(expiresAt: string): string {
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) return 'ended';
+  const h = Math.floor(ms / 3_600_000);
+  return h >= 1 ? `${h} h left` : `${Math.max(1, Math.round(ms / 60_000))} min left`;
+}
+
+function Progress({ done, total, label }: { done: number; total: number; label: string }) {
+  const c = useColors();
+  const s = styles(c);
+  const pct = total > 0 ? done / total : 0;
+  return (
+    <View style={{ gap: spacing.xs }} accessible accessibilityLabel={`${done} of ${total} ${label}`}>
+      <View style={s.bar}><View style={[s.barFill, { width: `${Math.round(pct * 100)}%` }]} /></View>
+      <Text style={s.muted}>{done} of {total} {label}</Text>
+    </View>
+  );
+}
+
 function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, 'SurveyStart'>) {
   const c = useColors();
   const s = styles(c);
-  const { signOut } = useAuth();
+  const { signOut, hasRole } = useAuth();
+  const isOwner = hasRole('super_admin');
   const [confirmed, setConfirmed] = useState<Record<ConfirmKey, boolean>>({
     attest_off_shift: false, attest_unbranded: false, attest_as_self: false,
   });
   const all = Object.values(confirmed).every(Boolean);
+  const [claims, setClaims] = useState<Claim[] | null>(null);
+  const [areas, setAreas] = useState<Area[] | null>(null);
+  const [open, setOpen] = useState<Walk[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Owner scouting (ADR-513 D5).
   const [typed, setTyped] = useState('');
   const [point, setPoint] = useState<Point | null>(null);
   const [blocks, setBlocks] = useState<Block[] | null>(null);
-  const [open, setOpen] = useState<Walk[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
 
-  useFocusEffect(useCallback(() => {
+  const load = useCallback(() => {
+    apiClient.get<Claim[]>('/survey/claims').then(r => setClaims(r.data)).catch(() => setClaims([]));
+    apiClient.get<Area[]>('/survey/areas').then(r => setAreas(r.data)).catch(() => setAreas([]));
     apiClient.get<Walk[]>('/survey/walks', { params: { limit: 10 } })
       .then(r => setOpen(r.data.filter(w => !w.closed_at))).catch(() => {});
-  }, []));
+  }, []);
+  useFocusEffect(load);
+
+  const startClaimed = async (cl: Claim) => {
+    setBusy(cl.id);
+    try {
+      const { data } = await apiClient.post<Walk>(`/survey/claims/${cl.id}/walk`, confirmed);
+      tick();
+      navigation.navigate('SurveyWalk', { walkId: data.id });
+    } catch (e) {
+      Alert.alert("Couldn't start the walk", errorText(e, 'Try again.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const giveBack = (cl: Claim) => Alert.alert(
+    'Give this block back?', 'Doors already recorded stay done. Anyone can claim the block to finish it.',
+    [{ text: 'Cancel', style: 'cancel' },
+     { text: 'Give back', onPress: async () => {
+       try { await apiClient.post(`/survey/claims/${cl.id}/release`); tick(); load(); }
+       catch (e) { Alert.alert("Couldn't give it back", errorText(e, 'Try again.')); }
+     } }],
+  );
 
   const find = async () => {
     setBusy('find');
@@ -116,7 +182,7 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
     }
   };
 
-  const start = async (b: Block) => {
+  const scout = async (b: Block) => {
     if (!point) return;
     setBusy(b.block_key);
     try {
@@ -132,21 +198,11 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
     }
   };
 
-  return (
-    <ScreenShell title="Survey register" subtitle="Walk a block">
-      {open.length > 0 && (
-        <View style={s.card}>
-          <Text style={s.h2}>Walks in progress</Text>
-          {open.map(w => (
-            <TouchableOpacity key={w.id} style={s.row} onPress={() => navigation.navigate('SurveyWalk', { walkId: w.id })}
-              accessibilityRole="button">
-              <Text style={s.body}>{w.street}</Text>
-              <Text style={s.muted}>{w.recorded.length} of {w.addresses.length}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
+  const claimedWalks = new Set((claims ?? []).map(cl => cl.walk_id).filter(Boolean));
+  const otherWalks = open.filter(w => !claimedWalks.has(w.id));
 
+  return (
+    <ScreenShell title="Survey register" subtitle="Walk a block" onRefresh={load} keyboardInsets>
       <View style={s.card}>
         <Text style={s.h2}>1. Before you start</Text>
         {CONFIRMATIONS.map(k => (
@@ -158,23 +214,76 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
         ))}
       </View>
 
-      <View style={[s.card, !all && { opacity: 0.5 }]}>
-        <Text style={s.h2}>2. Find the block you're on</Text>
-        <TextInput value={typed} onChangeText={setTyped} editable={all} maxLength={200}
-          placeholder="An address on the block, e.g. 433 W 32 St" placeholderTextColor={c.placeholder}
-          style={s.input} autoCapitalize="words" returnKeyType="search" onSubmitEditing={() => void find()} />
-        <Button onPress={() => void find()} disabled={!all || typed.trim().length < 3} loading={busy === 'find'} fullWidth>
-          Find blocks
-        </Button>
+      <View style={s.card}>
+        <Text style={s.h2}>2. Your blocks</Text>
+        {claims !== null && claims.length === 0 && (
+          <Text style={s.muted}>You haven't claimed a block. Pick one from a survey area below. A claim holds it for 48 hours.</Text>
+        )}
+        {(claims ?? []).map(cl => (
+          <View key={cl.id} style={s.sub}>
+            <Text style={s.body}>{cl.description}</Text>
+            <Text style={s.muted}>{cl.area_name} · {hoursLeft(cl.expires_at)}</Text>
+            <Progress done={cl.doors_done} total={cl.doors_total} label="doors done" />
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <View style={{ flex: 2 }}>
+                {cl.walk_open && cl.walk_id
+                  ? <Button onPress={() => navigation.navigate('SurveyWalk', { walkId: cl.walk_id! })} fullWidth>Continue walk</Button>
+                  : <Button onPress={() => void startClaimed(cl)} disabled={!all || busy !== null}
+                      loading={busy === cl.id} fullWidth>Start walk</Button>}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button variant="secondary" onPress={() => giveBack(cl)} disabled={busy !== null} fullWidth>Give back</Button>
+              </View>
+            </View>
+            {!all && !cl.walk_open && <Text style={s.muted}>Turn on the three confirmations above to start.</Text>}
+          </View>
+        ))}
       </View>
 
-      {blocks && (
+      {otherWalks.length > 0 && (
         <View style={s.card}>
-          <Text style={s.h2}>3. Pick a block</Text>
-          {blocks.length === 0 && <Text style={s.muted}>The city lists no addresses near there.</Text>}
-          {blocks.map(b => (
+          <Text style={s.h2}>Walks in progress</Text>
+          {otherWalks.map(w => (
+            <TouchableOpacity key={w.id} style={s.row} onPress={() => navigation.navigate('SurveyWalk', { walkId: w.id })}
+              accessibilityRole="button">
+              <Text style={s.body}>{w.street}</Text>
+              <Text style={s.muted}>{w.recorded.length} of {w.addresses.length}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      <View style={s.card}>
+        <Text style={s.h2}>3. Survey areas</Text>
+        {areas !== null && areas.length === 0 && (
+          <Text style={s.muted}>
+            No survey areas are open yet. {isOwner ? 'Open one from the Surveyors page on the web.' : 'The owner opens them. Check back soon.'}
+          </Text>
+        )}
+        {(areas ?? []).map(a => (
+          <TouchableOpacity key={a.id} style={[s.sub, { minHeight: MIN_TARGET }]} accessibilityRole="button"
+            onPress={() => { tick(); navigation.navigate('SurveyArea', { areaId: a.id, name: a.name }); }}>
+            <Text style={s.body}>{a.name}</Text>
+            <Progress done={a.blocks_done} total={a.blocks_total} label="blocks done" />
+            {a.blocks_in_progress > 0 && <Text style={s.draft}>{a.blocks_in_progress} in progress</Text>}
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {isOwner && (
+        <View style={[s.card, !all && { opacity: 0.5 }]}>
+          <Text style={s.h2}>Scout outside an area</Text>
+          <Text style={s.muted}>Owner only. A block inside an open area is claimed there instead.</Text>
+          <TextInput value={typed} onChangeText={setTyped} editable={all} maxLength={200}
+            placeholder="An address on the block, e.g. 433 W 32 St" placeholderTextColor={c.placeholder}
+            style={s.input} autoCapitalize="words" returnKeyType="search" onSubmitEditing={() => void find()} />
+          <Button onPress={() => void find()} disabled={!all || typed.trim().length < 3} loading={busy === 'find'} fullWidth>
+            Find blocks
+          </Button>
+          {blocks && blocks.length === 0 && <Text style={s.muted}>The city lists no addresses near there.</Text>}
+          {(blocks ?? []).map(b => (
             <TouchableOpacity key={b.block_key} style={s.row} disabled={busy !== null}
-              onPress={() => void start(b)} accessibilityRole="button">
+              onPress={() => void scout(b)} accessibilityRole="button">
               <Text style={[s.body, { flex: 1 }]}>{b.description}</Text>
               <Text style={s.muted}>{busy === b.block_key ? 'Starting…' : `${b.addresses.length} doors`}</Text>
             </TouchableOpacity>
@@ -183,6 +292,69 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
       )}
 
       <Button variant="ghost" onPress={() => void signOut()}>Sign out</Button>
+    </ScreenShell>
+  );
+}
+
+// ── one area's blocks (ADR-513 D3) ─────────────────────────────────────────
+
+const FILTERS = [{ value: 'todo', label: 'To do' }, { value: 'done', label: 'Done' }, { value: 'all', label: 'All' }];
+
+function SurveyAreaScreen({ route, navigation }: NativeStackScreenProps<StackParams, 'SurveyArea'>) {
+  const c = useColors();
+  const s = styles(c);
+  const { areaId, name } = route.params;
+  const [blocks, setBlocks] = useState<AreaBlock[] | null>(null);
+  const [filter, setFilter] = useState('todo');
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    apiClient.get<AreaBlock[]>(`/survey/areas/${areaId}/blocks`).then(r => setBlocks(r.data))
+      .catch(e => Alert.alert("Couldn't load this area", errorText(e, 'Try again.')));
+  }, [areaId]);
+  useFocusEffect(load);
+
+  const claim = async (b: AreaBlock) => {
+    setBusy(b.id);
+    try {
+      await apiClient.post(`/survey/areas/${areaId}/blocks/${b.id}/claim`);
+      tick();
+      navigation.goBack();
+    } catch (e) {
+      Alert.alert("Couldn't claim it", errorText(e, 'Try again.'));
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const stateText = (b: AreaBlock) => b.state === 'done'
+    ? `Done${b.reopens_on ? ` · re-opens ${calendarDate(b.reopens_on)}` : ''}`
+    : b.state === 'in_progress' ? `In progress · ${b.doors_done} of ${b.doors_total}` : `Open · ${b.doors_total} doors`;
+  const shown = (blocks ?? []).filter(b =>
+    filter === 'all' ? true : filter === 'done' ? b.state === 'done' : b.state !== 'done');
+
+  if (blocks === null) return <ScreenShell title={name} loading>{null}</ScreenShell>;
+  return (
+    <ScreenShell title={name} subtitle="Survey area" onBack={() => navigation.goBack()} onRefresh={load}>
+      <Pick options={FILTERS} value={filter} clearable={false} onChange={v => setFilter(v ?? 'todo')} />
+      <View style={{ height: spacing.md }} />
+      {shown.length === 0 && (
+        <Text style={s.muted}>{filter === 'done' ? 'No block in this area is done yet.' : 'Every block in this area is done.'}</Text>
+      )}
+      {shown.map(b => (
+        <View key={b.id} style={[s.row, { alignItems: 'center' }]}>
+          <View style={{ flex: 1, gap: spacing.xs }}>
+            <Text style={s.body}>{b.description}</Text>
+            <Text style={b.state === 'in_progress' ? s.draft : s.muted}>{stateText(b)}</Text>
+          </View>
+          {b.claim === 'mine' ? <Text style={s.link}>Yours</Text>
+            : b.claim === 'taken' ? <Text style={s.muted}>Someone's walking it</Text>
+            : b.state !== 'done' ? (
+              <Button onPress={() => void claim(b)} disabled={busy !== null} loading={busy === b.id}>Claim</Button>
+            ) : null}
+        </View>
+      ))}
     </ScreenShell>
   );
 }
@@ -360,7 +532,7 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
      { text: 'Record it', onPress: () => void post(a.index, { address_index: a.index, source: 'observed', not_a_delivery_point: true }) }],
   );
 
-  const finish = () => Alert.alert('Finish this walk?', 'You can start a new walk to re-visit later.', [
+  const finish = () => Alert.alert('End this walk?', 'Recorded doors stay done. Any doors left go back to the area for anyone to finish.', [
     { text: 'Cancel', style: 'cancel' },
     { text: 'Finish', onPress: async () => {
       try {
@@ -538,8 +710,11 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
   }
 
   return (
-    <ScreenShell title={walk.street} subtitle={`${done.size} of ${walk.addresses.length} doors recorded`}
+    <ScreenShell title={walk.street} subtitle={`${done.size} of ${walk.addresses.length} doors done on this block`}
       onRefresh={() => void load()}>
+      {walk.block_state === 'done' && (
+        <View style={s.card}><Text style={s.body}>Every door on this block is done.</Text></View>
+      )}
       {walk.addresses.map(a => (
         <View key={a.index} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
           <TouchableOpacity style={[s.row, { flex: 1 }, done.has(a.index) && { opacity: 0.5 }]}
@@ -547,7 +722,7 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
             accessibilityHint={drafts.has(a.index) ? 'Has a draft' : undefined}
             onPress={() => void openDoor(a)}>
             <Text style={[s.body, { flex: 1 }]}>{a.address}</Text>
-            {done.has(a.index) ? <Text style={s.muted}>Recorded</Text>
+            {done.has(a.index) ? <Text style={s.muted}>Done</Text>
               : drafts.has(a.index) && <Text style={s.draft}>Draft</Text>}
           </TouchableOpacity>
           {!walk.closed_at && !done.has(a.index) && (
@@ -558,7 +733,14 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
           )}
         </View>
       ))}
-      {!walk.closed_at && <Button variant="secondary" onPress={finish} fullWidth>Finish walk</Button>}
+      {!walk.closed_at && (done.size < walk.addresses.length ? (
+        <>
+          <Button variant="secondary" onPress={finish} fullWidth>Pause and give the block back</Button>
+          <Text style={[s.muted, { marginTop: spacing.xs }]}>
+            The doors you recorded stay done. The block goes back to its area for anyone to finish.
+          </Text>
+        </>
+      ) : <Button onPress={finish} fullWidth>Finish walk</Button>)}
     </ScreenShell>
   );
 }
@@ -568,6 +750,7 @@ export default function SurveyNavigator() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="SurveyStart" component={SurveyStartScreen} />
       <Stack.Screen name="SurveyWalk" component={SurveyWalkScreen} />
+      <Stack.Screen name="SurveyArea" component={SurveyAreaScreen} />
     </Stack.Navigator>
   );
 }
@@ -592,6 +775,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   progress: { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm },
   progressSeg: { flex: 1, height: 6, borderRadius: radius.full, backgroundColor: c.surfaceMuted },
   progressOn: { backgroundColor: c.primary },
+  bar: { height: 8, borderRadius: radius.full, backgroundColor: c.surfaceMuted, overflow: 'hidden' },
+  barFill: { height: 8, borderRadius: radius.full, backgroundColor: c.primary },
   link: { fontSize: fontSize.xs, color: c.primary, fontWeight: fontWeight.semibold },
   notDoor: { minHeight: MIN_TARGET, justifyContent: 'center', paddingHorizontal: spacing.sm, marginBottom: spacing.sm },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.md,

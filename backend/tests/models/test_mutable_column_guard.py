@@ -38,6 +38,11 @@ MUTABLE_TYPES = (ARRAY, PG_ARRAY, JSONB, JSON)
 # assignment only, so mutation tracking would buy nothing but a deep copy on
 # every load. Format: "Model.column": why.
 REASSIGN_ONLY = {
+    "SurveyAreaBlock.door_snapshot": (
+        "ADR-513 D1. The city's doors for one block of a survey area, snapshotted "
+        "ONCE when the area is declared and never changed: it is the evidence that "
+        "the area's blocks came from a public boundary, not from deliveries."
+    ),
     "SurveyWalk.addresses": (
         "ADR-504 D3. The city's address list for a walked block, snapshotted ONCE "
         "when the walk starts and never changed: it is the proof of which doors the "

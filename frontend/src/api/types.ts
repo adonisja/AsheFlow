@@ -3498,8 +3498,83 @@ export interface SurveyWalk {
   started_at: string;
   closed_at: string | null;
   addresses: SurveyAddress[];
-  /** Indexes already recorded on this walk. */
+  /** ADR-513 D6: indexes of doors done on this block by ANY writer in the
+   *  current cycle, and therefore locked. */
   recorded: number[];
+  area_id: string | null;
+  block_state: SurveyBlockState;
+}
+
+// ── ADR-513: survey areas and block claims ───────────────────────────────────
+
+export type SurveyBlockState = 'open' | 'in_progress' | 'done';
+export type SurveyAreaKind = 'nta' | 'cd';
+
+export interface SurveyAreaIn {
+  kind: SurveyAreaKind;
+  code: string;            // "MN0401" (NTA) or "104" (Community District)
+  reason: string;          // 3..200
+}
+
+export interface SurveyArea {
+  id: string;
+  kind: SurveyAreaKind;
+  code: string;
+  name: string;
+  reason: string;
+  declared_by_kind: 'super_admin' | 'platform_support';
+  declared_at: string;
+  closed_at: string | null;
+  blocks_total: number;
+  blocks_done: number;
+  blocks_in_progress: number;
+  doors_total: number;
+  doors_done: number;
+  last_activity: string | null;
+}
+
+export interface SurveyAreaBlock {
+  id: string;
+  borough: string;
+  block_key: string;
+  street: string;
+  description: string;
+  state: SurveyBlockState;
+  doors_done: number;
+  doors_total: number;
+  reopens_on: string | null;
+  last_activity: string | null;
+  /** Who holds it is never shown to other writers. */
+  claim: 'mine' | 'taken' | null;
+  claim_id: string | null;
+  distance_m: number | null;
+}
+
+export interface SurveyClaim {
+  id: string;
+  area_id: string;
+  area_name: string;
+  area_block_id: string;
+  street: string;
+  description: string;
+  claimed_at: string;
+  expires_at: string;
+  walk_id: string | null;
+  walk_open: boolean;
+  doors_done: number;
+  doors_total: number;
+}
+
+export interface SurveyAttest {
+  attest_off_shift: boolean;
+  attest_unbranded: boolean;
+  attest_as_self: boolean;
+}
+
+export interface SurveyUnlockIn {
+  walk_id: string;
+  address_index: number;
+  reason: string;          // 3..200
 }
 
 export interface SurveyDeliveryPointIn {

@@ -15,15 +15,20 @@
  * interrupted all the time. So it is three steps rather than one long page,
  * every answer is kept as a local draft until the door is saved, and every
  * touch target is at least 44px.
+ *
+ * ADR-513 D6: a tick means the door is done on this BLOCK, by anyone, and the
+ * server refuses it again until the block re-opens. Finishing with doors left
+ * is a pause: the block goes back to its area for anyone to continue.
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Check, ChevronLeft, ChevronRight, Loader2, Plus, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Loader2, LockOpen, Plus, X } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
+import { useAuth } from '../../contexts/AuthContext';
 import { errorText } from '../../utils/errorText';
 import { BUILDING_TYPES } from '../../utils/addressProfile';
 import type {
@@ -250,6 +255,10 @@ export default function SurveyWalkPage() {
   const { walkId } = useParams<{ walkId: string }>();
   const navigate = useNavigate();
   const reducedMotion = useReducedMotion();
+  const { groups } = useAuth();
+  const isOwner = groups.includes('super_admin');
+  const [unlocking, setUnlocking] = useState<SurveyAddress | null>(null);
+  const [unlockReason, setUnlockReason] = useState('');
   const [walk, setWalk] = useState<SurveyWalk | null>(null);
   const [door, setDoor] = useState<SurveyAddress | null>(null);
   const [form, setForm] = useState<Form | null>(null);
@@ -362,6 +371,26 @@ export default function SurveyWalkPage() {
       navigate('/survey');
     } catch (e) {
       setError(errorText(e, "Couldn't finish the walk."));
+      setBusy(false);
+    }
+  };
+
+  // ADR-513 D6: the owner re-opens one done door for a correction. The earlier
+  // observation is kept; it just stops locking the door.
+  const unlock = async () => {
+    if (!walk || !unlocking) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await axiosClient.post('/survey/doors/unlock',
+        { walk_id: walk.id, address_index: unlocking.index, reason: unlockReason.trim() });
+      setUnlocking(null);
+      setUnlockReason('');
+      setSaved(`Unlocked ${unlocking.address}`);
+      await load();
+    } catch (e) {
+      setError(errorText(e, "Couldn't unlock this door."));
+    } finally {
       setBusy(false);
     }
   };
@@ -552,9 +581,14 @@ export default function SurveyWalkPage() {
       <header>
         <h1 className="text-xl font-bold">{walk.street}</h1>
         <p className="text-sm text-muted-foreground">
-          {done.size} of {walk.addresses.length} doors recorded{closed ? ' · finished' : ''}
+          {done.size} of {walk.addresses.length} doors done on this block{closed ? ' · walk ended' : ''}
         </p>
       </header>
+      {walk.block_state === 'done' && (
+        <p className="rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
+          Every door on this block is done.
+        </p>
+      )}
       <ErrorBanner message={error} />
       <p role="status" className={saved ? 'flex items-center gap-2 text-sm text-success' : 'sr-only'}>
         {saved && <><Check className="h-4 w-4" /> {saved}</>}
@@ -565,9 +599,16 @@ export default function SurveyWalkPage() {
             <button type="button" disabled={closed || done.has(a.index)} onClick={() => open(a)}
               className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-border px-3 py-3 text-left text-sm hover:bg-muted disabled:opacity-60">
               <span className="truncate">{a.address}</span>
-              {done.has(a.index) ? <Check className="h-4 w-4 shrink-0 text-success" aria-label="Recorded" />
+              {done.has(a.index) ? <Check className="h-4 w-4 shrink-0 text-success" aria-label="Done" />
                 : drafts.has(a.index) && <span className="shrink-0 text-xs font-medium text-warning">Draft</span>}
             </button>
+            {isOwner && done.has(a.index) && walk.area_id !== null && (
+              <button type="button" onClick={() => { setUnlocking(a); setUnlockReason(''); }}
+                className="btn-ghost inline-flex min-h-11 shrink-0 items-center gap-1 px-2 text-xs"
+                aria-label={`Unlock ${a.address} for a correction`}>
+                <LockOpen className="h-4 w-4" /> Unlock
+              </button>
+            )}
             {!closed && !done.has(a.index) && (
               <button type="button" onClick={() => setNotPoint(a)}
                 className="btn-ghost min-h-11 shrink-0 px-2 text-xs" aria-label={`${a.address} is not a delivery point`}>
@@ -577,11 +618,36 @@ export default function SurveyWalkPage() {
           </li>
         ))}
       </ul>
-      {!closed && (
-        <button type="button" onClick={() => void finish()} disabled={busy} className="btn-secondary min-h-11 w-full text-sm">
+      {unlocking && (
+        <div className="card space-y-2 p-3" role="group" aria-label="Unlock a door">
+          <p className="text-sm">
+            Unlock <span className="font-medium">{unlocking.address}</span>? Its earlier record stays.
+            The door can then be recorded again.
+          </p>
+          <input type="text" value={unlockReason} onChange={e => setUnlockReason(e.target.value)} maxLength={200}
+            placeholder="Why? e.g. wrong building type" aria-label="Reason for unlocking"
+            className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm" />
+          <div className="flex gap-2">
+            <button type="button" onClick={() => void unlock()} disabled={busy || unlockReason.trim().length < 3}
+              className="btn-primary min-h-11 flex-1 text-sm">Unlock</button>
+            <button type="button" onClick={() => setUnlocking(null)} className="btn-secondary min-h-11 px-4 text-sm">Cancel</button>
+          </div>
+        </div>
+      )}
+      {!closed && (done.size < walk.addresses.length ? (
+        <div className="space-y-1">
+          <button type="button" onClick={() => void finish()} disabled={busy} className="btn-secondary min-h-11 w-full text-sm">
+            Pause and give the block back
+          </button>
+          <p className="text-xs text-muted-foreground">
+            The doors you recorded stay done. The block goes back to its area for anyone to finish.
+          </p>
+        </div>
+      ) : (
+        <button type="button" onClick={() => void finish()} disabled={busy} className="btn-primary min-h-11 w-full text-sm">
           Finish walk
         </button>
-      )}
+      ))}
       <ConfirmDialog
         open={notPoint !== null}
         title="Not a delivery point?"

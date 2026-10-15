@@ -14,12 +14,26 @@ tenant. That absence is the point, not an omission (ADR-504 D1).
                           fact keeps who saw it, when, and how (D5).
 
 Nothing here is ever written from tenant data (D6); a drift test enforces it.
+
+ADR-513 adds who walks what:
+
+    survey_areas          a public boundary (an NTA or a Community District)
+                          declared by the owner or platform support, with a
+                          reason. Never edited, only closed.
+    survey_area_blocks    the area's blocks as the city listed them when it was
+                          declared: the evidence that the blocks came from a
+                          boundary, not from deliveries (ADR-504 D3).
+    survey_block_claims   one writer holding one block for a while.
+    survey_door_unlocks   the owner re-opening one done door for a correction.
+
+Progress (door, block, area) is DERIVED from observations, never stored, so no
+count can drift from the rows it counts (ADR-513 D6).
 """
 import uuid
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, String,
-    Text, Time, UniqueConstraint,
+    Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String,
+    Text, Time, UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
@@ -39,6 +53,15 @@ TRISTATE = ("yes", "no", "unknown")
 DAY_STATUS = ("open", "closed", "unknown")
 DAY_GROUPS = ("weekday", "saturday", "sunday")
 MAX_DELIVERY_POINTS = 3
+
+# ADR-513. The owner's answers (2026-10-14), except MAX_ACTIVE_CLAIMS, a default
+# the ADR records as unasked.
+AREA_KINDS = ("nta", "cd")              # 2020 Neighborhood Tabulation Area, Community District
+CLAIM_HOURS = 48                        # D3: a claim lapses back to open after this
+MAX_ACTIVE_CLAIMS = 3                   # D3: per writer, so no one hoards an area
+REVISIT_DAYS = 180                      # D4: a done block re-opens after this
+CLAIM_RELEASE_REASONS = ("released", "walk_closed", "area_closed")
+BOROUGHS = ("1", "2", "3", "4", "5")    # AddressPoint boroughcode: MN BX BK QN SI
 
 
 class SurveyContributor(Base):
@@ -82,6 +105,13 @@ class SurveyWalk(Base):
     attest_as_self   = Column(Boolean, nullable=False)
     started_at     = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     closed_at      = Column(DateTime(timezone=True), nullable=True)
+    # ADR-513. A block key carries no borough ("Broadway_0" is in Manhattan and
+    # Brooklyn), so every lock and claim is keyed on borough AND block. NULL on
+    # walks made before ADR-513, which match any borough (see survey_progress).
+    borough        = Column(String(1), nullable=True)
+    # The area the block was claimed in. NULL for an owner's scouting walk (D5).
+    area_id        = Column(UUID(as_uuid=True), ForeignKey("survey_areas.id", ondelete="RESTRICT"),
+                            nullable=True, index=True)
 
     __table_args__ = (
         CheckConstraint("attest_off_shift AND attest_unbranded AND attest_as_self",
@@ -177,4 +207,107 @@ class SurveyReceivesFor(Base):
 
     __table_args__ = (
         UniqueConstraint("observation_id", "address", name="uq_survey_rf_address"),
+    )
+
+
+class SurveyArea(Base):
+    """A public boundary to survey, declared with a reason (ADR-513 D1)."""
+    __tablename__ = "survey_areas"
+
+    id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    kind             = Column(String(10), nullable=False)
+    code             = Column(String(10), nullable=False)          # "MN0401", "104"
+    name             = Column(String(120), nullable=False)         # the city's name for it
+    boundary_dataset = Column(String(20), nullable=False)
+    address_dataset  = Column(String(20), nullable=False)
+    fetched_at       = Column(DateTime(timezone=True), nullable=False)
+    reason           = Column(String(200), nullable=False)
+    declared_by      = Column(String(255), nullable=False)         # Cognito sub; no Employee FK
+    declared_by_kind = Column(String(20), nullable=False)          # super_admin | platform_support
+    declared_at      = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    closed_at        = Column(DateTime(timezone=True), nullable=True)
+    closed_by        = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(f"kind IN {AREA_KINDS}", name="ck_survey_area_kind"),
+        CheckConstraint("declared_by_kind IN ('super_admin', 'platform_support')",
+                        name="ck_survey_area_declared_by_kind"),
+        # One OPEN area per boundary. A closed one can be declared again.
+        Index("uq_survey_area_open_boundary", "kind", "code", unique=True,
+              postgresql_where=text("closed_at IS NULL"), sqlite_where=text("closed_at IS NULL")),
+    )
+
+
+class SurveyAreaBlock(Base):
+    """One block of an area, as the city listed it when the area was declared.
+    Immutable: the snapshot is the provenance (ADR-504 D3)."""
+    __tablename__ = "survey_area_blocks"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    area_id     = Column(UUID(as_uuid=True), ForeignKey("survey_areas.id", ondelete="RESTRICT"),
+                         nullable=False, index=True)
+    borough     = Column(String(1), nullable=False)
+    block_key   = Column(String(100), nullable=False)
+    street      = Column(String(120), nullable=False)
+    description = Column(String(160), nullable=False)
+    # Mean of the doors' points: where a walk's fresh fetch is centred, and the
+    # distance used to sort "nearest first".
+    lat         = Column(Float, nullable=False)
+    lng         = Column(Float, nullable=False)
+    # [{"address", "bin"}]. Not `doors`: the scan for in-place JSONB mutation
+    # matches by attribute name, and survey_blocks.Block.doors is a plain list
+    # that IS mutated in place (ADR-247 scan, a false positive by name).
+    door_snapshot = Column(JSONB, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"borough IN {BOROUGHS}", name="ck_survey_area_block_borough"),
+        UniqueConstraint("area_id", "borough", "block_key", name="uq_survey_area_block"),
+        Index("ix_survey_area_blocks_block", "borough", "block_key"),
+    )
+
+
+class SurveyBlockClaim(Base):
+    """One writer holding one block (ADR-513 D3). Active while released_at is
+    NULL and expires_at is in the future; a lapse needs no write."""
+    __tablename__ = "survey_block_claims"
+
+    id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    area_id        = Column(UUID(as_uuid=True), ForeignKey("survey_areas.id", ondelete="RESTRICT"),
+                            nullable=False, index=True)
+    area_block_id  = Column(UUID(as_uuid=True), ForeignKey("survey_area_blocks.id", ondelete="RESTRICT"),
+                            nullable=False)
+    borough        = Column(String(1), nullable=False)
+    block_key      = Column(String(100), nullable=False)
+    writer_sub     = Column(String(255), nullable=False, index=True)
+    claimed_at     = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at     = Column(DateTime(timezone=True), nullable=False)
+    released_at    = Column(DateTime(timezone=True), nullable=True)
+    release_reason = Column(String(20), nullable=True)
+    walk_id        = Column(UUID(as_uuid=True), ForeignKey("survey_walks.id", ondelete="RESTRICT"),
+                            nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(f"release_reason IS NULL OR release_reason IN {CLAIM_RELEASE_REASONS}",
+                        name="ck_survey_claim_release_reason"),
+        CheckConstraint("(released_at IS NULL) = (release_reason IS NULL)",
+                        name="ck_survey_claim_released_with_reason"),
+        Index("ix_survey_block_claims_block", "borough", "block_key"),
+    )
+
+
+class SurveyDoorUnlock(Base):
+    """The owner re-opening one done door for a correction (ADR-513 D6). The
+    earlier observation stays; it just stops counting the door as done."""
+    __tablename__ = "survey_door_unlocks"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    borough     = Column(String(1), nullable=False)
+    block_key   = Column(String(100), nullable=False)
+    address     = Column(String(200), nullable=False)
+    reason      = Column(String(200), nullable=False)
+    unlocked_by = Column(String(255), nullable=False)
+    unlocked_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_survey_door_unlocks_block", "borough", "block_key"),
     )

@@ -33,6 +33,16 @@ class Block:
     block_key: str
     street: str
     doors: list[dict] = field(default_factory=list)   # {"address","bin","lat","lng"}
+    # ADR-513: AddressPoint's boroughcode. A block key alone is ambiguous across
+    # boroughs ("Broadway_0" is in Manhattan and Brooklyn).
+    borough: str = ""
+
+    @property
+    def centre(self) -> tuple[float, float] | None:
+        pts = [(d["lat"], d["lng"]) for d in self.doors if d.get("lat") is not None and d.get("lng") is not None]
+        if not pts:
+            return None
+        return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
 
     @property
     def description(self) -> str:
@@ -41,14 +51,11 @@ class Block:
         return f"{self.street}, {nums[0]}–{nums[-1]}" if nums else self.street
 
 
-def _fetch(lat: float, lng: float, radius_m: int) -> list[dict]:
-    params = {
-        "$select": "house_number,full_street_name,bin,the_geom",
-        "$where": f"within_circle(the_geom, {lat:.6f}, {lng:.6f}, {int(radius_m)})",
-        "$order": "addresspointid",
-        "$limit": str(_LIMIT),
-    }
-    url = f"{_SODA_HOST}/{settings.socrata_addresspoint_dataset}.json?" + urllib.parse.urlencode(params)
+_SELECT = "house_number,full_street_name,bin,boroughcode,the_geom"
+
+
+def _get(dataset: str, params: dict, what: str) -> list[dict]:
+    url = f"{_SODA_HOST}/{dataset}.json?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url)
     if settings.socrata_app_token:
         req.add_header("X-App-Token", settings.socrata_app_token)
@@ -57,31 +64,41 @@ def _fetch(lat: float, lng: float, radius_m: int) -> list[dict]:
             return json.load(resp)
     except Exception as exc:
         # The URL carries a location; log the exception type only.
-        logger.warning("survey_blocks: AddressPoint fetch failed: %s", type(exc).__name__)
+        logger.warning("survey_blocks: %s fetch failed: %s", what, type(exc).__name__)
         raise AddressSourceUnavailable("address source unavailable") from exc
 
 
-def blocks_near(lat: float, lng: float, radius_m: int = 150) -> list[Block]:
-    """Every block with at least one address within `radius_m` of the point."""
+def _fetch(lat: float, lng: float, radius_m: int) -> list[dict]:
+    return _get(settings.socrata_addresspoint_dataset, {
+        "$select": _SELECT,
+        "$where": f"within_circle(the_geom, {lat:.6f}, {lng:.6f}, {int(radius_m)})",
+        "$order": "addresspointid",
+        "$limit": str(_LIMIT),
+    }, "AddressPoint")
+
+
+def _group(rows: list[dict]) -> list[Block]:
+    """AddressPoint rows into blocks, keyed by borough AND block key."""
     from app.services.derive_block_key import ParsedBlock, derive_block_key
 
-    radius_m = max(25, min(int(radius_m), MAX_RADIUS_M))
-    by_key: dict[str, Block] = {}
-    seen: set[str] = set()
-    for row in _fetch(lat, lng, radius_m):
+    by_key: dict[tuple[str, str], Block] = {}
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
         house = (row.get("house_number") or "").strip()
         street = _normalise_street(row.get("full_street_name"))
+        borough = str(row.get("boroughcode") or "").strip()
         if not house or not street:
             continue
         address = f"{house} {street}"
-        if address in seen:
+        if (borough, address) in seen:
             continue
-        seen.add(address)
+        seen.add((borough, address))
         parsed = derive_block_key(address, tba="")
         if not isinstance(parsed, ParsedBlock):
             continue          # an address the block logic cannot place is not offered
         coords = (row.get("the_geom") or {}).get("coordinates") or [None, None]
-        blk = by_key.setdefault(parsed.block_key, Block(parsed.block_key, street))
+        blk = by_key.setdefault((borough, parsed.block_key),
+                                Block(parsed.block_key, street, borough=borough))
         blk.doors.append({
             "address": address,
             "bin": row.get("bin") or None,
@@ -90,9 +107,95 @@ def blocks_near(lat: float, lng: float, radius_m: int = 150) -> list[Block]:
     blocks = list(by_key.values())
     for b in blocks:
         b.doors.sort(key=lambda a: (len(a["address"].split()[0]), a["address"]))
-    blocks.sort(key=lambda b: (b.street, b.block_key))
+    blocks.sort(key=lambda b: (b.borough, b.street, b.block_key))
     return blocks
 
+
+def blocks_near(lat: float, lng: float, radius_m: int = 150) -> list[Block]:
+    """Every block with at least one address within `radius_m` of the point."""
+    radius_m = max(25, min(int(radius_m), MAX_RADIUS_M))
+    return _group(_fetch(lat, lng, radius_m))
+
+
+# ── ADR-513: survey areas from public boundaries ────────────────────────────
+
+NTA_DATASET = "9nt8-h7nd"        # 2020 Neighborhood Tabulation Areas: nta2020, ntaname
+CD_DATASET = "5crt-au7u"         # Community Districts: boro_cd
+_BORO_NAME = {"1": "Manhattan", "2": "Bronx", "3": "Brooklyn", "4": "Queens", "5": "Staten Island"}
+# A boundary that lists more than this is refused: a walkable area is a
+# neighbourhood, not a borough. MN0401 (Chelsea-Hudson Yards) is 2,964.
+MAX_AREA_ADDRESSES = 20000
+_PAGE = 5000
+# ~5 m. Applied only to the polygon SENT in the query (a URL has a length
+# limit); the result is then filtered against the exact shape, after a buffer
+# wide enough that the simplification cannot have dropped a real door.
+_SIMPLIFY_DEG = 0.00005
+_BUFFER_DEG = 0.0002
+
+
+class UnknownBoundary(Exception):
+    """The city has no boundary with that code."""
+
+
+class AreaTooLarge(Exception):
+    """The boundary holds more addresses than a walkable area should."""
+
+
+@dataclass
+class Boundary:
+    kind: str
+    code: str
+    name: str
+    dataset: str
+    geometry: dict          # GeoJSON MultiPolygon
+
+
+def fetch_boundary(kind: str, code: str) -> Boundary:
+    """The city's own polygon for an NTA or a Community District."""
+    if kind == "nta":
+        rows = _get(NTA_DATASET, {"nta2020": code, "$limit": "1"}, "NTA")
+        if not rows:
+            raise UnknownBoundary(code)
+        return Boundary("nta", code, rows[0].get("ntaname") or code, NTA_DATASET, rows[0]["the_geom"])
+    rows = _get(CD_DATASET, {"boro_cd": code, "$limit": "1"}, "Community District")
+    if not rows:
+        raise UnknownBoundary(code)
+    return Boundary("cd", code, f"{_BORO_NAME.get(code[:1], 'Borough')} Community District {int(code[1:])}",
+                    CD_DATASET, rows[0]["the_geom"])
+
+
+def _wkt(shape) -> str:
+    from shapely import wkt as _w
+    return _w.dumps(shape, rounding_precision=6)
+
+
+def blocks_in_area(boundary: Boundary) -> list[Block]:
+    """Every block with an address inside the boundary, from the city's list."""
+    from shapely.geometry import Point, shape
+    from shapely.prepared import prep
+
+    exact = shape(boundary.geometry)
+    query_shape = exact.buffer(_BUFFER_DEG).simplify(_SIMPLIFY_DEG)
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = _get(settings.socrata_addresspoint_dataset, {
+            "$select": _SELECT,
+            "$where": f"within_polygon(the_geom, '{_wkt(query_shape)}')",
+            "$order": "addresspointid",
+            "$limit": str(_PAGE),
+            "$offset": str(offset),
+        }, "AddressPoint (area)")
+        rows.extend(page)
+        if len(rows) > MAX_AREA_ADDRESSES:
+            raise AreaTooLarge(boundary.code)
+        if len(page) < _PAGE:
+            break
+        offset += _PAGE
+    inside = prep(exact)
+    kept = [r for r in rows
+            if (c := (r.get("the_geom") or {}).get("coordinates")) and inside.contains(Point(c[0], c[1]))]
+    return _group(kept)
 
 
 # ── ADR-504 D8: the city block a door is on ────────────────────────────────
