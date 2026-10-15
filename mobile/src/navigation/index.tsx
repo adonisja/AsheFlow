@@ -7,7 +7,7 @@ import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
@@ -42,6 +42,8 @@ export * from './roles';
 import { TAB_GATES } from './roles';
 import MyRoleScreen from '@screens/MyRole/MyRoleScreen';
 import InterruptiveHost from '@components/notifications/InterruptiveHost';
+import { ArrivalBanner, NotificationTickerDock, NotificationTopArea } from '@components/notifications/NotificationArea';
+import { NotificationsProvider } from '@contexts/NotificationsContext';
 import { registerForPush } from '@api/pushRegistration';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
@@ -332,12 +334,26 @@ function MainShell() {
           OVER the shell rather than replacing it, because a prompt is not a
           wall — and the gate inside it is the one case that behaves like one. */}
       <InterruptiveHost />
-      <View style={{ flex: 1 }}>
+      {/* ADR-516. The notification area lives here, OUTSIDE every screen, so it
+          cannot be scrolled away (ADR-381) and shows on every tab. Each piece
+          renders nothing when it has nothing to show. */}
+      <NotificationsProvider>
         <View style={{ flex: 1 }}>
-          <ActiveScreen />
+          <NotificationTopArea />
+          {/* A NESTED provider, so screens measure their safe area from here.
+              Native SafeAreaView takes its insets from the nearest provider's
+              position (getSafeAreaInsets(providerView)), not its own: without
+              this, a screen pushed down by the top area still added the
+              status-bar inset and left a blank gap (seen on the emulator). */}
+          <SafeAreaProvider style={{ flex: 1 }}>
+            <ActiveScreen />
+          </SafeAreaProvider>
+          {/* Not on the inbox: it lists everything and has its own ticker. */}
+          {activeKey !== 'Notifications' && <NotificationTickerDock />}
+          <HorizontalTabBar tabs={visibleTabs} activeKey={activeKey} onSelect={setActiveKey} />
+          <ArrivalBanner />
         </View>
-        <HorizontalTabBar tabs={visibleTabs} activeKey={activeKey} onSelect={setActiveKey} />
-      </View>
+      </NotificationsProvider>
     </TabSwitchContext.Provider>
   );
 }
