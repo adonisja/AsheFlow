@@ -3484,3 +3484,33 @@ export interface SurveyObservation {
   note: string | null;
   mine: boolean;
 }
+
+// ── ADR-509: onboarding survey contributors (platform staff) ──────────────
+
+export interface SurveyContributor {
+  id: string;
+  display_name: string;
+  /** Shown to platform staff who manage contributors (ADR-509 D3). */
+  email: string | null;
+  cognito_username: string | null;
+  agreement_version: string;
+  agreement_signed_on: string;
+  admitted_at: string;
+  revoked_at: string | null;
+}
+
+/** POST /survey/contributors/invite. Creates a NEW account only. */
+export interface SurveyContributorInvite {
+  name: string;                  // ≤100
+  email: string;
+  agreement_version: string;     // ≤20, e.g. "v1"
+  agreement_signed_on: string;   // YYYY-MM-DD, not in the future
+  confirm_agreement_signed: true;
+}
+
+export interface SurveyContributorInvited {
+  contributor: SurveyContributor;
+  email_delivered: boolean;
+  /** Only when the credentials email failed; shown once, never stored. */
+  temp_password: string | null;
+}

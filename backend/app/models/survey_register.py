@@ -50,6 +50,11 @@ class SurveyContributor(Base):
     cognito_sub         = Column(String(255), nullable=False, unique=True, index=True)
     # For the owner's own records of who signed. Never copied onto observations.
     display_name        = Column(String(100), nullable=False)
+    # ADR-509. Set when the account was created in the product; NULL for rows
+    # admitted by sub before that. The username is what Cognito's group calls
+    # take; the email is what support needs to manage the account (ADR-509 D3).
+    cognito_username    = Column(String(128), nullable=True)
+    email               = Column(String(255), nullable=True)
     agreement_version   = Column(String(20), nullable=False)
     agreement_signed_on = Column(Date, nullable=False)
     admitted_at         = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

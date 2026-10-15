@@ -21,17 +21,22 @@ Reads (D7): the owner sees every observation; a contributor sees their own.
 """
 from __future__ import annotations
 
+import logging
 import re
+import secrets
+import string
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_super_admin
+from app.api.deps import get_current_user, get_platform_staff, get_super_admin
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
@@ -43,8 +48,10 @@ from app.schemas.building_taxonomy import BUILDING_TYPES
 from app.services import survey_blocks
 from app.services.address_inventory import AddressSourceUnavailable
 from app.services.audit import super_admin_identity, write_audit
+from app.services.email import send_credentials_email
 from app.services.note_scrub import scrub_note
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/survey", tags=["survey-register"])
 
 ATTESTATION = "Made outside any carrier's services, per ADR-504 D2."
@@ -276,14 +283,43 @@ class ContributorIn(BaseModel):
     agreement_signed_on: date
 
 
+class ContributorInviteIn(BaseModel):
+    """ADR-509 D1: create a NEW account, grant `surveyor`, and admit it."""
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    agreement_version: str = Field(min_length=1, max_length=20)
+    agreement_signed_on: date
+    # The caller confirms they hold the signed agreement. Must be TRUE.
+    confirm_agreement_signed: bool
+
+    @model_validator(mode="after")
+    def _signed(self):
+        if not self.confirm_agreement_signed:
+            raise ValueError("Only admit someone who has signed the contributor agreement.")
+        if self.agreement_signed_on > date.today():
+            raise ValueError("The signing date can't be in the future.")
+        return self
+
+
 class ContributorOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     display_name: str
+    # ADR-509 D3: shown to platform staff who manage contributors.
+    email: Optional[str] = None
+    cognito_username: Optional[str] = None
     agreement_version: str
     agreement_signed_on: date
     admitted_at: datetime
     revoked_at: Optional[datetime] = None
+
+
+class InviteOut(BaseModel):
+    contributor: ContributorOut
+    email_delivered: bool
+    # Only when the credentials email failed (ADR-442 D2): shown once, never stored.
+    temp_password: Optional[str] = None
 
 
 class MeOut(BaseModel):
@@ -532,17 +568,21 @@ def list_observations(
     return [_obs_out(db, r, writer) for r in rows]
 
 
-# ── contributors (owner only) ───────────────────────────────────────────────
+# ── contributors (ADR-509: both platform roles, bounded) ────────────────────
 
 @router.get("/contributors", response_model=list[ContributorOut])
-def list_contributors(_: dict = Depends(get_super_admin), db: Session = Depends(get_db)):
+def list_contributors(_: dict = Depends(get_platform_staff), db: Session = Depends(get_db)):
+    """ADR-509 D3: both platform roles. Contributors' names and emails only;
+    nothing from the register itself."""
     return db.query(SurveyContributor).order_by(SurveyContributor.admitted_at.desc()).all()
 
 
 @router.post("/contributors", response_model=ContributorOut, status_code=status.HTTP_201_CREATED)
 def admit_contributor(body: ContributorIn, super_admin: dict = Depends(get_super_admin),
                       db: Session = Depends(get_db)):
-    """Admit someone who has signed the contributor agreement (D1)."""
+    """Admit an EXISTING account by its sub (D1). Super admin only: attaching the
+    register to an account that already exists is the escalation ADR-509 keeps
+    away from support."""
     _assert_not_excluded(db, body.cognito_sub)
     if db.query(SurveyContributor.id).filter(
             SurveyContributor.cognito_sub == body.cognito_sub).first() is not None:
@@ -563,9 +603,137 @@ def admit_contributor(body: ContributorIn, super_admin: dict = Depends(get_super
     return c
 
 
-@router.post("/contributors/{contributor_id}/revoke", response_model=ContributorOut)
-def revoke_contributor(contributor_id: UUID, super_admin: dict = Depends(get_super_admin),
+def _staff_identity(claims: dict) -> dict:
+    """`super_admin_identity`, with the caller's REAL role. That helper always
+    writes "super_admin"; on an endpoint support can call (ADR-509), it would
+    audit a support user's action as the owner's."""
+    groups = claims.get("cognito_groups", [])
+    return {**super_admin_identity(claims),
+            "actor_kind": "super_admin" if "super_admin" in groups else "platform_support"}
+
+
+def _temp_password() -> str:
+    """The ADR-444 shape (platform_alerts / registration): satisfies the pool
+    policy without depending on its exact settings."""
+    chars = (
+        [secrets.choice(string.ascii_uppercase) for _ in range(2)]
+        + [secrets.choice(string.digits) for _ in range(3)]
+        + [secrets.choice(string.ascii_lowercase) for _ in range(2)]
+        + [secrets.choice("!@#$%^&*") for _ in range(2)]
+    )
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def _cognito():
+    return boto3.client("cognito-idp", region_name=settings.aws_region)
+
+
+def _employee_email_excluded(db: Session, email: str) -> bool:
+    q = db.query(Employee.id).filter(Employee.email.ilike(email))
+    company = _excluded_company()
+    if company is not None:
+        q = q.filter(Employee.company_id == company)
+    return q.first() is not None
+
+
+@router.post("/contributors/invite", response_model=InviteOut, status_code=status.HTTP_201_CREATED)
+def invite_contributor(body: ContributorInviteIn, staff: dict = Depends(get_platform_staff),
                        db: Session = Depends(get_db)):
+    """ADR-509 D1: create a NEW account in `surveyor` and admit it, in one step.
+
+    Open to platform support: an explicit exception to ADR-343 D1, bounded so it
+    cannot escalate anyone. Only brand-new accounts (an existing email gives 409),
+    never the caller's own, never an excluded-company employee's.
+    """
+    from app.routers.platform_alerts import _derive_platform_username
+
+    email = str(body.email).strip().lower()
+    if email == (staff.get("email") or "").strip().lower():
+        raise HTTPException(status_code=403, detail="You can't admit yourself as a contributor.")
+    if _employee_email_excluded(db, email):
+        raise HTTPException(status_code=403,
+                            detail="That email belongs to a delivery company's employee record "
+                                   "and can't be a contributor.")
+
+    client = _cognito()
+    pool = settings.aws_cognito_user_pool_id
+    try:
+        existing = client.list_users(UserPoolId=pool, Filter=f'email = "{email}"', Limit=1)
+    except (ClientError, BotoCoreError) as exc:
+        logger.error("survey invite: user lookup failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not check for an existing account.")
+    if existing.get("Users"):
+        raise HTTPException(
+            status_code=409,
+            detail="An account with that email already exists. Ask the owner to admit it.")
+
+    username = _derive_platform_username(client, body.name)
+    temp_password = _temp_password()
+    try:
+        created = client.admin_create_user(
+            UserPoolId=pool, Username=username, TemporaryPassword=temp_password,
+            MessageAction="SUPPRESS",
+            UserAttributes=[
+                {"Name": "email", "Value": email},
+                {"Name": "email_verified", "Value": "true"},
+                {"Name": "name", "Value": body.name},
+            ],
+        )
+        sub = next(a["Value"] for a in created["User"]["Attributes"] if a["Name"] == "sub")
+        # Not MFA-privileged, so granted now (unlike platform staff, ADR-397).
+        client.admin_add_user_to_group(UserPoolId=pool, Username=username, GroupName="surveyor")
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        logger.error("survey invite: account create failed: %s", code)
+        if code == "UsernameExistsException":
+            raise HTTPException(status_code=409, detail="An account with that name already exists.")
+        raise HTTPException(status_code=502, detail="Could not create the account.")
+    except (BotoCoreError, StopIteration) as exc:
+        logger.error("survey invite: account create failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not create the account.")
+
+    try:
+        c = SurveyContributor(
+            cognito_sub=sub, cognito_username=username, email=email,
+            display_name=body.name, agreement_version=body.agreement_version,
+            agreement_signed_on=body.agreement_signed_on,
+            admitted_by=(staff.get("id") or "")[:64] or None,
+        )
+        db.add(c)
+        db.flush()
+        write_audit(db, action_type="survey.contributor.invite", target_table="survey_contributors",
+                    target_id=str(c.id), actor_id=None, company_id=None,
+                    detail={**_staff_identity(staff), "username": username,
+                            "agreement_version": body.agreement_version})
+        db.commit()
+        db.refresh(c)
+    except Exception:
+        # No half-made account: the Cognito user goes if the row did not land.
+        db.rollback()
+        try:
+            client.admin_delete_user(UserPoolId=pool, Username=username)
+        except (ClientError, BotoCoreError) as exc:
+            logger.error("survey invite: cleanup of %s failed: %s", username, type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not admit the contributor. Nothing was created.")
+
+    email_delivered = True
+    try:
+        send_credentials_email(to_email=email, employee_name=body.name,
+                               username=username, temp_password=temp_password)
+    except Exception as exc:
+        logger.error("survey invite: credentials email failed: %s", type(exc).__name__)
+        email_delivered = False
+
+    return InviteOut(contributor=ContributorOut.model_validate(c), email_delivered=email_delivered,
+                     temp_password=None if email_delivered else temp_password)
+
+
+@router.post("/contributors/{contributor_id}/revoke", response_model=ContributorOut)
+def revoke_contributor(contributor_id: UUID, staff: dict = Depends(get_platform_staff),
+                       db: Session = Depends(get_db)):
+    """Both platform roles (ADR-509 D2): revoking only reduces access. Also takes
+    the account out of `surveyor`, best effort: the row is what `get_writer` reads."""
     c = db.query(SurveyContributor).filter(SurveyContributor.id == contributor_id).first()
     if c is None:
         raise HTTPException(status_code=404, detail="Contributor not found.")
@@ -575,7 +743,14 @@ def revoke_contributor(contributor_id: UUID, super_admin: dict = Depends(get_sup
     db.flush()
     write_audit(db, action_type="survey.contributor.revoke", target_table="survey_contributors",
                 target_id=str(c.id), actor_id=None, company_id=None,
-                detail=super_admin_identity(super_admin))
+                detail=_staff_identity(staff))
     db.commit()
     db.refresh(c)
+    if c.cognito_username:
+        try:
+            _cognito().admin_remove_user_from_group(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=c.cognito_username, GroupName="surveyor")
+        except (ClientError, BotoCoreError) as exc:
+            logger.warning("survey revoke: group removal failed: %s", type(exc).__name__)
     return c

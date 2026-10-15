@@ -61,6 +61,7 @@ import PlatformAlerts from './pages/superadmin/PlatformAlerts';
 import PlatformStaff from './pages/superadmin/PlatformStaff';
 import NotificationGallery from './pages/superadmin/NotificationGallery';
 import CollectionData from './pages/superadmin/CollectionData';
+import Surveyors from './pages/superadmin/Surveyors';
 import SurveyStart from './pages/survey/SurveyStart';
 import SurveyWalkPage from './pages/survey/SurveyWalk';
 import BuildingSurvey from './pages/BuildingSurvey';
@@ -202,6 +203,8 @@ function RoleRedirect() {
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
   // ADR-504. A contributor has no Employee row and one place to be.
   if (groups.includes('surveyor'))    return <Navigate to="/survey" replace />;
+  // ADR-509. Platform support's one page. Before this they had no web surface.
+  if (groups.includes('platform_support')) return <Navigate to="/superadmin/surveyors" replace />;
   if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
@@ -745,6 +748,11 @@ function App() {
               page is used on a phone on a sidewalk. The real gate is the API. */}
           <Route path="/survey" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyStart /></ProtectedRoute>} />
           <Route path="/survey/walk/:walkId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyWalkPage /></ProtectedRoute>} />
+          {/* ADR-509. Same layout, opened to platform support for this route only;
+              every route in the super-admin block below stays super-admin only. */}
+          <Route element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><SuperAdminLayout /></ProtectedRoute>}>
+            <Route path="/superadmin/surveyors" element={<Surveyors />} />
+          </Route>
           {/* Super admin — separate layout, no Navbar, violet ambient */}
           <Route
             element={

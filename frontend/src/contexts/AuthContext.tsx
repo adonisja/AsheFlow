@@ -115,7 +115,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       // Resolve DB first name — skip for accounts with no Employee row: the
       // platform owner, and survey contributors (ADR-504).
-      const noEmployeeRow = userGroups.includes('super_admin') || userGroups.includes('surveyor');
+      // and platform support (ADR-509 gave them a web page; they have no row either).
+      const noEmployeeRow = ['super_admin', 'surveyor', 'platform_support'].some(g => userGroups.includes(g));
       let firstName = displayName;
       if (!noEmployeeRow) {
         try {
