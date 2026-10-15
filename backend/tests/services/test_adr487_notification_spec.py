@@ -281,7 +281,8 @@ class TestTheCountsMatchTheApprovedRegistry:
         # `notice_templates` row rather than from SPEC. ADR-487 D4c's one narrow
         # exception to "every type is declared": the TIER is declared, the
         # INSTANCES are data.
-        assert len(SPEC) == 86
+        # 87 since ADR-512: stolen_package_review asks a driver or captain to sign.
+        assert len(SPEC) == 87
         assert len(RETIRED) == 4
 
     def test_severity_distribution(self):
@@ -293,7 +294,9 @@ class TestTheCountsMatchTheApprovedRegistry:
         # using it until the notice system gave it one.
         # ADR-494 D2 moves route_ready INFO -> ACTION (29->30, 52->51): it fires
         # once per route, is about this reader, and awaits their tap.
-        assert counts == {"urgent": 4, "action": 30, "notice": 1, "info": 51}, counts
+        # ADR-512 adds stolen_package_review, ACTION (30->31): a report waits on
+        # this reader's signature.
+        assert counts == {"urgent": 4, "action": 31, "notice": 1, "info": 51}, counts
 
     def test_only_two_types_gate(self):
         """ADR-494 D1 narrowed GATE from four types to two.

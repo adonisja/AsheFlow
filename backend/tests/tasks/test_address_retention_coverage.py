@@ -59,7 +59,19 @@ EXEMPT: dict[tuple[str, str], str] = {
         "(ADR-415/439) — an observation about a place, never tied to a package."
     ),
 
+    # --- A customer address on its own, longer clock ---
+    ("stolen_package_reports",     "incident_address"): (
+        "Where a theft happened: a customer address, deliberately kept 60 days, "
+        "not 48h, so the report outlives the claim window (owner's choice, "
+        "ADR-512 D5). Nulled by clear_stolen_package_pi, its own beat task, and "
+        "registered for erasure. test_adr512 pins that the task is scheduled."
+    ),
+
     # --- Not a customer address at all ---
+    ("stolen_package_reports",     "anchor_point_address"): (
+        "The DSP's own staging point at the incident time, snapshotted: same "
+        "reasoning as trucks.initial_anchor_address (ADR-512 D4)."
+    ),
     ("trucks", "initial_anchor_address"): (
         "Crew staging point (a street corner) set by dispatch — an operational "
         "meet-up location, not a delivery destination."

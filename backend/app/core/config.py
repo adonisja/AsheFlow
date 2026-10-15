@@ -165,6 +165,11 @@ class Settings(BaseSettings):
     # lost/damaged claim window plus a month. Lengths are kept, because package
     # counts are read as len(tba_numbers). 0 disables.
     tba_retention_days: int = 90
+    # ADR-512 D5: a stolen-package report's customer address and stolen TBAs are
+    # cleared this many days after the incident date (owner's choice, 2026-10-14:
+    # the 60-day Amazon claim window; note tba_retention_days above adds a month
+    # of margin to the same window). The rest of the report stays. 0 disables.
+    stolen_package_pi_retention_days: int = 60
     # ADR-493 D5: OFF until promotion (ADR-495) ships and the backlog is
     # reviewed; then 180, counted from review. 0 disables.
     collected_profile_retention_days: int = 0

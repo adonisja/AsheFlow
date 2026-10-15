@@ -106,6 +106,13 @@ REGISTRY: tuple[Target, ...] = (
     Target("rts:DamagedPackage",                  "tba_number",         "tba", "placeholder"),
     Target("walker_route:MisroutedPackageFlag",   "tba_number",         "tba", "placeholder"),
     Target("tote_ops:PackageRemoval",             "tba",                "tba", "null"),
+    # ADR-512: the stolen-package report. A customer address and package ids,
+    # erasable on request and also cleared at 60 days by clear_stolen_package_pi.
+    Target("stolen_package_report:StolenPackageReport", "incident_address", "address", "null"),
+    Target("stolen_package_report:StolenPackageReport", "tbas", "tba", "placeholder", "list"),
+    # ADR-512: a customer address under a name the drift scan could not see
+    # ("location"), so an erasure request never reached it. Found by the survey.
+    Target("incident:Incident",                   "incident_location",  "address", "null"),
     # Free text that may name a door or a package.
     *(Target(m, c, "text", "scrub") for m, c in (
         ("anchor_point:AnchorPoint",              "notes"),
@@ -132,6 +139,11 @@ REGISTRY: tuple[Target, ...] = (
         ("scorecard_appeal:ScorecardAppealItem",  "outcome_notes"),
         ("scorecard_import:ScorecardImportPending", "note"),
         ("graduation_quiz:GraduationQuizResponse", "override_note"),   # found by the drift test
+        # ADR-512: free text that can name the customer's door (the owner's own
+        # example summary did: "outside of 400 W 25 St").
+        ("stolen_package_report:StolenPackageReport", "summary"),
+        ("stolen_package_report:StolenPackageReport", "reviewer_comments"),
+        ("incident:Incident",                     "description"),
     )),
     Target("building_profile_library:BuildingProfileLibrary", "operational_note", "text", "scrub",
            tenant=False),
@@ -163,6 +175,10 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("street_segments", "x_high_address_end"): "public NYC street topology (house-number ranges)",
     ("street_segments", "y_low_address_end"):  "public NYC street topology (house-number ranges)",
     ("street_segments", "y_high_address_end"): "public NYC street topology (house-number ranges)",
+    ("anchor_points", "location"):
+        "the DSP's own truck staging point on a public street, not a customer",
+    ("stolen_package_reports", "anchor_point_address"):
+        "ADR-512: a snapshot of the DSP's own staging point, not a customer",
     ("trucks", "initial_anchor_address"):
         "the DSP's own truck staging point on a public street, not a customer",
     ("trucks", "initial_anchor_display_address"):

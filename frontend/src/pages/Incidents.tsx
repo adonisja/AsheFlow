@@ -7,6 +7,7 @@ import axiosClient from '../api/axiosClient';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
 import type { Incident } from '../api/types';
+import { ReportsToSign, StolenPackageForm, StolenPackageReportView } from '../components/incidents/StolenPackageReport';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -81,18 +82,13 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
-  // Stolen packages
-  const [incidentTime, setIncidentTime] = useState('');
-  const [packagesTba, setPackagesTba] = useState('');
-  const [incidentLocation, setIncidentLocation] = useState('');
-  const [witnessName, setWitnessName] = useState('');
-
   // Injury
   const [bodyPart, setBodyPart] = useState('');
   const [medicalAttention, setMedicalAttention] = useState<boolean | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [filed, setFiled] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Auto-set severity when category changes
@@ -121,17 +117,12 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         severity,
         description,
         photo_url: photoUrl || undefined,
-        incident_time: incidentTime || undefined,
-        packages_tba: packagesTba ? parseInt(packagesTba) : undefined,
-        incident_location: incidentLocation || undefined,
-        witness_name: witnessName || undefined,
         body_part_affected: bodyPart || undefined,
         medical_attention_required: medicalAttention ?? undefined,
       });
       // Reset
       setCategory(''); setSeverity('info'); setDescription('');
       setPhotoUrl(null); setPhotoPreview(null);
-      setIncidentTime(''); setPackagesTba(''); setIncidentLocation(''); setWitnessName('');
       setBodyPart(''); setMedicalAttention(null);
       onSubmitted();
     } catch (err: unknown) {
@@ -200,36 +191,11 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         </div>
       )}
 
-      {/* Stolen packages fields */}
+      {filed && <p role="status" className="text-sm text-success">{filed}</p>}
+
+      {/* ADR-512: the DSP's stolen-package report replaces the generic fields. */}
       {category === 'stolen_packages' && (
-        <div className="space-y-3 p-4 rounded-xl bg-warning/5 border border-warning/20">
-          <p className="text-xs font-bold text-warning uppercase tracking-wider">Stolen Packages Details</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-subtle mb-1">Time of Incident</label>
-              <input type="time" value={incidentTime} onChange={e => setIncidentTime(e.target.value)}
-                className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label className="block text-xs text-subtle mb-1">Packages TBA</label>
-              <input type="number" min="1" value={packagesTba} onChange={e => setPackagesTba(e.target.value)}
-                placeholder="Number of packages"
-                className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-subtle mb-1">Location / Address *</label>
-            <input type="text" value={incidentLocation} onChange={e => setIncidentLocation(e.target.value)}
-              placeholder="Street address or landmark"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          </div>
-          <div>
-            <label className="block text-xs text-subtle mb-1">Witness Name (optional)</label>
-            <input type="text" value={witnessName} onChange={e => setWitnessName(e.target.value)}
-              placeholder="Full name of any witness"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          </div>
-        </div>
+        <StolenPackageForm mode="file" onDone={msg => { setFiled(msg); setCategory(''); onSubmitted(); }} />
       )}
 
       {/* Injury fields */}
@@ -259,6 +225,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         </div>
       )}
 
+      {category !== 'stolen_packages' && (<>
       {/* Description */}
       <div>
         <label className="block text-xs font-semibold text-subtle uppercase tracking-wider mb-1">
@@ -298,6 +265,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         className="btn-primary w-full disabled:opacity-50">
         {loading ? 'Submitting…' : 'Submit Incident Report'}
       </button>
+      </>)}
     </div>
   );
 }
@@ -344,6 +312,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
           </button>
           {expanded === inc.id && (
             <div className="px-4 pb-4 space-y-2 border-t border-border/50 pt-3">
+              {inc.category === 'stolen_packages' && <StolenPackageReportView incidentId={inc.id} />}
               <p className="text-sm text-foreground">{inc.description}</p>
               {inc.incident_location && <p className="text-xs text-subtle">Location: {inc.incident_location}</p>}
               {inc.packages_tba && <p className="text-xs text-subtle">Packages TBA: {inc.packages_tba}</p>}
@@ -485,6 +454,7 @@ function ManagementView() {
 
               {expanded === inc.id && (
                 <div className="px-4 pb-4 border-t border-border/50 pt-3 space-y-3">
+                  {inc.category === 'stolen_packages' && <StolenPackageReportView incidentId={inc.id} />}
                   <p className="text-sm text-foreground">{inc.description}</p>
                   <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-subtle">
                     {inc.incident_location && <p>Location: <span className="text-foreground">{inc.incident_location}</span></p>}
@@ -529,7 +499,8 @@ function ManagementView() {
 export default function Incidents() {
   const { groups } = useAuth();
   const isManagement = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
-  const isFieldStaff = groups.some(r => ['driver', 'walker', 'trainer', 'trainee'].includes(r));
+  // Captain files and signs stolen-package reports (ADR-512); the route already admits them.
+  const isFieldStaff = groups.some(r => ['driver', 'walker', 'trainer', 'trainee', 'captain'].includes(r));
 
   const [employeeId, setEmployeeId] = useState('');
   const [reporterName, setReporterName] = useState('');
@@ -570,6 +541,7 @@ export default function Incidents() {
 
       {activeTab === 'submit' && isFieldStaff && employeeId && (
         <div className="space-y-6">
+          <ReportsToSign refreshKey={refreshKey} onSigned={() => setRefreshKey(k => k + 1)} />
           <IncidentForm
             employeeId={employeeId}
             reporterName={reporterName}

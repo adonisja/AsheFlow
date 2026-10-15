@@ -10,6 +10,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import PageHeader from '@components/ui/PageHeader';
+import { ReportsToSign, StolenPackageForm, StolenPackageReportView } from './StolenPackageReport';
 
 type Incident = {
   id: string;
@@ -56,11 +57,8 @@ export default function IncidentsScreen() {
   // Injury extras
   const [bodyPart,    setBodyPart]    = useState('');
   const [medAttn,     setMedAttn]     = useState<boolean | null>(null);
-  // Stolen packages extras
-  const [tbaCount,    setTbaCount]    = useState('');
-  const [location,    setLocation]    = useState('');
-  const [witness,     setWitness]     = useState('');
-  const [stolenTime,  setStolenTime]  = useState('');
+  // ADR-512: refreshes the "to sign" list and history after a report is filed or signed
+  const [reportKey,   setReportKey]   = useState(0);
 
   // History state
   const [incidents,   setIncidents]   = useState<Incident[]>([]);
@@ -102,23 +100,16 @@ export default function IncidentsScreen() {
         payload.body_part_affected = bodyPart || undefined;
         payload.medical_attention_required = medAttn;
       }
-      if (category === 'stolen_packages') {
-        payload.packages_tba = tbaCount ? Number(tbaCount) : undefined;
-        payload.incident_location = location || undefined;
-        payload.witness_name = witness || undefined;
-        payload.incident_time = stolenTime || undefined;
-      }
       await apiClient.post('/incidents/', payload);
       Alert.alert('Submitted', 'Incident report filed. Management has been notified.');
       setDescription(''); setBodyPart(''); setMedAttn(null);
-      setTbaCount(''); setLocation(''); setWitness(''); setStolenTime('');
       setCategory('vehicle');
     } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
     }
-  }, [category, description, bodyPart, medAttn, tbaCount, location, witness, stolenTime]);
+  }, [category, description, bodyPart, medAttn]);
 
   const toggle = (id: string) =>
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -143,6 +134,7 @@ export default function IncidentsScreen() {
         style={s.scroll}
         contentContainerStyle={s.content}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         refreshControl={
           tab === 'history'
             ? <RefreshControl refreshing={refreshing} onRefresh={() => fetchHistory({ refresh: true })} tintColor={c.primary} />
@@ -151,6 +143,7 @@ export default function IncidentsScreen() {
       >
         {tab === 'report' ? (
           <>
+            <ReportsToSign refreshKey={reportKey} onSigned={() => setReportKey(k => k + 1)} />
             <Text style={s.pageTitle}>Report Incident</Text>
             <Text style={s.subtitle}>{new Date().toLocaleDateString()}</Text>
 
@@ -201,20 +194,15 @@ export default function IncidentsScreen() {
               </>
             )}
 
-            {/* Stolen packages extras */}
+            {/* ADR-512: the DSP's stolen-package report replaces the generic form. */}
             {category === 'stolen_packages' && (
-              <>
-                <Text style={s.label}>Time of Incident</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={stolenTime} onChangeText={setStolenTime} placeholder="e.g. 2:30 PM" placeholderTextColor={c.placeholder} />
-                <Text style={s.label}>TBA Count</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={tbaCount} onChangeText={setTbaCount} placeholder="Number of packages" placeholderTextColor={c.placeholder} keyboardType="numeric" />
-                <Text style={s.label}>Location</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={location} onChangeText={setLocation} placeholder="Street / landmark" placeholderTextColor={c.placeholder} />
-                <Text style={s.label}>Witness Name</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={witness} onChangeText={setWitness} placeholder="Optional" placeholderTextColor={c.placeholder} />
-              </>
+              <StolenPackageForm mode="file" onDone={msg => {
+                Alert.alert('Filed', msg);
+                setCategory('vehicle'); setReportKey(k => k + 1);
+              }} />
             )}
 
+            {category !== 'stolen_packages' && (<>
             {/* Description */}
             <Text style={s.label}>Description *</Text>
             <TextInput
@@ -235,6 +223,7 @@ export default function IncidentsScreen() {
             >
               {submitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Submit Report</Text>}
             </TouchableOpacity>
+            </>)}
           </>
         ) : (
           <>
@@ -260,7 +249,9 @@ export default function IncidentsScreen() {
                 </View>
                 {expanded.has(inc.id) && (
                   <View style={s.incDetail}>
-                    <Text style={s.incDesc}>{inc.description}</Text>
+                    {inc.category === 'stolen_packages'
+                      ? <StolenPackageReportView key={reportKey} incidentId={inc.id} />
+                      : <Text style={s.incDesc}>{inc.description}</Text>}
                   </View>
                 )}
               </TouchableOpacity>

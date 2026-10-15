@@ -741,6 +741,82 @@ export interface Incident {
 }
 
 // ---------------------------------------------------------------------------
+// Stolen-package report (ADR-512): mirrors StolenPackageIn / SignIn and the
+// GET /incidents/stolen-package/{id} response in stolen_package_reports.py.
+// ---------------------------------------------------------------------------
+
+export interface StolenPackageFields {
+  incident_date: string;              // YYYY-MM-DD
+  incident_time: string | null;       // HH:MM[:SS]
+  incident_address: string;           // 1..200; cleared after 60 days
+  anchor_point_address: string | null; // <=255
+  lmet_called: boolean;
+  lmet_case_number: string | null;    // <=64
+  bike_locks_used: boolean;
+  cart_cover_used: boolean;
+  totes_stolen: number;               // 0..50
+  cart_stolen: boolean;
+  packages_stolen: number;            // 0..500
+  tbas: string[];                     // each TBA + 12 digits, <=50
+  summary: string;                    // 1..2000
+}
+
+export interface StolenPackageSignIn extends StolenPackageFields {
+  reviewer_comments: string | null;   // <=2000; dispatch/management only
+}
+
+export type StolenReportVersionKey = 'da' | 'reviewer';
+
+export interface StolenPackageVersion extends StolenPackageFields {
+  version: StolenReportVersionKey;
+  author_id: string;
+  author_name: string | null;
+  da_employee_id: string | null;
+  da_name: string | null;
+  signed_at: string | null;
+  pi_cleared_at: string | null;
+  updated_at: string;
+  reviewer_comments?: string | null;  // present for dispatch/management/admin only
+}
+
+export interface StolenPackageMismatch {
+  field: keyof StolenPackageFields;
+  da: unknown;
+  reviewer: unknown;
+}
+
+export interface StolenPackageReport {
+  incident_id: string;
+  dsp: string | null;
+  resolved: boolean;
+  versions: Partial<Record<StolenReportVersionKey, StolenPackageVersion>>;
+  mismatches: StolenPackageMismatch[];
+  can_sign: boolean;
+  can_edit_da: boolean;
+}
+
+export interface StolenPackagePrefill {
+  dsp: string | null;
+  da: { id: string; name: string };
+  truck: { id: string; name: string } | null;
+  anchor_point_address: string | null;
+  reviewers: Array<{ id: string; name: string | null }>;
+}
+
+export interface StolenPackageToSign {
+  incident_id: string;
+  incident_date: string;
+  da_name: string | null;
+  packages_stolen: number;
+}
+
+export interface StolenPackageFiled {
+  incident_id: string;
+  reviewers_notified: number;
+  review_required: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
 

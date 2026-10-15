@@ -7,6 +7,7 @@ A captain-entered address has no Amazon identity to preserve; a package in a
 walker's hand has its tracking number printed on it, and destroying that would
 make a scorecard appeal unanswerable.
 """
+import re
 import ast
 import inspect
 import uuid
@@ -235,6 +236,8 @@ def test_router_is_gated_to_workforce_mode():
     line = next(l for l in main_src.splitlines() if "manual_returns.router" in l)
     assert "_workforce_mode" in line, f"not workforce-gated: {line.strip()}"
 
+    # A word boundary: "stolen_package_reports.router" (ADR-512) also contains
+    # the substring "rts.router", and was matched first.
     rts_line = next(l for l in main_src.splitlines()
-                    if "rts.router" in l and "manual" not in l)
+                    if re.search(r"\brts\.router\b", l) and "manual" not in l)
     assert "_full_mode" in rts_line, "rts.py must stay full-mode gated"

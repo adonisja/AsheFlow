@@ -50,6 +50,7 @@ const STATIC: Record<string, string> = {
   // than a push inside Home: it is linked from a notification, so it must be
   // reachable without first knowing which tab it hides under.
   '/my-role': 'MyRole',
+  '/incidents': 'Incidents',     // ADR-512: stolen-package report to review
 };
 
 /**
