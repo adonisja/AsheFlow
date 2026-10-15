@@ -3,7 +3,6 @@ from datetime import timedelta
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.services.local_date import task_today, fetch_company_timezones
-from app.services.local_date import task_today
 from app.models.employee import Employee
 from app.models.trainer_mark import TrainerMark
 from app.models.training import TrainingRecord
@@ -36,6 +35,12 @@ def check_training_submissions() -> dict:
     db = SessionLocal()
     try:
         tz_map = fetch_company_timezones(db)
+        # ADR-515: computed before the loop, so a night with nothing to check
+        # still returns a summary. "Yesterday" differs by tenant time zone, so it
+        # is a set: one date was wrong once tenants span zones.
+        dates_checked = sorted({
+            str(task_today(tz) - timedelta(days=1)) for tz in tz_map.values()
+        }) or [str(task_today() - timedelta(days=1))]
 
         unsubmitted = db.query(TrainingRecord).filter(
             TrainingRecord.submitted_at == None,
@@ -106,7 +111,7 @@ def check_training_submissions() -> dict:
         db.close()
 
     return {
-        "date_checked": str(yesterday),
+        "dates_checked": dates_checked,
         "flagged": flagged,
         "skipped_not_dispatched": skipped_not_dispatched,
         "marks_issued": marks_issued,
