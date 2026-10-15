@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
@@ -175,6 +176,10 @@ def write_notification(
     message = strip_leading_icon(message)   # ADR-508 D1
     notif = Notification(
         _via_helper=True,
+        # ADR-510: assigned HERE, not by the column default at flush. The
+        # delivery intent below is recorded before any flush and captured
+        # str(None) == "None", so no push ever found its row.
+        id=uuid.uuid4(),
         company_id=company_id,
         employee_id=employee_id,
         type=type,
@@ -247,6 +252,7 @@ def fan_out(
             continue
         notif = Notification(
             _via_helper=True,
+            id=uuid.uuid4(),   # ADR-510: before _record_intent, not at flush
             company_id=company_id,
             employee_id=emp.id,
             type=type,
@@ -430,6 +436,14 @@ def _record_intent(
     discord_ids = discord_ids or {}
 
     for n in notifications:
+        if n.id is None:
+            # ADR-510 D2. A row without an id records the delivery as "None",
+            # which the push task cannot find and Discord cannot stamp. Loud,
+            # because the silent version shipped and broke every push.
+            raise ValueError(
+                f"{n.type!r}: notification has no id when its delivery is "
+                f"recorded; construct it with id=uuid.uuid4() (ADR-510)"
+            )
         pending.append(_Dispatch(
             notification_id=str(n.id),
             company_id=str(n.company_id),
