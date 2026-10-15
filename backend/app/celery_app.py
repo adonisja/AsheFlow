@@ -131,6 +131,12 @@ celery_app.conf.beat_schedule = {
     # without an endpoint by design, and re-registration only repairs people who
     # open the app. Hourly: a NULL endpoint costs a missed push, not data. Minute 23
     # because */5, */10 and */15 own the multiples of five and :07 is taken.
+    # ADR-512 D5: daily, 04:37 (free minute), clears stolen-package customer
+    # address + TBAs 60 days after the incident.
+    "clear-stolen-package-pi": {
+        "task": "app.tasks.cleanup.clear_stolen_package_pi",
+        "schedule": crontab(hour=4, minute=37),
+    },
     "backfill-push-endpoints": {
         "task": "app.tasks.push_delivery_task.backfill_endpoints",
         "schedule": crontab(minute=23),

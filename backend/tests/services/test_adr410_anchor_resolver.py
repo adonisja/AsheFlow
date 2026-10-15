@@ -1,20 +1,20 @@
 """ADR-410 — the anchor point identifies the truck.
 
-Every coordinate here is the 2026-09-09 export's anchor under the ADR-489 D2
-transform: real relative geometry, not a real location. The two pairs that matter are the close ones: Morgan and Titan sit
-39 m apart, Atlas and Falcon 79 m. Any nearest-neighbour match wide enough to
+Every coordinate here is INVENTED (ADR-506), in the open Atlantic, with the
+distances designed to keep the property under test. The pairs that matter are
+the close ones: Morgan and Titan sit 33.5 m apart, Atlas and Falcon 71 m. Any nearest-neighbour match wide enough to
 absorb GPS noise is also wide enough to return the wrong truck for those pairs,
 which is why D3 matches exactly on a 5dp key.
 """
 from app.services.resolve_truck_anchor import ANCHOR_DP, anchor_key, haversine_m
 
-# The verified mapping (ADR-410 context).
-MORGAN = (30.88353, -44.27243)   # BTR43 on 2026-09-09
-ATLAS  = (30.87930, -44.27901)   # BTR44
-VIKING = (30.88639, -44.27401)   # BTR45
-EAGLE  = (30.88304, -44.27708)   # BTR46
-TITAN  = (30.88348, -44.27283)   # BTR47
-FALCON = (30.87890, -44.27832)   # BTR48
+# Invented fleet (ADR-506); the same anchors as the test workbooks.
+MORGAN = (0.51200, -30.51100)
+ATLAS  = (0.50800, -30.51700)
+VIKING = (0.51500, -30.51400)
+EAGLE  = (0.51100, -30.51550)
+TITAN  = (0.51197, -30.51130)
+FALCON = (0.50760, -30.51650)
 
 ALL = [MORGAN, ATLAS, VIKING, EAGLE, TITAN, FALCON]
 
@@ -49,15 +49,15 @@ def test_anchor_key_is_none_when_either_half_is_missing():
     """A half-parsed anchor must not match anything — including another
     half-parsed one. None is the only safe answer."""
     assert anchor_key(None, None) is None
-    assert anchor_key(30.88353, None) is None
-    assert anchor_key(None, -44.27243) is None
+    assert anchor_key(0.51200, None) is None
+    assert anchor_key(None, -30.51100) is None
 
 
 def test_anchor_dp_matches_the_printed_precision():
     """The sheet prints 5 decimals (~1 m). Rounding harder would merge trucks."""
     assert ANCHOR_DP == 5
     lat, lng = MORGAN
-    assert anchor_key(lat, lng) == (30.88353, -44.27243)
+    assert anchor_key(lat, lng) == (0.512, -30.511)
 
 
 def test_haversine_is_metres_not_kilometres():

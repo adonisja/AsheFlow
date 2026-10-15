@@ -10,7 +10,7 @@ import type { Seed, SeedBag, SeedStop } from './walkerLogSeed';
  *  The sheet layout is fixed by the dispatch export:
  *
  *    row 1   Route | Service Type | DSP | Dispatch Time | Anchor Point | ...
- *    row 2   BTR31 | Box Truck ...              | 30.87890  -44.27832
+ *    row 2   BTR01 | Box Truck ...              | 0.51200  -30.51100   (invented, ADR-506)
  *    row 3   Stops for this Route                        | Pick List
  *    row 4   Dispatch Time | Duration | Name | Package Count | Bag Count |
  *            OV Count | OV Sort Zones | Bag Labels | Bag Sort Zones

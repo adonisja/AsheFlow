@@ -10,14 +10,18 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import PageHeader from '@components/ui/PageHeader';
+import { ReportsToSign, StateLine, StolenPackageForm, StolenPackageReportView, type State } from './StolenPackageReport';
 
 type Incident = {
   id: string;
   category: string;
   severity: string;
   description: string;
-  status: string;
+  resolved: boolean;
   created_at: string;
+  // ADR-512: on a stolen-package incident with a report
+  stolen_report_state?: State | null;
+  my_report_version?: 'da' | 'reviewer' | null;
 };
 
 const CATEGORIES = [
@@ -56,22 +60,21 @@ export default function IncidentsScreen() {
   // Injury extras
   const [bodyPart,    setBodyPart]    = useState('');
   const [medAttn,     setMedAttn]     = useState<boolean | null>(null);
-  // Stolen packages extras
-  const [tbaCount,    setTbaCount]    = useState('');
-  const [location,    setLocation]    = useState('');
-  const [witness,     setWitness]     = useState('');
-  const [stolenTime,  setStolenTime]  = useState('');
+  // ADR-512: refreshes the "to sign" list and history after a report is filed or signed
+  const [reportKey,   setReportKey]   = useState(0);
 
   // History state
   const [incidents,   setIncidents]   = useState<Incident[]>([]);
   const [loading,     setLoading]     = useState(false);
   const [refreshing,  setRefreshing]  = useState(false);
   const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
+  const [historyCat,  setHistoryCat]  = useState<string>('');
 
   const fetchHistory = useCallback(async (opts?: { refresh?: boolean }) => {
     if (opts?.refresh) setRefreshing(true); else setLoading(true);
     try {
-      const res = await apiClient.get('/incidents/my');
+      // Filtered on the server: the list is paginated.
+      const res = await apiClient.get('/incidents/my', { params: historyCat ? { category: historyCat } : {} });
       setIncidents(res.data ?? []);
     } catch {
       setIncidents([]);
@@ -79,9 +82,9 @@ export default function IncidentsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [historyCat]);
 
-  useEffect(() => { if (tab === 'history') fetchHistory(); }, [tab, fetchHistory]);
+  useEffect(() => { if (tab === 'history') fetchHistory(); }, [tab, fetchHistory, reportKey]);
 
   const submitIncident = useCallback(async () => {
     if (!description.trim()) { Alert.alert('Required', 'Please enter a description.'); return; }
@@ -102,23 +105,16 @@ export default function IncidentsScreen() {
         payload.body_part_affected = bodyPart || undefined;
         payload.medical_attention_required = medAttn;
       }
-      if (category === 'stolen_packages') {
-        payload.packages_tba = tbaCount ? Number(tbaCount) : undefined;
-        payload.incident_location = location || undefined;
-        payload.witness_name = witness || undefined;
-        payload.incident_time = stolenTime || undefined;
-      }
       await apiClient.post('/incidents/', payload);
       Alert.alert('Submitted', 'Incident report filed. Management has been notified.');
       setDescription(''); setBodyPart(''); setMedAttn(null);
-      setTbaCount(''); setLocation(''); setWitness(''); setStolenTime('');
       setCategory('vehicle');
     } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
     }
-  }, [category, description, bodyPart, medAttn, tbaCount, location, witness, stolenTime]);
+  }, [category, description, bodyPart, medAttn]);
 
   const toggle = (id: string) =>
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -143,6 +139,7 @@ export default function IncidentsScreen() {
         style={s.scroll}
         contentContainerStyle={s.content}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         refreshControl={
           tab === 'history'
             ? <RefreshControl refreshing={refreshing} onRefresh={() => fetchHistory({ refresh: true })} tintColor={c.primary} />
@@ -151,6 +148,7 @@ export default function IncidentsScreen() {
       >
         {tab === 'report' ? (
           <>
+            <ReportsToSign refreshKey={reportKey} onSigned={() => setReportKey(k => k + 1)} />
             <Text style={s.pageTitle}>Report Incident</Text>
             <Text style={s.subtitle}>{new Date().toLocaleDateString()}</Text>
 
@@ -201,20 +199,15 @@ export default function IncidentsScreen() {
               </>
             )}
 
-            {/* Stolen packages extras */}
+            {/* ADR-512: the DSP's stolen-package report replaces the generic form. */}
             {category === 'stolen_packages' && (
-              <>
-                <Text style={s.label}>Time of Incident</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={stolenTime} onChangeText={setStolenTime} placeholder="e.g. 2:30 PM" placeholderTextColor={c.placeholder} />
-                <Text style={s.label}>TBA Count</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={tbaCount} onChangeText={setTbaCount} placeholder="Number of packages" placeholderTextColor={c.placeholder} keyboardType="numeric" />
-                <Text style={s.label}>Location</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={location} onChangeText={setLocation} placeholder="Street / landmark" placeholderTextColor={c.placeholder} />
-                <Text style={s.label}>Witness Name</Text>
-                <TextInput style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]} value={witness} onChangeText={setWitness} placeholder="Optional" placeholderTextColor={c.placeholder} />
-              </>
+              <StolenPackageForm mode="file" onDone={msg => {
+                Alert.alert('Filed', msg);
+                setCategory('vehicle'); setReportKey(k => k + 1);
+              }} />
             )}
 
+            {category !== 'stolen_packages' && (<>
             {/* Description */}
             <Text style={s.label}>Description *</Text>
             <TextInput
@@ -235,32 +228,60 @@ export default function IncidentsScreen() {
             >
               {submitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Submit Report</Text>}
             </TouchableOpacity>
+            </>)}
           </>
         ) : (
           <>
             <Text style={s.pageTitle}>My Incidents</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: spacing.sm }}
+              accessibilityLabel="Filter by category">
+              {['', ...CATEGORIES].map(cat => (
+                <TouchableOpacity
+                  key={cat || 'all'}
+                  accessibilityRole="radio" accessibilityState={{ checked: historyCat === cat }}
+                  style={[s.chip, historyCat === cat && { backgroundColor: c.primary, borderColor: c.primary }]}
+                  onPress={() => setHistoryCat(cat)}
+                >
+                  <Text style={[s.chipText, historyCat === cat && { color: c.primaryForeground }]}>{cat ? CATEGORY_LABELS[cat] : 'All'}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            {(historyCat === 'stolen_packages' || incidents.some(i => i.category === 'stolen_packages')) && (
+              <Text style={s.incMeta}>Accepted stolen-package reports stay here for 7 days.</Text>
+            )}
             {loading ? (
               <ActivityIndicator color={c.primary} style={{ marginTop: spacing.xl }} />
             ) : incidents.length === 0 ? (
-              <View style={s.emptyCard}><Text style={s.emptyText}>No incidents filed</Text></View>
+              <View style={s.emptyCard}><Text style={s.emptyText}>{historyCat ? 'No incidents in this category' : 'No incidents yet'}</Text></View>
             ) : incidents.map(inc => (
               <TouchableOpacity key={inc.id} style={s.incCard} onPress={() => toggle(inc.id)} activeOpacity={0.8}>
                 <View style={s.incHeader}>
                   <View style={[s.sevDot, { backgroundColor: SEVERITY_COLOR[inc.severity]?.(c) ?? c.mutedForeground }]} />
                   <View style={{ flex: 1 }}>
                     <Text style={s.incCategory}>{CATEGORY_LABELS[inc.category] ?? inc.category}</Text>
-                    <Text style={s.incMeta}>{inc.created_at.split('T')[0]}</Text>
-                  </View>
-                  <View style={[s.statusBadge, { backgroundColor: inc.status === 'resolved' ? c.success + '22' : c.warning + '22' }]}>
-                    <Text style={[s.statusText, { color: inc.status === 'resolved' ? c.success : c.warning }]}>
-                      {inc.status}
+                    <Text style={s.incMeta}>
+                      {inc.created_at.split('T')[0]}{inc.my_report_version === 'reviewer' ? ' · Verified by you' : ''}
                     </Text>
+                    {inc.stolen_report_state && (
+                      <StateLine state={inc.stolen_report_state} verifier={inc.my_report_version === 'reviewer' ? 'you' : null} />
+                    )}
                   </View>
+                  {/* The API returns `resolved`, never `status`: this badge read a
+                      field that does not exist and was always blank (found ADR-512). */}
+                  {!inc.stolen_report_state && (
+                    <View style={[s.statusBadge, { backgroundColor: inc.resolved ? c.success + '22' : c.warning + '22' }]}>
+                      <Text style={[s.statusText, { color: inc.resolved ? c.success : c.warning }]}>
+                        {inc.resolved ? 'resolved' : 'open'}
+                      </Text>
+                    </View>
+                  )}
                   <Text style={s.chevron}>{expanded.has(inc.id) ? '▲' : '▼'}</Text>
                 </View>
                 {expanded.has(inc.id) && (
                   <View style={s.incDetail}>
-                    <Text style={s.incDesc}>{inc.description}</Text>
+                    {inc.category === 'stolen_packages'
+                      ? <StolenPackageReportView key={reportKey} incidentId={inc.id} />
+                      : <Text style={s.incDesc}>{inc.description}</Text>}
                   </View>
                 )}
               </TouchableOpacity>

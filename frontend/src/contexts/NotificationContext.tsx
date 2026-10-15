@@ -246,6 +246,38 @@ export const NotificationProvider = ({ children }: { children: React.ReactNode }
   );
 };
 
+/** The notification context with a FIXED list and inert actions (ADR-507).
+ *
+ *  For the notification gallery, which renders the PRODUCTION components
+ *  (NotificationBanner, the ticker, InterruptiveHost and the pop-ups) for one
+ *  sample at a time. Rendering the real components, rather than look-alikes,
+ *  is the point: a preview that is a copy shows what we believe a type looks
+ *  like, and ADR-505 was found because that belief was wrong.
+ *
+ *  Every action resolves and does nothing: no read flag, no acknowledgement, no
+ *  refetch. `employeeId` is null so nothing keyed on the reader fires a request.
+ *  The live context object stays private; this is the only other way in.
+ */
+export const PreviewNotificationProvider = ({
+  notifications,
+  children,
+}: {
+  notifications: Notification[];
+  children: React.ReactNode;
+}) => {
+  const value = React.useMemo<NotificationContextType>(() => ({
+    notifications,
+    unreadCount: notifications.length,
+    employeeId: null,
+    markRead: async () => {},
+    markAllRead: async () => {},
+    acknowledge: async () => {},
+    refresh: () => {},
+    setOnNotification: () => {},
+  }), [notifications]);
+  return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
+};
+
 export const useNotificationContext = () => {
   const ctx = useContext(NotificationContext);
   if (!ctx) throw new Error('useNotificationContext must be used within NotificationProvider');

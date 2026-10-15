@@ -129,7 +129,10 @@ def send_push(self, notification_id: str) -> dict:
 
         sent = failed = 0
         for device in devices:
-            if send_to_device(db, device, title=spec.label, body=notif.message,
+            # ADR-508 D3: the registry icon leads the title; the body no longer
+            # carries its own emoji.
+            title = f"{spec.icon} {spec.label}" if spec.icon else spec.label
+            if send_to_device(db, device, title=title, body=notif.message,
                               data={"notification_id": str(notif.id), "type": notif.type}):
                 device.last_seen_at = datetime.now(timezone.utc)
                 sent += 1

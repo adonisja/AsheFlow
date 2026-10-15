@@ -52,8 +52,8 @@ def resolve_truck_by_anchor(
 ) -> Optional[Truck]:
     """The company's truck registered at this anchor, or None.
 
-    Exact on the rounded key — never nearest-neighbour. The verified NYCD anchors
-    put two trucks 34 m apart, so any distance tolerance wide enough to absorb
+    Exact on the rounded key — never nearest-neighbour. A real station's anchors
+    put two trucks ~34 m apart, so any distance tolerance wide enough to absorb
     noise is also wide enough to return the wrong truck (ADR-410 D3).
 
     Scoped to company_id: an anchor is unique within a company, not globally, and

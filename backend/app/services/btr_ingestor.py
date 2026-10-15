@@ -70,7 +70,7 @@ class BTRSheetRead:
     """A whole sheet: the header row plus its routes."""
     btr_loading_zone: Optional[str] = None      # "BTR31"
     service_type: Optional[str] = None          # "Box Truck Parcel (26ft) NYC"
-    dsp: Optional[str] = None                   # "NYCD" — validated by the router
+    dsp: Optional[str] = None                   # "TSTD" — validated by the router
     amazon_route_count: Optional[int] = None    # Total Routes
     amazon_anchor_lat: Optional[float] = None
     amazon_anchor_lng: Optional[float] = None
@@ -96,7 +96,7 @@ def _to_int(value) -> Optional[int]:
         return None
 
 
-# "30.87930 -44.27901" — space or comma separated, second value negative in NYC.
+# "0.50800 -30.51700" — space or comma separated, second value negative in the western hemisphere.
 _ANCHOR_RE = re.compile(r"(-?\d+\.\d+)[\s,]+(-?\d+\.\d+)")
 
 
@@ -340,7 +340,7 @@ class XLSXBTRIngestor:
     Each worksheet is laid out as:
 
         row 0   Route | Service Type | DSP | Dispatch Time | Anchor Point | ...
-        row 1   BTR43 | Box Truck ... | NYCD| -             | 30.88353  -44.27243
+        row 1   BTR43 | Box Truck ... | TSTD| -             | 0.51200  -30.51100
         row 2   (section labels)
         row 3   Dispatch Time | Duration | Name | Package Count | ... | Bag Labels | ...
         row 4+  one BLOCK per route

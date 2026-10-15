@@ -54,15 +54,18 @@ def test_no_create_path_still_asks_cognito_to_deliver():
     )
 
 
-def test_the_three_create_paths_are_still_the_only_ones():
+def test_the_four_create_paths_are_still_the_only_ones():
     """A new create path is exactly where this regresses, so it must be seen.
 
     Not a ban — a new one is fine. It just has to arrive with the branded send
     and update this count, rather than slipping in behind two passing tests.
     """
+    # 4 since ADR-509: survey_register.invite_contributor creates surveyor
+    # accounts. It suppresses Cognito's email and sends the branded one
+    # (pinned in test_adr509_surveyor_onboarding).
     found = sorted(f"{p.name}:{n.lineno}" for p, n in _create_user_calls())
-    assert len(found) == 3, (
-        f"Expected 3 admin_create_user call sites, found {len(found)}: {found}. "
+    assert len(found) == 4, (
+        f"Expected 4 admin_create_user call sites, found {len(found)}: {found}. "
         "If you added one, confirm it suppresses Cognito's email and sends a "
         "branded one, then update this count (ADR-444)."
     )

@@ -1000,3 +1000,50 @@ def expire_package_ids_and_audit_pi(backfill: bool = False) -> dict:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.cleanup.clear_stolen_package_pi")
+def clear_stolen_package_pi() -> dict:
+    """Clear a stolen-package report's customer address and TBAs at 60 days (ADR-512 D5).
+
+    Counts, flags, LMET, the summary and the anchor point (the DSP's own staging
+    point) stay: the report remains useful as a record of what happened, without
+    the customer's door or the package ids. `pi_cleared_at` is stamped so "empty
+    because cleared" is distinguishable from "never entered".
+
+    Counted from `incident_date`, the event, not `created_at`: a report filed a
+    week late must not keep the address a week longer.
+    """
+    from app.models.stolen_package_report import StolenPackageReport
+
+    days = settings.stolen_package_pi_retention_days
+    if days <= 0:
+        logger.info("clear_stolen_package_pi: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(StolenPackageReport)
+            .filter(
+                StolenPackageReport.incident_date < cutoff,
+                StolenPackageReport.pi_cleared_at.is_(None),
+            )
+            .all()
+        )
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            r.incident_address = None
+            r.tbas = []
+            r.pi_cleared_at = now
+        db.commit()
+        if rows:
+            logger.info("clear_stolen_package_pi: cleared %d report(s) before %s.", len(rows), cutoff)
+        return {"cleared": len(rows), "cutoff": cutoff.isoformat(), "days": days}
+    except Exception as e:
+        db.rollback()
+        logger.error("clear_stolen_package_pi failed: %s", type(e).__name__)
+        raise
+    finally:
+        db.close()

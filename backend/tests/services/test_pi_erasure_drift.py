@@ -12,7 +12,9 @@ import app.models  # noqa: F401 — registers every mapper
 from app.models.base import Base
 from app.services import pi_erasure
 
-_PATTERN = re.compile(r"address|tba|(^|_)notes?$")
+# `location` added by ADR-512: incidents.incident_location stored a customer
+# address under a name this scan could not see, so erasure never reached it.
+_PATTERN = re.compile(r"address|tba|location|(^|_)notes?$")
 
 
 def _candidates() -> dict[tuple[str, str], str]:

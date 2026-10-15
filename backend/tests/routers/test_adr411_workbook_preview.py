@@ -20,18 +20,13 @@ from app.services.btr_ingestor import XLSXBTRIngestor
 from tests.conftest import SEED_COMPANY_ID, make_truck
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-DAY1 = FIXTURES / "btr_sheet_verified.xlsx"
+DAY1 = FIXTURES / "btr_workbook_day1.xlsx"   # invented (ADR-506)
 
-# The verified fleet (ADR-410 context).
-FLEET = {
-    "Morgan": (30.88353, -44.27243),
-    "Atlas":  (30.87930, -44.27901),
-    "Viking": (30.88639, -44.27401),
-    "Eagle":  (30.88304, -44.27708),
-    "Titan":  (30.88348, -44.27283),
-    "Falcon": (30.87890, -44.27832),
-}
-NEW_ANCHOR = (30.88673, -44.27768)   # appears on day 2, 352 m from Viking
+# The invented fleet the generator writes (ADR-506).
+from tests.fixtures.make_btr_workbooks import ANCHORS  # noqa: E402
+FLEET = {name.title(): ANCHORS[name]
+         for name in ("MORGAN", "ATLAS", "VIKING", "EAGLE", "TITAN", "FALCON")}
+NEW_ANCHOR = ANCHORS["NEW"]   # appears on day 2, ~300 m from Viking
 
 
 def _register(db, name, lat, lng):
@@ -70,14 +65,14 @@ def test_a_truck_absent_from_the_workbook_is_reported_unclaimed(db):
     matched = {t.id for n, t in trucks.items() if n != "Viking"}
 
     orphan = WorkbookSheetOut(
-        worksheet="BTR43",
+        worksheet="BTR05",
         sheet=_fake_sheet_out(*NEW_ANCHOR),
     )
     unclaimed = _unclaimed_trucks(db, SEED_COMPANY_ID, matched, [orphan])
 
     assert [u.truck_name for u in unclaimed] == ["Viking"]
-    # Described, not chosen: 352 m from the orphan anchor.
-    assert unclaimed[0].distance_m == pytest.approx(352, abs=2)
+    # Described, not chosen: ~300 m from the orphan anchor.
+    assert unclaimed[0].distance_m == pytest.approx(300, abs=2)
 
 
 def test_distance_is_omitted_when_more_than_one_sheet_is_unmatched(db):

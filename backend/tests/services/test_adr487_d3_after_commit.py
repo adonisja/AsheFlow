@@ -248,7 +248,10 @@ class TestAnUnlinkedRecipientIsNotAFailure:
                 f"the bot requires exactly discord_id + message, got {set(payload)}"
             )
             assert payload["discord_id"] == emp.discord_id
-            assert payload["message"] == "hello"
+            # ADR-508 D3: a DM has no icon slot, so the registry icon leads the
+            # text. The CONTRACT this test exists for (exactly two keys) holds.
+            from app.services.notification_spec import SPEC
+            assert payload["message"] == f"{SPEC['dispatch_assignment'].icon} hello"
 
 
 class TestTheDiscordLookupIsTenantScoped:

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck,
-  ClipboardList, Menu, X,
+  ClipboardList, Menu, X, Bell, MapPin, UserPlus,
 } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
@@ -10,7 +10,9 @@ import Avatar from '../ui/Avatar';
 import MfaNudgeBanner from '../MfaNudgeBanner';
 import { useAuth } from '../../contexts/AuthContext';
 
-const NAV = [
+// `roles` absent = super admin only. ADR-509: platform support sees exactly the
+// pages listed for it, and the API is the real gate either way.
+const NAV: { to: string; label: string; icon: typeof Building2; roles?: string[] }[] = [
   { to: '/superadmin/companies', label: 'Companies',  icon: Building2  },
   // ADR-340 — the heartbeat (ADR-337) detects a revoked credential within ten
   // minutes and wrote it to a board nobody could reach. This is the reader.
@@ -23,6 +25,14 @@ const NAV = [
   // had no reader. Super admin, not platform staff: the rows are customer
   // delivery addresses, and ADR-343 D4 keeps PII off every platform_support path.
   { to: '/superadmin/collection', label: 'Collected', icon: ClipboardList },
+  // ADR-504 — the survey register: the owner's own walks, outside any tenant.
+  { to: '/survey', label: 'Survey', icon: MapPin },
+  // ADR-509 — onboarding survey contributors; the one page platform support has.
+  { to: '/superadmin/surveyors', label: 'Surveyors', icon: UserPlus, roles: ['super_admin', 'platform_support'] },
+  // ADR-507 — every notification type on every surface it reaches, before
+  // anyone receives it. The production components inside a preview context,
+  // plus Send to a test employee through the real pipeline.
+  { to: '/superadmin/notifications', label: 'Notifications', icon: Bell },
 ];
 
 /** Brand + identity row.
@@ -128,6 +138,8 @@ function TitleBar() {
 
 export default function SuperAdminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { groups } = useAuth();
+  const nav = NAV.filter(n => groups.some(g => (n.roles ?? ['super_admin']).includes(g)));
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200 press ${
@@ -163,7 +175,7 @@ export default function SuperAdminLayout() {
             <div className="flex items-center justify-between h-10">
               <div className="hidden md:flex items-center min-w-0 flex-1">
                 <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none pr-2">
-                  {NAV.map(({ to, label, icon: Icon }) => (
+                  {nav.map(({ to, label, icon: Icon }) => (
                     <NavLink key={to} to={to} className={linkClass}>
                       <Icon className="w-3.5 h-3.5" />
                       {label}
@@ -187,7 +199,7 @@ export default function SuperAdminLayout() {
 
           {mobileOpen && (
             <div className="md:hidden border-t border-border/40 px-4 py-2 space-y-0.5">
-              {NAV.map(({ to, label, icon: Icon }) => (
+              {nav.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}
                   to={to}

@@ -5,7 +5,7 @@ carries no tracking numbers and no customer addresses, which is precisely why it
 survives in workforce mode where the manifest does not.
 
     Route  Service Type              DSP   Anchor Point         Total Routes
-    BTR31  Box Truck Parcel (26ft)   NYCD  30.87930 -44.27901   12
+    BTR31  Box Truck Parcel (26ft)   TSTD  0.50800 -30.51700   12
 
       Name   Package Count  Bag Count  OV Count  OV Sort Zones     Bag Labels
       WE37   56             3          6         A-27.2W | 2 ...   Green 5270, ...

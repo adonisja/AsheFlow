@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  ActivityIndicator, TouchableOpacity,
+  ActivityIndicator, TouchableOpacity, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
@@ -31,12 +31,19 @@ type Props = {
   hideThemeToggle?: boolean;
   /** Pinned element between the header and the scroll (e.g. a segmented tab bar). */
   belowHeader?: React.ReactNode;
+  /**
+   * iOS: inset the scroll by the keyboard, so the field being typed in and the
+   * ones below it can be scrolled into view (ADR-511 D6). Android needs nothing:
+   * the manifest's `adjustResize` already shrinks the window. Opt-in because
+   * the other screens using this shell have not been reviewed with it on.
+   */
+  keyboardInsets?: boolean;
 };
 
 export default function ScreenShell({
   title, subtitle, loading, refreshing, onRefresh, children,
   edges = ['top'], noHeader = false, onBack, headerRight, hideThemeToggle = false,
-  belowHeader,
+  belowHeader, keyboardInsets = false,
 }: Props) {
   const c = useColors();
   const s = styles(c);
@@ -86,6 +93,7 @@ export default function ScreenShell({
         // Let the keyboard close when the user scrolls away from a field, which
         // is the iOS convention for a long form.
         keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets={keyboardInsets && Platform.OS === 'ios'}
         refreshControl={
           onRefresh
             ? <RefreshControl refreshing={refreshing ?? false} onRefresh={onRefresh} tintColor={c.primary} />

@@ -227,7 +227,13 @@ def db():
     for table in DISPATCH_TABLES:
         table.to_metadata(meta)
     meta.create_all(engine)
-    Session = sessionmaker(bind=engine)
+    # autoflush=False to MATCH PRODUCTION (app/database.py SessionLocal). With
+    # the sessionmaker default (True), a query inside write_notification
+    # autoflushed the new row and gave it an id just in time, so every test
+    # passed while production recorded the delivery as "None" and no push was
+    # ever delivered (ADR-510). A test session that flushes when production
+    # does not hides exactly that class of bug.
+    Session = sessionmaker(bind=engine, autoflush=False)
     session = Session()
 
     # Seed Company + fully-configured CompanyConfig so get_company_config

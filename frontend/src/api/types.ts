@@ -738,6 +738,99 @@ export interface Incident {
   driver_name?: string;
   truck_name?: string;
   driver_id?: string;
+  /** ADR-512: from GET /incidents/my, on a stolen-package incident with a report. */
+  stolen_report_state?: StolenReportState | null;
+  my_report_version?: StolenReportVersionKey | null;
+}
+
+// ---------------------------------------------------------------------------
+// Stolen-package report (ADR-512): mirrors StolenPackageIn / SignIn and the
+// GET /incidents/stolen-package/{id} response in stolen_package_reports.py.
+// ---------------------------------------------------------------------------
+
+export interface StolenPackageFields {
+  incident_date: string;              // YYYY-MM-DD
+  incident_time: string | null;       // HH:MM[:SS]
+  incident_address: string;           // 1..200; cleared after 60 days
+  anchor_point_address: string | null; // <=255
+  lmet_called: boolean;
+  lmet_case_number: string | null;    // <=64
+  bike_locks_used: boolean;
+  cart_cover_used: boolean;
+  totes_stolen: number;               // 0..50
+  cart_stolen: boolean;
+  packages_stolen: number;            // 0..500
+  tbas: string[];                     // each TBA + 12 digits, <=50
+  summary: string;                    // 1..2000
+}
+
+export interface StolenPackageSignIn extends StolenPackageFields {
+  reviewer_comments: string | null;   // <=2000; dispatch/management only
+}
+
+export type StolenReportVersionKey = 'da' | 'reviewer';
+
+export interface StolenPackageVersion extends StolenPackageFields {
+  version: StolenReportVersionKey;
+  author_id: string;
+  author_name: string | null;
+  da_employee_id: string | null;
+  da_name: string | null;
+  signed_at: string | null;
+  pi_cleared_at: string | null;
+  updated_at: string;
+  reviewer_comments?: string | null;  // present for dispatch/management/admin only
+}
+
+export interface StolenPackageMismatch {
+  field: keyof StolenPackageFields;
+  da: unknown;
+  reviewer: unknown;
+}
+
+/** Derived on the server (ADR-512 D12, D18). */
+export type StolenReportState = 'submitted' | 'verified' | 'needs_reverification' | 'accepted';
+
+export interface StolenPackageReport {
+  incident_id: string;
+  dsp: string | null;
+  state: StolenReportState;
+  resolved: boolean;
+  accepted_at: string | null;
+  versions: Partial<Record<StolenReportVersionKey, StolenPackageVersion>>;
+  mismatches: StolenPackageMismatch[];
+  reviewers_available: boolean;
+  can_sign: boolean;
+  can_reverify: boolean;
+  can_edit_da: boolean;
+  can_accept: boolean;
+  can_reopen: boolean;
+}
+
+export interface StolenPackageReopenIn {
+  reason: string;   // 3..300, shown to the DA and the verifier
+}
+
+export interface StolenPackagePrefill {
+  dsp: string | null;
+  da: { id: string; name: string };
+  truck: { id: string; name: string } | null;
+  anchor_point_address: string | null;
+  reviewers: Array<{ id: string; name: string | null }>;
+}
+
+export interface StolenPackageToSign {
+  incident_id: string;
+  incident_date: string;
+  kind: 'sign' | 'reverify';
+  da_name: string | null;
+  packages_stolen: number;
+}
+
+export interface StolenPackageFiled {
+  incident_id: string;
+  reviewers_notified: number;
+  review_required: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -3370,4 +3463,222 @@ export interface RoleGuide {
 export interface RoleGuideUpdate {
   title: string;   // 1..80
   body: string;    // 1..8000
+}
+
+// ── ADR-504: the survey register (kept outside any tenant) ────────────────
+
+export type SurveySource = 'observed' | 'front_desk' | 'mailroom' | 'security';
+export type SurveyDeliveryPoint = 'main_entrance' | 'service_entrance' | 'loading_dock' | 'mailroom' | 'front_desk';
+export type SurveyDeliveryMode = 'each_unit' | 'one_drop_point';
+/** ADR-504 D8 [E]: "didn't find out" is an answer, and the default. */
+export type SurveyTri = 'yes' | 'no' | 'unknown';
+export type SurveyDayStatus = 'open' | 'closed' | 'unknown';
+
+export interface SurveyNeighbour { address: string; bin: string | null }
+
+export interface SurveyAddress {
+  index: number;
+  address: string;
+  bin: string | null;
+  lat: number | null;
+  lng: number | null;
+  /** Set when a walk starts (D8). The block list preview leaves them empty. */
+  city_block?: string | null;
+  /** [B] The streets this door's city block faces, own street first. */
+  sides?: string[];
+  /** [A] The other doors on the same city block. */
+  neighbours?: SurveyNeighbour[];
+}
+
+export interface SurveyBlock {
+  block_key: string;
+  street: string;
+  description: string;
+  addresses: SurveyAddress[];
+}
+
+/** POST /survey/walks. All three confirmations must be true (ADR-504 D2). */
+export interface SurveyStartWalk {
+  lat: number;
+  lng: number;
+  radius_m?: number;
+  block_key: string;
+  attest_off_shift: boolean;
+  attest_unbranded: boolean;
+  attest_as_self: boolean;
+}
+
+export interface SurveyWalk {
+  id: string;
+  block_key: string;
+  street: string;
+  started_at: string;
+  closed_at: string | null;
+  addresses: SurveyAddress[];
+  /** ADR-513 D6: indexes of doors done on this block by ANY writer in the
+   *  current cycle, and therefore locked. */
+  recorded: number[];
+  area_id: string | null;
+  block_state: SurveyBlockState;
+}
+
+// ── ADR-513: survey areas and block claims ───────────────────────────────────
+
+export type SurveyBlockState = 'open' | 'in_progress' | 'done';
+export type SurveyAreaKind = 'nta' | 'cd';
+
+export interface SurveyAreaIn {
+  kind: SurveyAreaKind;
+  code: string;            // "MN0401" (NTA) or "104" (Community District)
+  reason: string;          // 3..200
+}
+
+export interface SurveyArea {
+  id: string;
+  kind: SurveyAreaKind;
+  code: string;
+  name: string;
+  reason: string;
+  declared_by_kind: 'super_admin' | 'platform_support';
+  declared_at: string;
+  closed_at: string | null;
+  blocks_total: number;
+  blocks_done: number;
+  blocks_in_progress: number;
+  doors_total: number;
+  doors_done: number;
+  last_activity: string | null;
+}
+
+export interface SurveyAreaBlock {
+  id: string;
+  borough: string;
+  block_key: string;
+  street: string;
+  description: string;
+  state: SurveyBlockState;
+  doors_done: number;
+  doors_total: number;
+  reopens_on: string | null;
+  last_activity: string | null;
+  /** Who holds it is never shown to other writers. */
+  claim: 'mine' | 'taken' | null;
+  claim_id: string | null;
+  distance_m: number | null;
+}
+
+export interface SurveyClaim {
+  id: string;
+  area_id: string;
+  area_name: string;
+  area_block_id: string;
+  street: string;
+  description: string;
+  claimed_at: string;
+  expires_at: string;
+  walk_id: string | null;
+  walk_open: boolean;
+  doors_done: number;
+  doors_total: number;
+}
+
+export interface SurveyAttest {
+  attest_off_shift: boolean;
+  attest_unbranded: boolean;
+  attest_as_self: boolean;
+}
+
+export interface SurveyUnlockIn {
+  walk_id: string;
+  address_index: number;
+  reason: string;          // 3..200
+}
+
+export interface SurveyDeliveryPointIn {
+  point: SurveyDeliveryPoint;
+  side?: string | null;            // ≤120
+  floor?: number | null;           // -5..200
+  which_packages?: string | null;  // ≤120
+}
+
+export interface SurveyDayHours {
+  status: SurveyDayStatus;
+  open?: string | null;            // "HH:MM"; both required when status is 'open'
+  close?: string | null;
+}
+
+/** POST /survey/walks/{id}/observations. Addresses come from the walk, by index. */
+export interface SurveyObservationIn {
+  address_index: number;
+  source: SurveySource;
+  /** [F] Nothing else is sent when true. */
+  not_a_delivery_point?: boolean;
+  building_type?: string | null;
+  delivery_points?: SurveyDeliveryPointIn[];   // ≤3
+  /** [A] Indexes into this door's `neighbours`. */
+  receives_for?: number[];
+  security_desk?: SurveyTri;
+  sign_in_required?: SurveyTri;
+  delivery_mode?: SurveyDeliveryMode | null;
+  floors?: number | null;          // 1–200
+  weekday?: SurveyDayHours;
+  saturday?: SurveyDayHours;
+  sunday?: SurveyDayHours;
+  break_start?: string | null;     // weekdays; both or neither
+  break_end?: string | null;
+  note?: string | null;            // ≤500; codes are refused
+}
+
+export interface SurveyObservation {
+  id: string;
+  walk_id: string;
+  address: string;
+  bin: string | null;
+  observed_on: string;
+  source: SurveySource;
+  not_a_delivery_point: boolean;
+  building_type: string;
+  delivery_points: (SurveyDeliveryPointIn & { position: number })[];
+  receives_for: SurveyNeighbour[];
+  security_desk: SurveyTri;
+  sign_in_required: SurveyTri;
+  delivery_mode: SurveyDeliveryMode | null;
+  floors: number | null;
+  weekday: SurveyDayHours;
+  saturday: SurveyDayHours;
+  sunday: SurveyDayHours;
+  break_start: string | null;
+  break_end: string | null;
+  note: string | null;
+  mine: boolean;
+}
+
+// ── ADR-509: onboarding survey contributors (platform staff) ──────────────
+
+export interface SurveyContributor {
+  id: string;
+  display_name: string;
+  /** Shown to platform staff who manage contributors (ADR-509 D3). */
+  email: string | null;
+  cognito_username: string | null;
+  agreement_version: string;
+  agreement_signed_on: string;
+  admitted_at: string;
+  revoked_at: string | null;
+}
+
+/** POST /survey/contributors/invite. Creates a NEW account only. */
+export interface SurveyContributorInvite {
+  name: string;                  // ≤100
+  email: string;
+  agreement_version: string;     // ≤20, e.g. "v1"
+  agreement_signed_on: string;   // YYYY-MM-DD, not in the future
+  confirm_agreement_signed: true;
+}
+
+export interface SurveyContributorInvited {
+  contributor: SurveyContributor;
+  email_delivered: boolean;
+  /** Only when the credentials email failed; shown once, never stored. */
+  temp_password: string | null;
 }

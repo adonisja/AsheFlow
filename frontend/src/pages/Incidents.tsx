@@ -1,5 +1,5 @@
 import { errorText } from '../utils/errorText';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import SelectMenu from '../components/ui/SelectMenu';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,6 +7,7 @@ import axiosClient from '../api/axiosClient';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
 import type { Incident } from '../api/types';
+import { ReportsToSign, StatePill, StolenPackageForm, StolenPackageReportView } from '../components/incidents/StolenPackageReport';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -81,18 +82,13 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
-  // Stolen packages
-  const [incidentTime, setIncidentTime] = useState('');
-  const [packagesTba, setPackagesTba] = useState('');
-  const [incidentLocation, setIncidentLocation] = useState('');
-  const [witnessName, setWitnessName] = useState('');
-
   // Injury
   const [bodyPart, setBodyPart] = useState('');
   const [medicalAttention, setMedicalAttention] = useState<boolean | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [filed, setFiled] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Auto-set severity when category changes
@@ -121,17 +117,12 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         severity,
         description,
         photo_url: photoUrl || undefined,
-        incident_time: incidentTime || undefined,
-        packages_tba: packagesTba ? parseInt(packagesTba) : undefined,
-        incident_location: incidentLocation || undefined,
-        witness_name: witnessName || undefined,
         body_part_affected: bodyPart || undefined,
         medical_attention_required: medicalAttention ?? undefined,
       });
       // Reset
       setCategory(''); setSeverity('info'); setDescription('');
       setPhotoUrl(null); setPhotoPreview(null);
-      setIncidentTime(''); setPackagesTba(''); setIncidentLocation(''); setWitnessName('');
       setBodyPart(''); setMedicalAttention(null);
       onSubmitted();
     } catch (err: unknown) {
@@ -200,36 +191,11 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         </div>
       )}
 
-      {/* Stolen packages fields */}
+      {filed && <p role="status" className="text-sm text-success">{filed}</p>}
+
+      {/* ADR-512: the DSP's stolen-package report replaces the generic fields. */}
       {category === 'stolen_packages' && (
-        <div className="space-y-3 p-4 rounded-xl bg-warning/5 border border-warning/20">
-          <p className="text-xs font-bold text-warning uppercase tracking-wider">Stolen Packages Details</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-subtle mb-1">Time of Incident</label>
-              <input type="time" value={incidentTime} onChange={e => setIncidentTime(e.target.value)}
-                className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label className="block text-xs text-subtle mb-1">Packages TBA</label>
-              <input type="number" min="1" value={packagesTba} onChange={e => setPackagesTba(e.target.value)}
-                placeholder="Number of packages"
-                className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-subtle mb-1">Location / Address *</label>
-            <input type="text" value={incidentLocation} onChange={e => setIncidentLocation(e.target.value)}
-              placeholder="Street address or landmark"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          </div>
-          <div>
-            <label className="block text-xs text-subtle mb-1">Witness Name (optional)</label>
-            <input type="text" value={witnessName} onChange={e => setWitnessName(e.target.value)}
-              placeholder="Full name of any witness"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          </div>
-        </div>
+        <StolenPackageForm mode="file" onDone={msg => { setFiled(msg); setCategory(''); onSubmitted(); }} />
       )}
 
       {/* Injury fields */}
@@ -259,6 +225,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         </div>
       )}
 
+      {category !== 'stolen_packages' && (<>
       {/* Description */}
       <div>
         <label className="block text-xs font-semibold text-subtle uppercase tracking-wider mb-1">
@@ -298,6 +265,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
         className="btn-primary w-full disabled:opacity-50">
         {loading ? 'Submitting…' : 'Submit Incident Report'}
       </button>
+      </>)}
     </div>
   );
 }
@@ -309,21 +277,37 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
 function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKey: number }) {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [category, setCategory] = useState('');
+  const [bump, setBump] = useState(0);
 
   useEffect(() => {
     if (!employeeId) return;
-    axiosClient.get('/incidents/my')
+    // The filter runs on the server: the list is paginated.
+    axiosClient.get('/incidents/my', { params: category ? { category } : {} })
       .then(res => setIncidents(res.data))
       .catch((e) => { console.error('Failed to load incidents:', e); });
-  }, [employeeId, refreshKey]);
-
-  if (incidents.length === 0) return (
-    <div className="card text-center py-8 text-subtle text-sm">No incidents submitted yet.</div>
-  );
+  }, [employeeId, refreshKey, category, bump]);
 
   return (
     <div className="card space-y-3">
-      <h2 className="section-title">My Submitted Incidents</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="section-title">My Incidents</h2>
+        <div className="w-full sm:w-56">
+          <SelectMenu
+            value={category}
+            options={[{ value: '', label: 'All categories' }, ...CATEGORIES.map(c => ({ value: c.value, label: c.label }))]}
+            placeholder="All categories"
+            ariaLabel="Filter my incidents by category"
+            onChange={setCategory}
+          />
+        </div>
+      </div>
+      {incidents.some(i => i.category === 'stolen_packages') && (
+        <p className="text-xs text-subtle">Accepted stolen-package reports stay here for 7 days.</p>
+      )}
+      {incidents.length === 0 && (
+        <p className="text-center py-6 text-subtle text-sm">{category ? 'No incidents in this category.' : 'No incidents yet.'}</p>
+      )}
       {incidents.map(inc => (
         <div key={inc.id} className="rounded-xl border border-border bg-background overflow-hidden">
           <button
@@ -334,9 +318,10 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
               <SeverityBadge severity={inc.severity} />
               <span className="text-sm font-medium text-foreground truncate"><CategoryLabel category={inc.category} /></span>
               <span className="text-xs text-subtle shrink-0">{inc.date}</span>
+              {inc.my_report_version === 'reviewer' && <span className="text-xs text-subtle shrink-0">Verified by you</span>}
             </div>
             <div className="flex items-center gap-2 shrink-0 ml-2">
-              {inc.resolved
+              {inc.stolen_report_state ? <StatePill state={inc.stolen_report_state} verifier={inc.my_report_version === 'reviewer' ? 'you' : null} /> : inc.resolved
                 ? <span className="text-xs text-success font-medium flex items-center gap-1"><CheckCircle className="w-3 h-3" />Resolved</span>
                 : <span className="text-xs text-subtle">Open</span>}
               {expanded === inc.id ? <ChevronUp className="w-4 h-4 text-subtle" /> : <ChevronDown className="w-4 h-4 text-subtle" />}
@@ -344,7 +329,8 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
           </button>
           {expanded === inc.id && (
             <div className="px-4 pb-4 space-y-2 border-t border-border/50 pt-3">
-              <p className="text-sm text-foreground">{inc.description}</p>
+              {inc.category === 'stolen_packages' && <StolenPackageReportView incidentId={inc.id} onChanged={() => setBump(b => b + 1)} />}
+              {!inc.stolen_report_state && <p className="text-sm text-foreground">{inc.description}</p>}
               {inc.incident_location && <p className="text-xs text-subtle">Location: {inc.incident_location}</p>}
               {inc.packages_tba && <p className="text-xs text-subtle">Packages TBA: {inc.packages_tba}</p>}
               {inc.incident_time && <p className="text-xs text-subtle">Time of incident: {inc.incident_time}</p>}
@@ -379,6 +365,15 @@ function ManagementView() {
   const [filterResolved, setFilterResolved] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  // ADR-512 D14: an incident with a stolen-package report is accepted from the
+  // report (both signatures required), so its generic Mark Resolved is hidden.
+  const [withReport, setWithReport] = useState<Set<string>>(new Set());
+  const markReport = useCallback((id: string, has: boolean) => {
+    setWithReport(prev => {
+      if (has === prev.has(id)) return prev;
+      const n = new Set(prev); if (has) n.add(id); else n.delete(id); return n;
+    });
+  }, []);
 
   const load = () => {
     const params: Record<string, string | boolean> = {};
@@ -485,6 +480,10 @@ function ManagementView() {
 
               {expanded === inc.id && (
                 <div className="px-4 pb-4 border-t border-border/50 pt-3 space-y-3">
+                  {inc.category === 'stolen_packages' && (
+                    <StolenPackageReportView incidentId={inc.id} onChanged={load}
+                      onLoaded={has => markReport(inc.id, has)} />
+                  )}
                   <p className="text-sm text-foreground">{inc.description}</p>
                   <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-subtle">
                     {inc.incident_location && <p>Location: <span className="text-foreground">{inc.incident_location}</span></p>}
@@ -500,7 +499,7 @@ function ManagementView() {
                   {inc.photo_url && (
                     <img src={inc.photo_url} alt="Incident" className="rounded-xl max-h-48 object-cover border border-border" />
                   )}
-                  {!inc.resolved && (
+                  {!inc.resolved && !withReport.has(inc.id) && (
                     <button
                       onClick={() => handleResolve(inc.id)}
                       disabled={resolving === inc.id}
@@ -529,7 +528,8 @@ function ManagementView() {
 export default function Incidents() {
   const { groups } = useAuth();
   const isManagement = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
-  const isFieldStaff = groups.some(r => ['driver', 'walker', 'trainer', 'trainee'].includes(r));
+  // Captain files and signs stolen-package reports (ADR-512); the route already admits them.
+  const isFieldStaff = groups.some(r => ['driver', 'walker', 'trainer', 'trainee', 'captain'].includes(r));
 
   const [employeeId, setEmployeeId] = useState('');
   const [reporterName, setReporterName] = useState('');
@@ -570,6 +570,7 @@ export default function Incidents() {
 
       {activeTab === 'submit' && isFieldStaff && employeeId && (
         <div className="space-y-6">
+          <ReportsToSign refreshKey={refreshKey} onSigned={() => setRefreshKey(k => k + 1)} />
           <IncidentForm
             employeeId={employeeId}
             reporterName={reporterName}

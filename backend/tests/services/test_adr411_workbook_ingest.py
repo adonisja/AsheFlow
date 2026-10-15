@@ -1,9 +1,9 @@
 """ADR-411 — a workbook is the day's whole fleet, parsed one worksheet per truck.
 
-Both fixtures are two dispatch exports one day apart, values transformed (ADR-489 D2)
-so no real anchor, DSP code or bag number is in this public repo. The pair is the point:
-every BTR label moved between them while five of six anchors stayed identical, which
-is what makes the anchor the identifier and the label useless as one (ADR-410).
+Both fixtures are INVENTED (ADR-506), written by tests/fixtures/make_btr_workbooks.py
+to the export's layout, two days apart. The pair is the point: every BTR label moves
+between them while five of six anchors stay identical, which is what makes the anchor
+the identifier and the label useless as one (ADR-410).
 
 The load-bearing test is the block folding. A route occupies several rows — only the
 first carries its fields, the rest carry only extra bag labels — so a parser that
@@ -17,8 +17,8 @@ import pytest
 from app.services.btr_ingestor import XLSXBTRIngestor
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-DAY1 = FIXTURES / "btr_sheet_verified.xlsx"        # 2026-09-09
-DAY2 = FIXTURES / "btr_sheet_verified_day2.xlsx"   # 2026-09-10
+DAY1 = FIXTURES / "btr_workbook_day1.xlsx"
+DAY2 = FIXTURES / "btr_workbook_day2.xlsx"
 
 
 def _sheets(path):
@@ -30,15 +30,15 @@ def test_a_workbook_yields_one_sheet_per_worksheet():
     sheets = _sheets(DAY1)
     assert len(sheets) == 6
     assert [s.btr_loading_zone for s in sheets] == [
-        "BTR43", "BTR44", "BTR45", "BTR46", "BTR47", "BTR48",
+        "BTR01", "BTR02", "BTR03", "BTR04", "BTR05", "BTR06",
     ]
 
 
 def test_each_worksheet_keeps_its_own_header():
-    """A flattening parser would give every truck BTR43's anchor and DSP."""
+    """A flattening parser would give every truck BTR01's anchor and DSP."""
     by_zone = {s.btr_loading_zone: s for s in _sheets(DAY1)}
-    assert by_zone["BTR43"].amazon_anchor_lat == 30.88353
-    assert by_zone["BTR48"].amazon_anchor_lat == 30.87890
+    assert by_zone["BTR01"].amazon_anchor_lat == 0.512
+    assert by_zone["BTR06"].amazon_anchor_lat == 0.5076
     assert {s.dsp for s in _sheets(DAY1)} == {"TSTD"}
 
 
@@ -51,18 +51,18 @@ def test_route_count_matches_each_sheets_printed_total():
 def test_continuation_rows_fold_into_the_route_above():
     """The whole reason csv.DictReader cannot read this.
 
-    WE119 (BTR44) prints Bag Count 2 across two rows: the second row carries only
+    WX19 (BTR02) prints Bag Count 2 across two rows: the second row carries only
     a bag label. Flattened, that row has no Name and is skipped — the tote vanishes.
     """
-    btr44 = {s.btr_loading_zone: s for s in _sheets(DAY1)}["BTR44"]
-    we119 = next(r for r in btr44.routes if r.amazon_route_name == "WE119")
-    assert we119.bag_count == 2
-    assert len(we119.bags) == 2
+    btr02 = {s.btr_loading_zone: s for s in _sheets(DAY1)}["BTR02"]
+    wx19 = next(r for r in btr02.routes if r.amazon_route_name == "WX19")
+    assert wx19.bag_count == 2
+    assert len(wx19.bags) == 2
 
 
 def test_bags_reconcile_against_the_printed_counts():
-    """339 bags are printed across day 1. Exactly one route legitimately fails to
-    reconcile — BTR44/WE123 prints `Yellow 8775` and `Black 8775`, and
+    """23 bags are printed across day 1. Exactly one route legitimately fails to
+    reconcile — BTR02/WX23 prints `Yellow 2301` and `Black 2301`, and
     parse_bag_labels dedupes on bag_id alone (ADR-290), so one is dropped.
 
     Pinned deliberately: it is a pre-existing dedupe rule, NOT a folding bug, and
@@ -74,19 +74,19 @@ def test_bags_reconcile_against_the_printed_counts():
         for r in s.routes
         if r.bag_count is not None and r.bag_count != len(r.bags)
     ]
-    assert unreconciled == [("BTR44", "WE123", 4, 3)]
+    assert unreconciled == [("BTR02", "WX23", 4, 3)]
 
 
 def test_ov_zones_survive_the_workbook_path():
     """ADR-405's zone parsing applies per worksheet, unchanged."""
     total = sum(z.ov_count or 0 for s in _sheets(DAY1) for r in s.routes for z in r.ov_zones)
-    assert total == 1106
+    assert total == 92
 
 
 def test_the_second_export_parses_and_every_btr_label_moved():
     """ADR-410's premise, as data.
 
-    Day 2's labels are BTR41-BTR46 where day 1's were BTR43-BTR48, and the anchors
+    Day 2's labels are BTR03-BTR08 where day 1's were BTR01-BTR06, and the anchors
     are what carry across. If this ever fails because labels DID stay put, the
     anchor-as-identifier reasoning deserves re-reading — it would not be wrong,
     but its evidence would have changed.
