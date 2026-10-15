@@ -30,6 +30,7 @@ import { useReducedMotionState } from '../../hooks/useReducedMotionState';
 import { NotificationTicker } from './NotificationTicker';
 import { toneStyle, urgentStyle } from './tone';
 import { arrivalOutcome, partitionArea } from './area';
+import { formatRelative } from './time';
 
 const INBOX = 'Notifications';
 const BANNER_MS = 5000;
@@ -77,9 +78,12 @@ export function NotificationTopArea() {
         // Not a live region and not dismissable: a card to ACT on (ADR-487 D4a).
         <View key={n.id} style={[s.urgent, { backgroundColor: u.bg, borderLeftColor: u.border, borderLeftWidth: u.barWidth }]}
           accessibilityRole="alert">
-          <Text style={[s.urgentTitle, { color: u.text }]} numberOfLines={1}>
-            {n.icon ? `${n.icon} ` : ''}{label(n)}
-          </Text>
+          <View style={s.headRow}>
+            <Text style={[s.urgentTitle, { color: u.text }]} numberOfLines={1}>
+              {n.icon ? `${n.icon} ` : ''}{label(n)}
+            </Text>
+            <Text style={s.when}>{formatRelative(n.created_at)}</Text>
+          </View>
           <Text style={s.urgentMsg} numberOfLines={2}>{n.message}</Text>
           <Pressable style={[s.urgentBtn, { borderColor: u.border }]}
             accessibilityRole="button"
@@ -123,7 +127,10 @@ function ActionSheet({ visible, items, onClose, onAct }: {
             return (
               <View key={n.id} style={s.sheetRow}>
                 <View style={s.grow}>
-                  <Text style={[s.sheetLabel, { color: t.text }]}>{n.icon ? `${n.icon} ` : ''}{label(n)}</Text>
+                  <View style={s.headRow}>
+                    <Text style={[s.sheetLabel, { color: t.text }]}>{n.icon ? `${n.icon} ` : ''}{label(n)}</Text>
+                    <Text style={s.when}>{formatRelative(n.created_at)}</Text>
+                  </View>
                   <Text style={s.sheetMsg} numberOfLines={3}>{n.message}</Text>
                 </View>
                 <Pressable style={[s.sheetBtn, { backgroundColor: c.brand }]} accessibilityRole="button"
@@ -227,7 +234,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
   },
   urgent: { borderRadius: radius.md, padding: spacing.sm, gap: 2 },
-  urgentTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  headRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
+  when: { fontSize: fontSize.xs, color: c.mutedForeground, flexShrink: 0 },
+  urgentTitle: { flexShrink: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   urgentMsg: { fontSize: fontSize.sm, color: c.foreground },
   urgentBtn: {
     alignSelf: 'flex-end', marginTop: spacing.xs, borderWidth: 1, borderRadius: radius.md,

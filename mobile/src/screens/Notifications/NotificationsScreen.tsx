@@ -12,6 +12,8 @@ import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { useMyTruck } from '../../hooks/useMyTruck';
 import { NotificationTicker } from '@components/notifications/NotificationTicker';
+import { formatRelative } from '@components/notifications/time';
+import { useNotifications } from '@contexts/NotificationsContext';
 import {
   isTicker, isUrgent, toneStyle, urgentStyle,
   type NotificationSeverity, type NotificationTone,
@@ -68,19 +70,6 @@ function iconFor(n: Notification): string {
 
 function stripMarkdown(text: string): string {
   return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
-}
-
-function formatRelative(iso: string) {
-  try {
-    const diff = Date.now() - new Date(iso).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1)  return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24)  return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return days === 1 ? 'Yesterday' : `${days}d ago`;
-  } catch { return ''; }
 }
 
 // ── Confirmation status cache (30-second TTL, keyed by dispatch_date) ────────
@@ -475,7 +464,12 @@ export default function NotificationsScreen() {
     }
   }, [resolveEmployeeId]);
 
-  useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
+  // ADR-516: follow the live store, so an arrival while the inbox is open
+  // appears here too (it only fetched on mount before). Keyed on unread ids,
+  // so the store's 60 s poll does not refetch for nothing.
+  const { unread: liveUnread, refresh: refreshLive } = useNotifications();
+  const liveKey = liveUnread.map(n => n.id).join(',');
+  useEffect(() => { fetchNotifications(); }, [fetchNotifications, liveKey]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -487,8 +481,9 @@ export default function NotificationsScreen() {
     try {
       await apiClient.patch(`/notifications/${id}/read`);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      refreshLive();   // the pinned area and Home follow what is read here
     } catch { /* no-op */ }
-  }, []);
+  }, [refreshLive]);
 
   const markAllRead = useCallback(async () => {
     const eid = employeeDbId.current;
@@ -496,6 +491,7 @@ export default function NotificationsScreen() {
     setMarkingAll(true);
     try {
       const res = await apiClient.patch(`/notifications/employee/${eid}/read-all`);
+      refreshLive();
       // Server marks everything except assignments still awaiting a
       // Confirm/Decline (today/future) — mirror that locally.
       const today = new Date().toISOString().slice(0, 10);
@@ -515,7 +511,7 @@ export default function NotificationsScreen() {
       Alert.alert('Error', errorText(e, 'Could not mark notifications read.'));
     }
     finally { setMarkingAll(false); }
-  }, []);
+  }, [refreshLive]);
 
   const handleTap = useCallback((item: Notification) => {
     if ((item.type === 'dispatch_assignment' || item.type === 'dispatch_assignment_info') && item.dispatch_date) {
@@ -691,9 +687,16 @@ export default function NotificationsScreen() {
                   >
                     <Text style={s.urgentIcon}>{iconFor(item)}</Text>
                     <View style={s.urgentBody}>
-                      <Text style={[s.urgentLabel, { color: u.text }]}>
-                        {labelFor(item)}
-                      </Text>
+                      <View style={s.urgentHead}>
+                        <Text style={[s.urgentLabel, { color: u.text }]}>
+                          {labelFor(item)}
+                        </Text>
+                        {/* How long it has been going on: the alerts that most
+                            need it were the only rows without one. */}
+                        <Text style={[s.urgentTime, { color: c.mutedForeground }]}>
+                          {formatRelative(item.created_at)}
+                        </Text>
+                      </View>
                       <Text style={[s.urgentMessage, { color: c.foreground }]}>
                         {stripMarkdown(item.message)}
                       </Text>
@@ -827,6 +830,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   urgentIcon:    { fontSize: fontSize.lg, marginTop: 1 },
   urgentBody:    { flex: 1, gap: 2 },
+  urgentHead:    { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+  urgentTime:    { fontSize: fontSize.xs },
   urgentLabel:   { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   urgentMessage: { fontSize: fontSize.sm },
 
