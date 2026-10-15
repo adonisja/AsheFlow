@@ -336,7 +336,7 @@ def _apply_ncns_side_effects(db: Session, trainee: Employee, target_date: date, 
             employee_id=staff.id,
             company_id=company_id,
             type="trainee_ncns",
-            message=f"⚠️ **Trainee NCNS:** {trainee.name} did not show up for {target_date}. "
+            message=f"**Trainee NCNS:** {trainee.name} did not show up for {target_date}. "
                 f"Training record locked. Trainer freed from pairing duty.",
             dispatch_date=target_date,
         )
@@ -835,7 +835,7 @@ def confirm_ap_arrival(
             employee_id=member.paired_trainer_id,
             company_id=caller.company_id,
             type="trainee_arrived",
-            message=f"\U0001F4CD {caller.name} confirmed arrival at the anchor point — "
+            message=f"{caller.name} confirmed arrival at the anchor point — "
                 f"open AP Sort to run the paired rebalance.",
         )
         trainer_notified = True

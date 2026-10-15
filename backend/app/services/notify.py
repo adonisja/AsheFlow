@@ -37,6 +37,7 @@ helper called `db.rollback()` in between.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
@@ -123,6 +124,30 @@ def _as_uuid(value: UUID | str | None) -> UUID | None:
     return UUID(str(value))
 
 
+#: A leading pictograph, with an optional variation selector (U+FE0F) and the
+#: whitespace after it. U+2190-2BFF spans arrows, technical symbols (⏰ is
+#: U+23F0), misc symbols and dingbats (⚠ ⛽ ✅); U+1F000-1FAFF spans every emoji
+#: block (🆘 is U+1F198, in the enclosed-alphanumeric supplement). The first
+#: version covered U+2600-27BF and U+1F300-1FAFF only, which missed ⏰ and 🆘,
+#: the exact doubled icons the owner reported. Caught by checking examples.
+_LEADING_ICON = re.compile(r"^\s*(?:[\u2190-\u2BFF]|[\U0001F000-\U0001FAFF])\uFE0F?\s*")
+
+
+def strip_leading_icon(message: str) -> str:
+    """The message without a leading emoji (ADR-508 D1).
+
+    A notification has ONE icon and the registry owns it (ADR-487 D1): every
+    surface draws `spec.icon` beside the text. Raise sites written before that
+    still began their text with their own emoji, so 16+ types showed two icons
+    ("⏰ ⏰ … running late") or two contradicting ones (📍 then ✅). Enforced
+    here, where every notification passes, because some raise sites cannot be
+    found by any scan, and the next one has not been written yet.
+
+    Only a LEADING icon is removed: an emoji inside the text is content.
+    """
+    return _LEADING_ICON.sub("", message, count=1)
+
+
 def write_notification(
     db: Session,
     *,
@@ -147,6 +172,7 @@ def write_notification(
     _require_tenant(type, company_id)
     company_id = _as_uuid(company_id)
     employee_id = _as_uuid(employee_id)
+    message = strip_leading_icon(message)   # ADR-508 D1
     notif = Notification(
         _via_helper=True,
         company_id=company_id,
@@ -193,6 +219,7 @@ def fan_out(
     """
     spec = _resolve_raisable(type)
     _require_tenant(type, company_id)
+    message = strip_leading_icon(message)   # ADR-508 D1
     company_id = _as_uuid(company_id)
     recipients = (
         db.query(Employee)
@@ -470,6 +497,19 @@ def _flush_notification_dispatches(session: Session) -> None:
             )
 
 
+def _with_icon(notification_type: str, message: str) -> str:
+    """`"{icon} {message}"` for a channel that has no icon slot of its own (ADR-508 D3).
+
+    The registry lookup is pure Python, so it is safe inside the after-commit
+    hook (property 3: no SQL there). An undeclared type sends the text as is.
+    """
+    try:
+        icon = resolve_spec(notification_type).icon
+    except Exception:
+        return message
+    return f"{icon} {message}" if icon else message
+
+
 def _enqueue(d: _Dispatch) -> None:
     """Hand one delivery to Celery.
 
@@ -487,7 +527,9 @@ def _enqueue(d: _Dispatch) -> None:
 
         send_discord.delay(
             "dm",
-            {"discord_id": d.discord_id, "message": d.message},
+            # ADR-508 D3: a DM has no icon slot, so the registry icon leads the
+            # text. It used to be the raise site's own emoji, on 16 types only.
+            {"discord_id": d.discord_id, "message": _with_icon(d.type, d.message)},
             notification_id=d.notification_id,
             company_id=d.company_id,
         )

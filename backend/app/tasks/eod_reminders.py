@@ -109,7 +109,7 @@ def remind_fuel_log_missing() -> dict:
                     company_id=company_id,
                     employee_id=driver.id,
                     type="fuel_log_reminder",
-                    message=f"📋 Reminder: Please submit your fuel and mileage log for today ({today}). "
+                    message=f"Reminder: Please submit your fuel and mileage log for today ({today}). "
                         f"Go to Field Ops → Fuel & Mileage to complete your submission.",
                 )
 

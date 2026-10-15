@@ -124,7 +124,7 @@ def alert_finalization_deadline() -> dict:
 
             noun = "truck" if len(truck_names) == 1 else "trucks"
             message = (
-                f"⏰ Dispatch finalization deadline is {when}. "
+                f"Dispatch finalization deadline is {when}. "
                 f"{len(truck_names)} {noun} not finalized: {shown}. "
                 f"Confirm the assignments and click 'Finalize' to publish crew "
                 f"assignments to Discord. Date: {today}"

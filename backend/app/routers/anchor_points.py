@@ -295,7 +295,7 @@ async def submit_anchor_point(
         color       = 0xF59E0B  # amber
         footer_text = "Awaiting arrival confirmation"
         notif_message = (
-            f"📍 {truck_name} — {caller.name} set preliminary AP: {canonical_location}"
+            f"{truck_name} — {caller.name} set preliminary AP: {canonical_location}"
             + f" ETA {payload.eta}"
         )
     else:
@@ -308,7 +308,7 @@ async def submit_anchor_point(
             dep_str = f" (leaving {prev_location} at {payload.expected_departure_at.strftime('%I:%M %p')})"
 
         notif_message = (
-            f"🔀 {truck_name} — {caller.name} relocating to AP #{sequence}: "
+            f"{truck_name} — {caller.name} relocating to AP #{sequence}: "
             f"{canonical_location}"
             + dep_str
             + f" ETA {payload.eta}"
@@ -396,7 +396,7 @@ async def arrive_anchor_point(
     if ap.notes:
         fields.append({"name": "Notes", "value": ap.notes, "inline": False})
 
-    notif_message = f"✅ {truck_name} — {caller.name} arrived at: {ap.location}"
+    notif_message = f"{truck_name} — {caller.name} arrived at: {ap.location}"
 
     crew_ids      = _crew_employee_ids(db, ap.truck_id, ap.date, caller.company_id)
     dispatch_emps = db.query(Employee).filter(
@@ -464,7 +464,7 @@ async def depart_anchor_point(
     truck_name = truck.name if truck else str(ap.truck_id)
 
     departed_str = ap.actual_departed_at.strftime("%I:%M %p")
-    notif_message = f"🚚 {truck_name} — {caller.name} left {ap.location} at {departed_str}"
+    notif_message = f"{truck_name} — {caller.name} left {ap.location} at {departed_str}"
 
     crew_ids      = _crew_employee_ids(db, ap.truck_id, ap.date, caller.company_id)
     dispatch_emps = db.query(Employee).filter(
@@ -665,7 +665,7 @@ async def get_active_anchor_point_for_truck(
         minutes_late = int((datetime.now(timezone.utc) - _eta_dt).total_seconds() / 60)
 
         notif_message = (
-            f"⏰ {truck_name} — {driver_name} is running late "
+            f"{truck_name} — {driver_name} is running late "
             f"(ETA was {ap.eta}, {minutes_late} min overdue)"
         )
         crew_ids      = _crew_employee_ids(db, truck_id, today, caller.company_id)

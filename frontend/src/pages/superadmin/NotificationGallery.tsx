@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, MessageSquare, Search, Send, Smartphone, SquareStack, TriangleAlert } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
+import SelectMenu, { type SelectOption } from '../../components/ui/SelectMenu';
 import NotificationBanner from '../../components/NotificationBanner';
 import InterruptiveHost from '../../components/notifications/InterruptiveHost';
 import { PreviewNotificationProvider } from '../../contexts/NotificationContext';
@@ -58,7 +59,7 @@ const SOURCE_COPY: Record<CopySource, { label: string; hint: string; className: 
   },
   unraised: {
     label: 'Never raised',
-    hint: 'Declared in the registry, raised by nothing. No user has ever seen this.',
+    hint: 'Declared in the registry, raised by nothing, so no real text exists. The text shown is a placeholder written for this preview.',
     className: 'bg-warning/10 text-warning',
   },
 };
@@ -180,8 +181,10 @@ function TypeRow({
           <SurfaceLabel icon={SquareStack}>Copy</SurfaceLabel>
           {t.templates.length > 0 ? (
             <ul className="space-y-2">
-              {t.templates.map(tpl => (
-                <li key={tpl.location} className="rounded-lg bg-surface-muted p-3 text-sm text-foreground">
+              {/* Keyed by position too: one raise site can build several messages
+                  (one per if/else branch), so `location` alone repeats. */}
+              {t.templates.map((tpl, i) => (
+                <li key={`${tpl.location}#${i}`} className="rounded-lg bg-surface-muted p-3 text-sm text-foreground">
                   <TemplateText text={tpl.text} />
                   <p className="mt-1.5 font-mono text-[0.7rem] text-muted-foreground">{tpl.location}</p>
                 </li>
@@ -316,6 +319,11 @@ export default function NotificationGallery() {
     return c;
   }, [types]);
 
+  const recipientOptions = useMemo<SelectOption[]>(() => targets.flatMap(co => [
+    { value: `header-${co.company_id}`, label: `${co.company_name} (${co.data_class})`, header: true },
+    ...co.employees.map(e => ({ value: e.id, label: e.username ?? e.name, hint: e.role })),
+  ]), [targets]);
+
   const recipientLabel = useMemo(() => {
     for (const co of targets) {
       const e = co.employees.find(x => x.id === recipient);
@@ -361,24 +369,21 @@ export default function NotificationGallery() {
               className="min-h-10 w-full rounded-lg border border-border bg-surface pl-9 pr-3 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </label>
-          <label className="flex items-center gap-2 text-sm text-foreground">
-            <span>Send to</span>
-            <select
-              value={recipient}
-              onChange={e => setRecipient(e.target.value)}
-              disabled={targets.length === 0}
-              className="min-h-10 rounded-lg border border-border bg-surface px-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-            >
-              <option value="">{targets.length === 0 ? 'No test companies here' : 'Choose a test employee'}</option>
-              {targets.map(co => (
-                <optgroup key={co.company_id} label={`${co.company_name} (${co.data_class})`}>
-                  {co.employees.map(e => (
-                    <option key={e.id} value={e.id}>{e.username ?? e.name} · {e.role}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
+          <div className="flex items-center gap-2 text-sm text-foreground">
+            <span id="send-to-label">Send to</span>
+            {/* The house dropdown (SelectMenu), not a native <select>: grouped
+                under a heading per company, with each person's role as the hint.
+                The owner flagged the native one as off-pattern. */}
+            <div className="min-w-[16rem]">
+              <SelectMenu
+                value={recipient}
+                options={recipientOptions}
+                placeholder={targets.length === 0 ? 'No test companies here' : 'Choose a test employee'}
+                onChange={setRecipient}
+                ariaLabel="Send to"
+              />
+            </div>
+          </div>
         </div>
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by channel">
           {[null, ...CHANNELS].map(c => (

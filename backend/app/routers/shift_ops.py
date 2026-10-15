@@ -454,7 +454,7 @@ def submit_driver_check_in(
                 company_id=caller.company_id,
                 employee_id=recipient.id,
                 type="crew_roster_submitted",
-                message=f"📋 {caller.name}'s crew roster is in — {roster_summary['present']} present, "
+                message=f"{caller.name}'s crew roster is in — {roster_summary['present']} present, "
                     f"{roster_summary['ncns']} NCNS"
                     + (f", ⚠ {fails} uniform/cart-cover fail(s)" if fails else ", all compliant")
                     + f" ({payload.date}).",
@@ -477,7 +477,7 @@ def submit_driver_check_in(
                 company_id=caller.company_id,
                 employee_id=recipient.id,
                 type="driver_help_requested",
-                message=f"🆘 {caller.name} requested help at check-in #{payload.check_in_number} "
+                message=f"{caller.name} requested help at check-in #{payload.check_in_number} "
                     f"for {payload.date} — {payload.routes_remaining} route(s) remaining.",
                 dispatch_date=payload.date,
             )

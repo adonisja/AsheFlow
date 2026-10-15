@@ -154,4 +154,18 @@ def test_a_truck_name_is_a_truck_not_a_person():
     previewed as 'Alex Rivera — Alex Rivera arrived at…'."""
     assert S._fill("truck_name") == "Truck 12"
     assert S._fill("caller.name") == "Alex Rivera"
-    assert S.sample_message("anchor_point_arrived").startswith(MARK + "✅ Truck 12 — Alex Rivera")
+    # No leading ✅ any more: the registry icon is the only icon (ADR-508).
+    assert S.sample_message("anchor_point_arrived").startswith(MARK + "Truck 12 — Alex Rivera")
+
+
+def test_wrapper_raises_are_read_from_source_not_sampled():
+    """`_notify(db, ids, "anchor_point_submitted", message, ...)` passes the type
+    positionally. The first extractor missed it, the type fell to a hand-written
+    sample, and that sample was invented. Both branches of the message (set a
+    preliminary AP / relocating) must appear."""
+    tpl = S.extract_templates()
+    texts = [t.text for t in tpl["anchor_point_submitted"]]
+    assert any("set preliminary AP" in x for x in texts)
+    assert any("relocating to AP" in x for x in texts)
+    for t in ("anchor_point_arrived", "exemplary_trainer", "underperforming_trainer"):
+        assert t in tpl and t not in S.SAMPLES
