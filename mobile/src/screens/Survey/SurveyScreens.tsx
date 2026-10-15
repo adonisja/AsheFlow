@@ -10,19 +10,26 @@
  *
  * Field order and choices match the web form (pages/survey/SurveyWalk.tsx), which
  * follows the 2026-10-13 usage analysis of the old collection form.
+ *
+ * ADR-511: the door form is three steps, every answer is kept in AsyncStorage
+ * until the door is saved, back (Android hardware, the header chevron) steps
+ * back through the form rather than leaving the walk, and changes of layout
+ * animate natively unless the OS asks for reduced motion.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
+  Alert, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import ScreenShell from '@components/ui/ScreenShell';
 import { Button, Chip, tick, MIN_TARGET } from '@components/ui/primitives';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useColors } from '@contexts/ThemeContext';
 import { useAuth } from '@contexts/AuthContext';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── shapes (mirror backend/app/routers/survey_register.py) ──────────────────
@@ -35,13 +42,16 @@ type Walk = { id: string; street: string; closed_at: string | null; addresses: A
 type Point = { lat: number; lng: number };
 
 // The server's building types (app/schemas/building_taxonomy.py), commercial
-// first: 84% of surveyed doors so far were commercial.
-const TYPES: { value: string; label: string }[] = [
+// first: 84% of surveyed doors so far were commercial. Shown in two labelled
+// groups, as on web (ADR-511 D4).
+const COMMERCIAL: { value: string; label: string }[] = [
   { value: 'freight', label: 'Freight' },
   { value: 'loading_dock', label: 'Loading dock / service entrance' },
   { value: 'loading_dock_mailroom', label: 'Loading dock: mailroom' },
   { value: 'storefront_reception', label: 'Store front: receptionist' },
   { value: 'storefront_front_door', label: 'Store front: front door' },
+];
+const RESIDENTIAL: { value: string; label: string }[] = [
   { value: 'walkup', label: 'Walk-up' },
   { value: 'elevator', label: 'Elevator' },
   { value: 'doorman_reception', label: 'Doorman / Reception' },
@@ -69,6 +79,8 @@ type StackParams = { SurveyStart: undefined; SurveyWalk: { walkId: string } };
 const Stack = createNativeStackNavigator<StackParams>();
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+// ADR-511 D1: grouped by when the answers are learned.
+const STEPS = ['The building', 'Deliveries', 'Hours and note'] as const;
 
 // ── start ───────────────────────────────────────────────────────────────────
 
@@ -216,32 +228,96 @@ function Pick({ options, value, onChange, clearable = true }: {
   );
 }
 
+// ── drafts (ADR-511 D2) ─────────────────────────────────────────────────────
+// Kept on this phone until the door is saved. A failed read or write keeps
+// nothing and the form still works.
+type Draft = { form: Form; step: number };
+const DRAFT_PREFIX = 'survey-draft:';
+const draftKey = (walkId: string, index: number) => `${DRAFT_PREFIX}${walkId}:${index}`;
+const dropDraft = (walkId: string, index: number) =>
+  AsyncStorage.removeItem(draftKey(walkId, index)).catch(() => {});
+async function draftDoors(walkId: string): Promise<Set<number>> {
+  try {
+    const prefix = `${DRAFT_PREFIX}${walkId}:`;
+    return new Set((await AsyncStorage.getAllKeys())
+      .filter(k => k.startsWith(prefix)).map(k => Number(k.slice(prefix.length))));
+  } catch { return new Set(); }
+}
+
 function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackParams, 'SurveyWalk'>) {
   const c = useColors();
   const s = styles(c);
+  const animate = useLayoutTransition();
   const { walkId } = route.params;
   const [walk, setWalk] = useState<Walk | null>(null);
   const [door, setDoor] = useState<Address | null>(null);
   const [f, setF] = useState<Form | null>(null);
+  const [step, setStep] = useState(0);
+  const [drafts, setDrafts] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try { setWalk((await apiClient.get<Walk>(`/survey/walks/${walkId}`)).data); }
     catch (e) { Alert.alert("Couldn't load this walk", errorText(e, 'Try again.')); }
+    setDrafts(await draftDoors(walkId));
   }, [walkId]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+
+  // D2: every change is kept. A door opened and left untouched is not a draft.
+  useEffect(() => {
+    if (!door || !f) return;
+    const untouched = step === 0 && JSON.stringify(f) === JSON.stringify(blankFor(door));
+    const key = draftKey(walkId, door.index);
+    (untouched ? AsyncStorage.removeItem(key)
+      : AsyncStorage.setItem(key, JSON.stringify({ form: f, step } satisfies Draft))).catch(() => {});
+  }, [walkId, door, f, step]);
+
+  const closeDoor = useCallback(() => {
+    animate();
+    setDoor(null);
+    setF(null);
+    void draftDoors(walkId).then(setDrafts);
+  }, [animate, walkId]);
+  const goTo = useCallback((n: number) => { animate(); setStep(n); }, [animate]);
+
+  // D6: while a door is open, back steps back through the form, then to the
+  // door list. It never leaves the walk. iOS swipe-back cannot be cancelled
+  // halfway, so it is off while a door is open.
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: door === null });
+    if (!door) return;
+    return navigation.addListener('beforeRemove', e => {
+      e.preventDefault();
+      if (step > 0) goTo(step - 1); else closeDoor();
+    });
+  }, [navigation, door, step, goTo, closeDoor]);
+
+  const openDoor = async (a: Address) => {
+    tick();
+    let d: Draft | null = null;
+    try {
+      const raw = await AsyncStorage.getItem(draftKey(walkId, a.index));
+      const parsed = raw ? JSON.parse(raw) as Draft : null;
+      // A draft from an older form shape is not restored.
+      d = parsed && Array.isArray(parsed.form?.points) ? parsed : null;
+    } catch { d = null; }
+    animate();
+    setDoor(a);
+    setF(d?.form ?? blankFor(a));
+    setStep(d ? Math.min(Math.max(d.step, 0), STEPS.length - 1) : 0);
+  };
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF(p => (p ? { ...p, [k]: v } : p));
   const setPoint = (i: number, v: Partial<DPoint>) =>
     setF(p => (p ? { ...p, points: p.points.map((x, j) => (j === i ? { ...x, ...v } : x)) } : p));
 
-  const post = async (body: Record<string, unknown>) => {
+  const post = async (index: number, body: Record<string, unknown>) => {
     setBusy(true);
     try {
       await apiClient.post(`/survey/walks/${walkId}/observations`, body);
       tick();
-      setDoor(null);
-      setF(null);
+      await dropDraft(walkId, index);
+      closeDoor();
       await load();
     } catch (e) {
       Alert.alert("Couldn't save this door", errorText(e, 'Try again.'));
@@ -254,7 +330,9 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
     if (!door || !f) return;
     const day = (d: Day, label: string) => {
       if (d.status !== 'open') return { status: d.status };
-      if (!HHMM.test(d.open) || !HHMM.test(d.close)) throw new Error(`${label}: hours must be like 08:30.`);
+      if (!HHMM.test(d.open) || !HHMM.test(d.close)) {
+        throw new Error(`${label}: add both times like 08:30, or choose "Didn't find out".`);
+      }
       return { status: 'open', open: d.open, close: d.close };
     };
     let hours;
@@ -264,7 +342,7 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
       Alert.alert('Check the hours', (e as Error).message);
       return;
     }
-    void post({
+    void post(door.index, {
       address_index: door.index, source: f.source, building_type: f.building_type,
       delivery_points: f.points.map(p => ({
         point: p.point, side: p.side.trim() || null, floor: p.floor ? Number(p.floor) : null,
@@ -279,14 +357,17 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
   const notADoor = (a: Address) => Alert.alert(
     'Not a delivery point?', `${a.address} will be recorded as not a delivery point (for example a gate or a second entrance).`,
     [{ text: 'Cancel', style: 'cancel' },
-     { text: 'Record it', onPress: () => void post({ address_index: a.index, source: 'observed', not_a_delivery_point: true }) }],
+     { text: 'Record it', onPress: () => void post(a.index, { address_index: a.index, source: 'observed', not_a_delivery_point: true }) }],
   );
 
   const finish = () => Alert.alert('Finish this walk?', 'You can start a new walk to re-visit later.', [
     { text: 'Cancel', style: 'cancel' },
     { text: 'Finish', onPress: async () => {
-      try { await apiClient.post(`/survey/walks/${walkId}/close`); navigation.goBack(); }
-      catch (e) { Alert.alert("Couldn't finish", errorText(e, 'Try again.')); }
+      try {
+        await apiClient.post(`/survey/walks/${walkId}/close`);
+        await Promise.all([...(await draftDoors(walkId))].map(i => dropDraft(walkId, i)));
+        navigation.goBack();
+      } catch (e) { Alert.alert("Couldn't finish", errorText(e, 'Try again.')); }
     } },
   ]);
 
@@ -296,18 +377,26 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
   if (door && f) {
     const sides = door.sides?.length ? door.sides : [door.address.split(' ').slice(1).join(' ')];
     const neighbours = door.neighbours ?? [];
+    const last = step === STEPS.length - 1;
+    const blocked = step === 0 && !f.building_type ? 'Choose a building type to go on.' : null;
+    const typePick = (options: { value: string; label: string }[]) => (
+      <Pick options={options} value={f.building_type || null}
+        onChange={v => setF(p => (p ? { ...p, building_type: v ?? '',
+          delivery_mode: p.delivery_mode ?? (v ? MODE_FOR_TYPE[v] ?? null : null) } : p))} />
+    );
     const dayRow = (k: 'weekday' | 'saturday' | 'sunday', label: string) => (
       <View style={s.sub}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <View style={s.subHead}>
           <Text style={s.body}>{label}</Text>
           {k !== 'weekday' && (
-            <TouchableOpacity onPress={() => set(k, { ...f.weekday })} accessibilityRole="button">
+            <TouchableOpacity onPress={() => { tick(); set(k, { ...f.weekday }); }} accessibilityRole="button"
+              style={s.textAction}>
               <Text style={s.link}>Same as weekdays</Text>
             </TouchableOpacity>
           )}
         </View>
         <Pick options={DAY} value={f[k].status} clearable={false}
-          onChange={v => set(k, { ...f[k], status: (v ?? 'unknown') as DayStatus })} />
+          onChange={v => { animate(); set(k, { ...f[k], status: (v ?? 'unknown') as DayStatus }); }} />
         {f[k].status === 'open' && (
           <View style={{ flexDirection: 'row', gap: spacing.sm }}>
             <TextInput value={f[k].open} onChangeText={v => set(k, { ...f[k], open: v })} maxLength={5}
@@ -321,96 +410,129 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
       </View>
     );
     return (
-      <ScreenShell title={door.address} subtitle={walk.street}>
-        <View style={s.card}>
-          <Text style={s.h2}>Where did this come from?</Text>
-          <Pick options={SOURCES} value={f.source} clearable={false} onChange={v => set('source', v ?? 'observed')} />
-          <Text style={s.muted}>The role that answered, never the person's name.</Text>
+      <ScreenShell title={door.address} subtitle={`Step ${step + 1} of ${STEPS.length} · ${STEPS[step]}`}
+        onBack={() => (step > 0 ? goTo(step - 1) : closeDoor())} keyboardInsets>
+        <View style={s.progress} accessible={false}>
+          {STEPS.map((_, i) => <View key={i} style={[s.progressSeg, i <= step && s.progressOn]} />)}
         </View>
-        <View style={s.card}>
-          <Text style={s.h2}>Building type</Text>
-          <Pick options={TYPES} value={f.building_type || null}
-            onChange={v => setF(p => (p ? { ...p, building_type: v ?? '',
-              delivery_mode: p.delivery_mode ?? (v ? MODE_FOR_TYPE[v] ?? null : null) } : p))} />
-        </View>
-        <View style={s.card}>
-          <Text style={s.h2}>Deliveries go to</Text>
-          {f.points.map((p, i) => (
-            <View key={i} style={s.sub}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={s.muted}>Point {i + 1}</Text>
-                {f.points.length > 1 && (
-                  <TouchableOpacity onPress={() => set('points', f.points.filter((_, j) => j !== i))}
-                    accessibilityRole="button" accessibilityLabel={`Remove point ${i + 1}`}>
-                    <Text style={s.link}>Remove</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-              <Pick options={POINTS} value={p.point} clearable={false} onChange={v => setPoint(i, { point: v ?? p.point })} />
-              <Text style={s.muted}>Which side</Text>
-              <Pick options={sides.map(sd => ({ value: sd, label: sd }))} value={sides.includes(p.side) ? p.side : null}
-                onChange={v => setPoint(i, { side: v ?? '' })} />
-              <TextInput value={sides.includes(p.side) ? '' : p.side} onChangeText={v => setPoint(i, { side: v })}
-                maxLength={120} placeholder="Or describe it, e.g. rear via the alley"
-                placeholderTextColor={c.placeholder} style={s.input} />
-              <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                <TextInput value={p.floor} onChangeText={v => setPoint(i, { floor: v.replace(/[^\d-]/g, '').slice(0, 4) })}
-                  keyboardType="numbers-and-punctuation" placeholder="Floor" placeholderTextColor={c.placeholder}
-                  style={[s.input, { width: 80 }]} accessibilityLabel="Floor" />
-                {f.points.length > 1 && (
-                  <TextInput value={p.which} onChangeText={v => setPoint(i, { which: v })} maxLength={120}
-                    placeholder="Which packages?" placeholderTextColor={c.placeholder}
-                    style={[s.input, { flex: 1 }]} accessibilityLabel="Which packages go here" />
-                )}
-              </View>
-            </View>
-          ))}
-          {f.points.length < 3 && (
-            <Button variant="ghost" onPress={() => set('points', [...f.points, { point: 'main_entrance', side: sides[0], floor: '', which: '' }])}>
-              Add another delivery point
-            </Button>
-          )}
-        </View>
-        {neighbours.length > 0 && (
+        <Text style={[s.muted, { marginBottom: spacing.md }]}>Your answers are kept on this phone until you save.</Text>
+
+        {step === 0 && (<>
           <View style={s.card}>
-            <Text style={s.h2}>Also receives for</Text>
-            <Text style={s.muted}>Other doors on this city block whose packages go here.</Text>
-            {neighbours.map((n, i) => (
-              <View key={n.address} style={s.switchRow}>
-                <Text style={[s.body, { flex: 1 }]}>{n.address}</Text>
-                <Switch value={f.receives_for.includes(i)} accessibilityLabel={`Also receives for ${n.address}`}
-                  onValueChange={on => { tick(); set('receives_for', on ? [...f.receives_for, i] : f.receives_for.filter(x => x !== i)); }} />
+            <Text style={s.h2}>Where did this come from?</Text>
+            <Pick options={SOURCES} value={f.source} clearable={false} onChange={v => set('source', v ?? 'observed')} />
+            <Text style={s.muted}>The role that answered, never the person's name.</Text>
+          </View>
+          <View style={s.card}>
+            <Text style={s.h2}>Building type</Text>
+            <Text style={s.groupLabel}>Commercial</Text>
+            {typePick(COMMERCIAL)}
+            <Text style={s.groupLabel}>Residential</Text>
+            {typePick(RESIDENTIAL)}
+          </View>
+          <View style={s.card}>
+            <Text style={s.h2}>Each unit, or one drop point?</Text>
+            <Pick options={[{ value: 'each_unit', label: 'Each unit' }, { value: 'one_drop_point', label: 'One drop point' }]}
+              value={f.delivery_mode} onChange={v => set('delivery_mode', v)} />
+            <TextInput value={f.floors} onChangeText={v => set('floors', v.replace(/\D/g, '').slice(0, 3))}
+              keyboardType="number-pad" placeholder="Floors" placeholderTextColor={c.placeholder} style={s.input}
+              accessibilityLabel="Number of floors" />
+          </View>
+        </>)}
+
+        {step === 1 && (<>
+          <View style={s.card}>
+            <Text style={s.h2}>Deliveries go to</Text>
+            {f.points.map((p, i) => (
+              <View key={i} style={s.sub}>
+                <View style={s.subHead}>
+                  <Text style={s.muted}>Point {i + 1}</Text>
+                  {f.points.length > 1 && (
+                    <TouchableOpacity style={s.textAction} accessibilityRole="button" accessibilityLabel={`Remove point ${i + 1}`}
+                      onPress={() => { animate(); set('points', f.points.filter((_, j) => j !== i)); }}>
+                      <Text style={s.link}>Remove</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <Pick options={POINTS} value={p.point} clearable={false} onChange={v => setPoint(i, { point: v ?? p.point })} />
+                <Text style={s.muted}>Which side</Text>
+                <Pick options={sides.map(sd => ({ value: sd, label: sd }))} value={sides.includes(p.side) ? p.side : null}
+                  onChange={v => setPoint(i, { side: v ?? '' })} />
+                <TextInput value={sides.includes(p.side) ? '' : p.side} onChangeText={v => setPoint(i, { side: v })}
+                  maxLength={120} placeholder="Or describe it, e.g. rear via the alley"
+                  placeholderTextColor={c.placeholder} style={s.input} accessibilityLabel="Describe the side" />
+                <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+                  <TextInput value={p.floor} onChangeText={v => setPoint(i, { floor: v.replace(/[^\d-]/g, '').slice(0, 4) })}
+                    keyboardType="numbers-and-punctuation" placeholder="Floor" placeholderTextColor={c.placeholder}
+                    style={[s.input, { width: 80 }]} accessibilityLabel="Floor" />
+                  {f.points.length > 1 && (
+                    <TextInput value={p.which} onChangeText={v => setPoint(i, { which: v })} maxLength={120}
+                      placeholder="Which packages?" placeholderTextColor={c.placeholder}
+                      style={[s.input, { flex: 1 }]} accessibilityLabel="Which packages go here" />
+                  )}
+                </View>
               </View>
             ))}
+            {f.points.length < 3 && (
+              <Button variant="ghost" onPress={() => {
+                animate();
+                set('points', [...f.points, { point: 'main_entrance', side: sides[0], floor: '', which: '' }]);
+              }}>
+                Add another delivery point
+              </Button>
+            )}
           </View>
-        )}
-        <View style={s.card}>
-          <Text style={s.h2}>Each unit, or one drop point?</Text>
-          <Pick options={[{ value: 'each_unit', label: 'Each unit' }, { value: 'one_drop_point', label: 'One drop point' }]}
-            value={f.delivery_mode} onChange={v => set('delivery_mode', v)} />
-          <TextInput value={f.floors} onChangeText={v => set('floors', v.replace(/\D/g, '').slice(0, 3))}
-            keyboardType="number-pad" placeholder="Floors" placeholderTextColor={c.placeholder} style={s.input} />
+          {neighbours.length > 0 && (
+            <View style={s.card}>
+              <Text style={s.h2}>Also receives for</Text>
+              <Text style={s.muted}>Other doors on this city block whose packages go here.</Text>
+              {neighbours.map((n, i) => (
+                <View key={n.address} style={s.switchRow}>
+                  <Text style={[s.body, { flex: 1 }]}>{n.address}</Text>
+                  <Switch value={f.receives_for.includes(i)} accessibilityLabel={`Also receives for ${n.address}`}
+                    onValueChange={on => { tick(); set('receives_for', on ? [...f.receives_for, i] : f.receives_for.filter(x => x !== i)); }} />
+                </View>
+              ))}
+            </View>
+          )}
+          <View style={s.card}>
+            <Text style={s.h2}>Security desk</Text>
+            <Pick options={TRI} value={f.security_desk} clearable={false} onChange={v => set('security_desk', (v ?? 'unknown') as Tri)} />
+            <Text style={s.h2}>Sign-in required</Text>
+            <Pick options={TRI} value={f.sign_in_required} clearable={false} onChange={v => set('sign_in_required', (v ?? 'unknown') as Tri)} />
+          </View>
+        </>)}
+
+        {step === 2 && (<>
+          <View style={s.card}>
+            <Text style={s.h2}>Receiving hours</Text>
+            {dayRow('weekday', 'Weekdays')}
+            {dayRow('saturday', 'Saturday')}
+            {dayRow('sunday', 'Sunday')}
+          </View>
+          <View style={s.card}>
+            <Text style={s.h2}>Note</Text>
+            <TextInput value={f.note} onChangeText={v => set('note', v)} maxLength={500} multiline
+              style={[s.input, { minHeight: 80 }]} accessibilityLabel="Note" />
+            <Text style={s.muted}>Building facts only. No door or gate codes, no names, no security details.</Text>
+          </View>
+        </>)}
+
+        {blocked && <Text style={[s.muted, { textAlign: 'center', marginBottom: spacing.sm }]}>{blocked}</Text>}
+        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+          {step > 0 && (
+            <View style={{ flex: 1 }}>
+              <Button variant="secondary" onPress={() => goTo(step - 1)} disabled={busy} fullWidth>Back</Button>
+            </View>
+          )}
+          <View style={{ flex: 2 }}>
+            {last
+              ? <Button onPress={save} loading={busy} fullWidth>Save this door</Button>
+              : <Button onPress={() => goTo(step + 1)} disabled={blocked !== null} fullWidth>
+                  {`Next: ${STEPS[step + 1]}`}
+                </Button>}
+          </View>
         </View>
-        <View style={s.card}>
-          <Text style={s.h2}>Security desk</Text>
-          <Pick options={TRI} value={f.security_desk} clearable={false} onChange={v => set('security_desk', (v ?? 'unknown') as Tri)} />
-          <Text style={s.h2}>Sign-in required</Text>
-          <Pick options={TRI} value={f.sign_in_required} clearable={false} onChange={v => set('sign_in_required', (v ?? 'unknown') as Tri)} />
-        </View>
-        <View style={s.card}>
-          <Text style={s.h2}>Receiving hours</Text>
-          {dayRow('weekday', 'Weekdays')}
-          {dayRow('saturday', 'Saturday')}
-          {dayRow('sunday', 'Sunday')}
-        </View>
-        <View style={s.card}>
-          <Text style={s.h2}>Note</Text>
-          <TextInput value={f.note} onChangeText={v => set('note', v)} maxLength={500} multiline
-            style={[s.input, { minHeight: 80 }]} accessibilityLabel="Note" />
-          <Text style={s.muted}>Building facts only. No door or gate codes, no names, no security details.</Text>
-        </View>
-        <Button onPress={save} disabled={!f.building_type} loading={busy} fullWidth>Save this door</Button>
-        <Button variant="ghost" onPress={() => { setDoor(null); setF(null); }}>Back to doors</Button>
       </ScreenShell>
     );
   }
@@ -422,9 +544,11 @@ function SurveyWalkScreen({ route, navigation }: NativeStackScreenProps<StackPar
         <View key={a.index} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
           <TouchableOpacity style={[s.row, { flex: 1 }, done.has(a.index) && { opacity: 0.5 }]}
             disabled={!!walk.closed_at || done.has(a.index)} accessibilityRole="button"
-            onPress={() => { tick(); setDoor(a); setF(blankFor(a)); }}>
+            accessibilityHint={drafts.has(a.index) ? 'Has a draft' : undefined}
+            onPress={() => void openDoor(a)}>
             <Text style={[s.body, { flex: 1 }]}>{a.address}</Text>
-            {done.has(a.index) && <Text style={s.muted}>Recorded</Text>}
+            {done.has(a.index) ? <Text style={s.muted}>Recorded</Text>
+              : drafts.has(a.index) && <Text style={s.draft}>Draft</Text>}
           </TouchableOpacity>
           {!walk.closed_at && !done.has(a.index) && (
             <TouchableOpacity onPress={() => notADoor(a)} accessibilityRole="button"
@@ -459,6 +583,15 @@ const styles = (c: ThemeColors) => StyleSheet.create({
          borderWidth: 1, borderColor: c.border, marginBottom: spacing.sm, backgroundColor: c.card },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: MIN_TARGET },
   sub: { gap: spacing.sm, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: c.border },
+  subHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  // ADR-511 D3: a text action still gets a full-size target.
+  textAction: { minHeight: MIN_TARGET, justifyContent: 'center', paddingHorizontal: spacing.sm },
+  groupLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground,
+                textTransform: 'uppercase', letterSpacing: 0.5 },
+  draft: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.warning },
+  progress: { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm },
+  progressSeg: { flex: 1, height: 6, borderRadius: radius.full, backgroundColor: c.surfaceMuted },
+  progressOn: { backgroundColor: c.primary },
   link: { fontSize: fontSize.xs, color: c.primary, fontWeight: fontWeight.semibold },
   notDoor: { minHeight: MIN_TARGET, justifyContent: 'center', paddingHorizontal: spacing.sm, marginBottom: spacing.sm },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.md,

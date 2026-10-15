@@ -7,7 +7,7 @@
  * server enforces all three; this page explains them.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Copy, Loader2, UserPlus } from 'lucide-react';
+import { Check, Copy, Loader2, UserPlus } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -30,6 +30,7 @@ export default function Surveyors() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SurveyContributorInvited | null>(null);
   const [toRevoke, setToRevoke] = useState<SurveyContributor | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -51,6 +52,7 @@ export default function Surveyors() {
       };
       const { data } = await axiosClient.post<SurveyContributorInvited>('/survey/contributors/invite', body);
       setResult(data);
+      setCopied(false);
       setName(''); setEmail(''); setHoldsAgreement(false);
       await load();
     } catch (e) {
@@ -99,9 +101,14 @@ export default function Surveyors() {
               </p>
               <div className="flex items-center gap-2">
                 <code className="rounded-md border border-border px-2 py-1 font-mono">{result.temp_password}</code>
-                <button type="button" className="btn-ghost p-1.5" aria-label="Copy password"
-                  onClick={() => void navigator.clipboard.writeText(result.temp_password ?? '')}>
-                  <Copy className="h-4 w-4" />
+                <button type="button" className="btn-ghost inline-flex items-center gap-1 px-2 py-1.5 text-xs"
+                  aria-label={copied ? 'Password copied' : 'Copy password'}
+                  onClick={() => {
+                    navigator.clipboard.writeText(result.temp_password ?? '')
+                      .then(() => setCopied(true))
+                      .catch(() => setError("Couldn't copy. Select the password and copy it yourself."));
+                  }}>
+                  {copied ? <><Check className="h-4 w-4 text-success" /> Copied</> : <><Copy className="h-4 w-4" /> Copy</>}
                 </button>
               </div>
             </div>
@@ -149,7 +156,9 @@ export default function Surveyors() {
         {rows === null ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nobody yet.</p>
+          <p className="text-sm text-muted-foreground">
+            No surveyors yet. Once someone has signed the contributor agreement, add them above.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

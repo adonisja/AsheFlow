@@ -14,6 +14,8 @@ import { useNavigate } from 'react-router-dom';
 import { LocateFixed, Loader2, MapPin, Search } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import SectionHeader from '../../components/ui/SectionHeader';
+import { formatDate } from '../../utils/date';
 import { errorText } from '../../utils/errorText';
 import { useAuth } from '../../contexts/AuthContext';
 import { buildingTypeLabel } from '../../utils/addressProfile';
@@ -26,6 +28,10 @@ const CONFIRMATIONS = [
 ] as const;
 
 type ConfirmKey = typeof CONFIRMATIONS[number]['key'];
+
+const SOURCE_LABEL: Record<string, string> = {
+  observed: 'seen', front_desk: 'front desk', mailroom: 'mailroom', security: 'security',
+};
 
 export default function SurveyStart() {
   const navigate = useNavigate();
@@ -110,14 +116,8 @@ export default function SurveyStart() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-6 space-y-5">
-      <header>
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Survey register</p>
-        <h1 className="text-2xl font-bold">Walk a block</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Doors come from the city's own address list. Record only what you can see,
-          or what building staff tell you when you ask as yourself.
-        </p>
-      </header>
+      <SectionHeader eyebrow="Survey register" title="Walk a block"
+        description="Doors come from the city's own address list. Record only what you can see, or what building staff tell you when you ask as yourself." />
 
       <ErrorBanner message={error} />
 
@@ -126,7 +126,7 @@ export default function SurveyStart() {
           <h2 className="text-sm font-semibold">Walks in progress</h2>
           {openWalks.map(w => (
             <button key={w.id} type="button" onClick={() => navigate(`/survey/walk/${w.id}`)}
-              className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-3 text-left text-sm hover:bg-muted">
+              className="flex min-h-11 w-full items-center justify-between rounded-lg border border-border px-3 py-3 text-left text-sm hover:bg-muted">
               <span>{w.street}</span>
               <span className="text-xs text-muted-foreground">{w.recorded.length} of {w.addresses.length}</span>
             </button>
@@ -149,7 +149,7 @@ export default function SurveyStart() {
       <section className={`card p-4 space-y-3 ${allConfirmed ? '' : 'opacity-50'}`} aria-labelledby="find-h">
         <h2 id="find-h" className="text-sm font-semibold">2. Find the block you're on</h2>
         <button type="button" onClick={useLocation} disabled={!allConfirmed || busy !== null}
-          className="btn-primary w-full py-3 text-sm inline-flex items-center justify-center gap-2">
+          className="btn-primary min-h-11 w-full text-sm inline-flex items-center justify-center gap-2">
           {busy === 'locate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LocateFixed className="h-4 w-4" />}
           Use my location
         </button>
@@ -157,10 +157,12 @@ export default function SurveyStart() {
           <input type="text" value={typed} onChange={e => setTyped(e.target.value)} maxLength={200}
             disabled={!allConfirmed} placeholder="Or type an address, e.g. 433 W 32 St"
             aria-label="Address near the block"
-            className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2.5 text-sm" />
+            className="min-h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
+            onKeyDown={e => { if (e.key === 'Enter' && typed.trim().length >= 3 && busy === null) void locateTyped(); }}
+            enterKeyHint="search" />
           <button type="button" onClick={() => void locateTyped()}
             disabled={!allConfirmed || typed.trim().length < 3 || busy !== null}
-            className="btn-secondary px-3 text-sm" aria-label="Find blocks near this address">
+            className="btn-secondary inline-flex min-h-11 min-w-11 items-center justify-center text-sm" aria-label="Find blocks near this address">
             <Search className="h-4 w-4" />
           </button>
         </div>
@@ -175,7 +177,7 @@ export default function SurveyStart() {
           {blocks.map(b => (
             <button key={b.block_key} type="button" onClick={() => void start(b)}
               disabled={busy !== null}
-              className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-3 text-left hover:bg-muted">
+              className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-3 text-left hover:bg-muted">
               <span className="flex items-center gap-2 text-sm">
                 <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
                 {b.description}
@@ -197,7 +199,7 @@ export default function SurveyStart() {
                 <span className="font-medium">{o.address}</span>
                 <span className="block text-xs text-muted-foreground">
                   {o.not_a_delivery_point ? 'Not a delivery point' : buildingTypeLabel(o.building_type)}
-                  {' · '}{o.source.replace('_', ' ')} · {o.observed_on}
+                  {' · '}{SOURCE_LABEL[o.source] ?? o.source} · {formatDate(o.observed_on)}
                   {o.mine ? '' : ' · contributor'}
                 </span>
               </li>

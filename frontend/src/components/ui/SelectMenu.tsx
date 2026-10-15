@@ -28,7 +28,7 @@ export interface SelectOption {
  * not better.
  */
 export default function SelectMenu({
-  value, options, placeholder, onChange, icon, ariaLabel, portal = false,
+  value, options, placeholder, onChange, icon, ariaLabel, portal = false, touch = false,
 }: {
   value: string;
   options: SelectOption[];
@@ -50,6 +50,12 @@ export default function SelectMenu({
    * right where the alternative is being cut off.
    */
   portal?: boolean;
+  /**
+   * 44px trigger and option rows, for a form used one-handed on a phone
+   * (ADR-511 D4). Opt-in: the existing callers are dense desktop boards where
+   * a 36px row is right.
+   */
+  touch?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -114,7 +120,7 @@ export default function SelectMenu({
           aria-selected={o.value === value}
           disabled={o.disabled}
           onClick={() => { onChange(o.value); setOpen(false); }}
-          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm ${
+          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm ${touch ? 'min-h-11' : ''} ${
             o.disabled
               ? 'opacity-40 cursor-not-allowed'
               : 'hover:bg-accent/40 cursor-pointer'
@@ -136,7 +142,7 @@ export default function SelectMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 rounded-xl border border-input bg-background px-3 py-2 text-sm shadow-sm hover:border-primary focus:ring-1 focus:ring-primary outline-none"
+        className={`w-full flex items-center gap-2 rounded-xl border border-input bg-background px-3 py-2 text-sm shadow-sm hover:border-primary focus:ring-1 focus:ring-primary outline-none ${touch ? 'min-h-11' : ''}`}
       >
         {icon}
         <span className={`flex-1 text-left truncate ${selected ? '' : 'text-muted-foreground'}`}>
