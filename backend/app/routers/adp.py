@@ -18,7 +18,7 @@ from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.services.adp import patch_adp_timecard
 from app.services.adp_exceptions import ADPAuthError, ADPClientError, ADPServerError
-from app.services.notify import write_notification
+from app.services.notify import Audience, fan_out, write_notification
 
 
 logger = logging.getLogger(__name__)

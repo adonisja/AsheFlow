@@ -1,6 +1,7 @@
 import logging
 import re
 import secrets
+import boto3   # ADR-520: used by confirm_owner_email_change, never imported
 from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional
 from uuid import UUID

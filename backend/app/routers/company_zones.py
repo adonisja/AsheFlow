@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import settings   # ADR-520: used, never imported
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.company import CompanyZone
