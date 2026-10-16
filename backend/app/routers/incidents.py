@@ -73,9 +73,8 @@ def _resolve_driver_id(assignment_id: UUID, company_id: UUID, db: Session) -> Op
 def _notify_management(incident: Incident, reporter: Employee, db: Session):
     """Send notifications to all active dispatch/management/admin for this incident.
 
-    Critical injury incidents additionally generate a 'incident_critical_injury'
-    escalation notification so the notification system can apply a higher-priority
-    delivery path (push, SMS) for injury reports that require immediate response.
+    One notification per recipient, typed by severity. A critical incident is
+    `incident_critical`: URGENT, banner + push + Discord (ADR-487, ADR-518).
     """
     severity = incident.severity
     notif_type = f"incident_{severity}"  # incident_info | incident_warning | incident_critical
@@ -102,23 +101,10 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
             message=message,
         )
 
-    # LA-5: escalation path for critical injury — generates a second, distinct
-    # notification type so consumers (push gateway, on-call pager) can route
-    # these separately without polling for category+severity combinations.
-    if incident.severity == "critical" and incident.category == "injury":
-        escalation_message = (
-            f"CRITICAL INJURY — {reporter.name} on {incident.date.strftime('%a, %b %d')}. "
-            f"Immediate response required. "
-            f"{incident.description[:120]}{'…' if len(incident.description) > 120 else ''}"
-        )
-        for emp in recipients:
-            write_notification(
-                db,
-                company_id=incident.company_id,
-                employee_id=emp.id,
-                type="incident_critical_injury",
-                message=escalation_message,
-            )
+    # ADR-518: no second "incident_critical_injury" raise. ADR-487 D1 retired
+    # that type (it duplicated incident_critical, which is already URGENT with
+    # banner, push and Discord), and raising a retired type throws, so every
+    # critical injury report failed and was never saved.
 
 
 # ---------------------------------------------------------------------------
