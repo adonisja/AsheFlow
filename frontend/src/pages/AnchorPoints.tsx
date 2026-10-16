@@ -564,7 +564,7 @@ function SummaryStrip({ boards, filter, onFilter }: {
     danger: 'text-danger', info: 'text-info', warning: 'text-warning', success: 'text-success', muted: 'text-foreground',
   };
   return (
-    <div className="flex gap-2 overflow-x-auto snap-x -mx-[var(--gutter)] px-[var(--gutter)] pb-1 sm:mx-0 sm:px-0 sm:pb-0 sm:grid sm:grid-cols-5 sm:overflow-visible"
+    <div className="flex gap-2 overflow-x-auto snap-x scroll-px-[var(--gutter)] -mx-[var(--gutter)] px-[var(--gutter)] pb-1 sm:mx-0 sm:px-0 sm:pb-0 sm:grid sm:grid-cols-5 sm:overflow-visible"
       role="group" aria-label="Filter trucks by state">
       {/* Phones: one scrollable row of full-label chips (five boxes in ~350px
           overflowed "To acknowledge"). From sm: a grid of five. ADR-523. */}
