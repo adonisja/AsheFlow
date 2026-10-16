@@ -158,6 +158,7 @@ def write_notification(
     message: str,
     dispatch_date: date | None = None,
     expires_at: datetime | None = None,
+    target_id: object | None = None,
 ) -> Notification:
     """Raise one notification. The ONLY way to create one.
 
@@ -186,6 +187,7 @@ def write_notification(
         message=message,
         dispatch_date=dispatch_date,
         expires_at=expires_at,
+        target_id=str(target_id) if target_id is not None else None,   # ADR-519
     )
     db.add(notif)
     _record_intent(db, spec, notif,
@@ -203,6 +205,7 @@ def fan_out(
     dispatch_date: date | None = None,
     expires_at: datetime | None = None,
     exclude: set | None = None,
+    target_id: object | None = None,
 ) -> list[Notification]:
     """Raise one notification per member of a named audience.
 
@@ -259,6 +262,7 @@ def fan_out(
             message=message,
             dispatch_date=dispatch_date,
             expires_at=expires_at,
+            target_id=str(target_id) if target_id is not None else None,   # ADR-519
         )
         db.add(notif)
         out.append(notif)

@@ -7,6 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
+import { useTabParams } from '@navigation/index';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import PageHeader from '@components/ui/PageHeader';
@@ -69,6 +70,15 @@ export default function IncidentsScreen() {
   const [refreshing,  setRefreshing]  = useState(false);
   const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
   const [historyCat,  setHistoryCat]  = useState<string>('');
+  // ADR-519: a notification opens this tab at its incident.
+  const linked = useTabParams('Incidents');
+  const linkedId = linked?.params.id ?? null;
+  useEffect(() => {
+    if (!linkedId) return;
+    setTab('history');
+    setHistoryCat('');
+    setExpanded(new Set([linkedId]));
+  }, [linkedId, linked?.nonce]);
 
   const fetchHistory = useCallback(async (opts?: { refresh?: boolean }) => {
     if (opts?.refresh) setRefreshing(true); else setLoading(true);
@@ -233,6 +243,9 @@ export default function IncidentsScreen() {
         ) : (
           <>
             <Text style={s.pageTitle}>My Incidents</Text>
+            {!!linkedId && !loading && incidents.length > 0 && !incidents.some(i => i.id === linkedId) && (
+              <Text style={s.incMeta}>This item is no longer available.</Text>
+            )}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: spacing.sm }}
               accessibilityLabel="Filter by category">
               {['', ...CATEGORIES].map(cat => (

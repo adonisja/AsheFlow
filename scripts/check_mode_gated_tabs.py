@@ -50,6 +50,11 @@ MAIN_PY = os.path.join(REPO, "backend", "app", "main.py")
 # navigation/index re-exports every screen — a barrel, not a dependency.
 SKIP_FILES = {"navigation/index.tsx"}
 
+# Files whose path strings are WEB PAGE routes, not API calls (ADR-519): the
+# notification route table maps `/sort` (the web Sort page) to "no phone tab".
+# Their imports are still walked; only their own strings are not read as URLs.
+PAGE_ROUTE_FILES = {"navigation/actionRoutes.ts"}
+
 ALIASES = {
     "@screens/": "screens/",
     "@components/": "components/",
@@ -188,7 +193,7 @@ def reachable_urls(rel_path: str, prefixes: list[str],
     seen.add(rel_path)
 
     src = open(full, encoding="utf-8").read()
-    found = {
+    found = {} if rel_path in PAGE_ROUTE_FILES else {
         url: rel_path
         for url in URL_RE.findall(src)
         if any(url == p or url.startswith(p + "/") for p in prefixes)

@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from app.services.local_date import company_today
+import uuid
 from uuid import UUID
 from typing import List, Optional
 
@@ -15,6 +16,7 @@ from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.crew_compliance import CrewCompliance
 from app.models.driver_check_in import DriverCheckIn
+from app.models.truck import Truck
 from app.models.rts_clearance import RTSReport, StationHandoff, RTS_REPORT_STATUSES
 from app.models.rts import MissingPackage
 from app.services.audit import write_audit
@@ -23,6 +25,7 @@ from app.schemas.shift_ops import (
     DriverCheckInCreate, DriverCheckInResponse,
     RTSReportCreate, RTSReportReview, RTSReportResponse,
     StationHandoffCreate, StationHandoffResponse,
+    HelpRequestOut,
 )
 from app.services.notify import write_notification
 
@@ -438,7 +441,9 @@ def submit_driver_check_in(
 
     # company_id is NOT NULL on DriverCheckIn but absent from the payload — set it
     # from the caller (was an IntegrityError 500 on every check-in submit).
-    row = DriverCheckIn(**payload.model_dump(), company_id=caller.company_id)
+    # ADR-519: id assigned here, not at flush: the help-request notification
+    # below links to it, and a default id is None until flush (ADR-510).
+    row = DriverCheckIn(**payload.model_dump(), company_id=caller.company_id, id=uuid.uuid4())
     db.add(row)
 
     # ADR-228: hand the finalized roster + compliance summary to Dispatch on #1.
@@ -477,6 +482,7 @@ def submit_driver_check_in(
                 company_id=caller.company_id,
                 employee_id=recipient.id,
                 type="driver_help_requested",
+                target_id=row.id,   # ADR-519
                 message=f"{caller.name} requested help at check-in #{payload.check_in_number} "
                     f"for {payload.date} — {payload.routes_remaining} route(s) remaining.",
                 dispatch_date=payload.date,
@@ -617,6 +623,7 @@ def submit_rts_report(
             company_id=caller.company_id,
             employee_id=recipient.id,
             type="rts_submitted",
+            target_id=row.id,   # ADR-519
             message=f"{caller.name} submitted an RTS report for {payload.date} "
                 f"({rts_summary}). Crew confirmed: {'yes' if payload.crew_confirmed else 'no'}. "
                 f"Awaiting your approval to release the driver.",
@@ -694,6 +701,7 @@ def review_rts_report(
             company_id=caller.company_id,
             employee_id=driver.id,
             type=f"rts_{payload.status}",
+            target_id=row.id,   # ADR-519
             message=driver_message,
         )
 
@@ -970,4 +978,63 @@ def get_station_handoffs_summary(
             }
             for r in rows
         ],
+    }
+
+
+# ── ADR-519 D5: one help request ────────────────────────────────────────────
+
+#: Office roles never show a phone here (ADR-458: field rows show theirs for
+#: call-ins; office rows read "Not shown").
+_OFFICE_ROLES = ("dispatch", "management", "admin")
+
+
+@router.get("/help-requests/{check_in_id}", response_model=HelpRequestOut)
+def get_help_request(
+    check_in_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+):
+    """What 'Driver Needs Help' opens: the one check-in that asked for help.
+
+    Dispatch, management and admin (the notification's recipients), company
+    scoped. 404 for a check-in that is not a help request, or not this company's,
+    so existence is not disclosed.
+    """
+    row = (
+        db.query(DriverCheckIn)
+        .filter(DriverCheckIn.id == check_in_id,
+                DriverCheckIn.company_id == caller.company_id,
+                DriverCheckIn.help_requested.is_(True))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="This help request is no longer available.")
+    driver = (db.query(Employee)
+              .filter(Employee.id == row.driver_id, Employee.company_id == caller.company_id)
+              .first())
+    truck = (
+        db.query(Truck.id, Truck.name)
+        .join(TruckAssignment, TruckAssignment.truck_id == Truck.id)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(Truck.company_id == caller.company_id,
+                TruckAssignment.company_id == caller.company_id,
+                AssignmentMember.company_id == caller.company_id,
+                AssignmentMember.employee_id == row.driver_id,
+                TruckAssignment.date == row.date)
+        .first()
+    )
+    phone = None
+    if driver is not None and driver.role not in _OFFICE_ROLES:
+        phone = driver.phone_number
+    return {
+        "id": str(row.id),
+        "date": row.date.isoformat(),
+        "check_in_number": row.check_in_number,
+        "routes_remaining": row.routes_remaining,
+        "working_crew_count": row.working_crew_count,
+        "ncns_count": row.ncns_count,
+        "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
+        "driver": {"id": str(row.driver_id), "name": driver.name if driver else None, "phone": phone},
+        "truck": {"id": str(truck.id), "name": truck.name} if truck else None,
     }

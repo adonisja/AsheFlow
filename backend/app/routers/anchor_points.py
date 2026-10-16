@@ -107,14 +107,19 @@ def _crew_employee_ids(db: Session, truck_id: UUID, target_date: date, company_i
     return [m.employee_id for m in members]
 
 
-def _notify(db: Session, employee_ids: List[UUID], notif_type: str, message: str, company_id: UUID) -> None:
+def _notify(db: Session, employee_ids: List[UUID], notif_type: str, message: str, company_id: UUID,
+            *, target_id=None, dispatch_date=None) -> None:
+    """ADR-519: target_id is the truck, dispatch_date its day, so the alert opens
+    Anchor Point at that truck on that day."""
     for eid in employee_ids:
         write_notification(
             db,
             company_id=company_id,
             employee_id=eid,
             type=notif_type,
+            target_id=target_id,   # ADR-519
             message=message,
+            dispatch_date=dispatch_date,
         )
 
 
@@ -329,7 +334,8 @@ async def submit_anchor_point(
         Employee.is_active == True,
     ).all()
     all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
-    _notify(db, all_notify, "anchor_point_submitted", notif_message, caller.company_id)
+    _notify(db, all_notify, "anchor_point_submitted", notif_message, caller.company_id,
+            target_id=payload.truck_id, dispatch_date=payload.date)
 
     db.flush()
     write_audit(
@@ -405,7 +411,8 @@ async def arrive_anchor_point(
         Employee.is_active == True,
     ).all()
     all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
-    _notify(db, all_notify, "anchor_point_arrived", notif_message, caller.company_id)
+    _notify(db, all_notify, "anchor_point_arrived", notif_message, caller.company_id,
+            target_id=ap.truck_id, dispatch_date=ap.date)
 
     db.commit()
     db.refresh(ap)
@@ -473,7 +480,8 @@ async def depart_anchor_point(
         Employee.is_active == True,
     ).all()
     all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
-    _notify(db, all_notify, "anchor_point_departed", notif_message, caller.company_id)
+    _notify(db, all_notify, "anchor_point_departed", notif_message, caller.company_id,
+            target_id=ap.truck_id, dispatch_date=ap.date)
 
     db.commit()
     db.refresh(ap)
@@ -675,7 +683,8 @@ async def get_active_anchor_point_for_truck(
             Employee.is_active == True,
         ).all()
         all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
-        _notify(db, all_notify, "anchor_point_running_late", notif_message, caller.company_id)
+        _notify(db, all_notify, "anchor_point_running_late", notif_message, caller.company_id,
+                target_id=truck_id, dispatch_date=ap.date)
 
         db.commit()
         db.refresh(ap)

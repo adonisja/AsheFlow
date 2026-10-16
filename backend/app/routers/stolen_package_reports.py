@@ -363,6 +363,7 @@ def file_report(
     for rid in reviewers:
         write_notification(
             db, company_id=caller.company_id, employee_id=rid, type="stolen_package_review",
+            target_id=inc.id,   # ADR-519
             message=(f"{caller.name} filed a stolen-package report for {body.incident_date:%a, %b %d}. "
                      f"Review it, correct anything that is off, and sign."),
         )
@@ -523,6 +524,7 @@ def edit_da(
     if reverify:
         write_notification(
             db, company_id=caller.company_id, employee_id=rv.author_id, type="stolen_package_review",
+            target_id=incident_id,   # ADR-519
             message=(f"{caller.name} changed their stolen-package report for {da.incident_date:%a, %b %d}. "
                      f"Review the changes and verify it again."),
         )
@@ -635,6 +637,7 @@ def accept(
     for eid in {r.author_id for r in versions.values()}:
         write_notification(
             db, company_id=caller.company_id, employee_id=eid, type="incident_resolved",
+            target_id=incident_id,   # ADR-519
             message=f"Your stolen-package report for {inc.date:%a, %b %d} was accepted.",
         )
     db.flush()
@@ -680,11 +683,13 @@ def reopen(
     if da is not None:
         write_notification(
             db, company_id=caller.company_id, employee_id=da.author_id, type="stolen_package_reopened",
+            target_id=incident_id,   # ADR-519
             message=f'Your stolen-package report for {when} was reopened ("{reason}"). Edit it and sign it again.',
         )
     if rv is not None:   # the employee who verified, by id (D18)
         write_notification(
             db, company_id=caller.company_id, employee_id=rv.author_id, type="stolen_package_reopened",
+            target_id=incident_id,   # ADR-519
             message=(f'The stolen-package report you verified for {when} was reopened ("{reason}"). '
                      f"If the DA changes it, you will be asked to verify it again."),
         )

@@ -834,6 +834,22 @@ export interface StolenPackageFiled {
 }
 
 // ---------------------------------------------------------------------------
+// Help request (ADR-519 D5): GET /shift-ops/help-requests/{id}
+// ---------------------------------------------------------------------------
+
+export interface HelpRequest {
+  id: string;
+  date: string;
+  check_in_number: number;
+  routes_remaining: number;
+  working_crew_count: number;
+  ncns_count: number;
+  submitted_at: string | null;
+  driver: { id: string; name: string | null; phone: string | null };
+  truck: { id: string; name: string } | null;
+}
+
+// ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
 

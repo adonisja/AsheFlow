@@ -508,3 +508,143 @@ def resolve_spec(notification_type: str) -> Spec:
 def is_raisable(notification_type: str) -> bool:
     """False for a retired type — readable, but no longer written."""
     return notification_type in SPEC
+
+
+# ── Links: where a notification opens (ADR-519) ─────────────────────────────
+#
+# Owner, 2026-10-15: "clicking an alert should redirect to the screen that the
+# alert requires". Every type declares a destination. `kind` names the reference
+# the ROW must carry (`Notification.target_id`, plus the existing dispatch_date);
+# None means the page alone is the destination (a date is enough, or no single
+# object exists). The kind is declared here and never passed at a raise site, so
+# the two cannot disagree. tests/services/test_adr519_links.py enforces that
+# every type has a link, every route exists in the web router, and every raise
+# site of a linked kind passes `target_id`.
+
+LINK_KINDS = frozenset({
+    "incident", "help_request", "truck", "request", "quiz", "trainee",
+    "timecard", "rts", "employee", "feedback", "route", "campaign",
+})
+
+
+@dataclass(frozen=True)
+class Link:
+    #: A web path. May contain `{id}`; then `fallback` is where it opens for a
+    #: row that has no id (written before ADR-519).
+    route: str
+    kind: str | None = None
+    fallback: str | None = None
+
+
+def _l(route: str, kind: str | None = None, fallback: str | None = None) -> Link:
+    assert kind is None or kind in LINK_KINDS, kind
+    return Link(route, kind, fallback)
+
+
+LINKS: dict[str, Link] = {
+    # incidents
+    "incident_critical": _l("/incidents", "incident"),
+    "incident_warning": _l("/incidents", "incident"),
+    "incident_info": _l("/incidents", "incident"),
+    "incident_submitted": _l("/incidents", "incident"),
+    "incident_resolved": _l("/incidents", "incident"),
+    "stolen_package_review": _l("/incidents", "incident"),
+    "stolen_package_reopened": _l("/incidents", "incident"),
+    # help
+    "driver_help_requested": _l("/help-requests/{id}", "help_request", fallback="/dispatch"),
+    "trainee_help_request": _l("/trainer-dashboard", "route"),
+    # a truck on a date
+    "anchor_point_arrived": _l("/anchor-points", "truck"),
+    "anchor_point_departed": _l("/anchor-points", "truck"),
+    "anchor_point_running_late": _l("/anchor-points", "truck"),
+    "anchor_point_submitted": _l("/anchor-points", "truck"),
+    "crew_roster_submitted": _l("/crew-status"),   # no truck in scope; the date is enough
+    "load_confirmed": _l("/sort", "truck"),
+    "inspection_failed": _l("/vehicle-compliance", "truck"),
+    "captain_declined": _l("/dispatch", "truck"),
+    "dispatch_no_captain": _l("/dispatch", "truck"),
+    "rebalance_intervention_required": _l("/dispatch", "truck"),
+    # requests
+    "assignment_change_request": _l("/dispatch", "request"),
+    "assignment_change_approved": _l("/", "request"),
+    "assignment_change_rejected": _l("/", "request"),
+    "schedule_change_request": _l("/schedule-changes", "request"),
+    "schedule_change_approved": _l("/schedule-changes", "request"),
+    "schedule_change_rejected": _l("/schedule-changes", "request"),
+    "pto_approved": _l("/schedule", "request"),
+    "pto_rejected": _l("/schedule", "request"),
+    "offday_approved": _l("/schedule", "request"),
+    "offday_rejected": _l("/schedule", "request"),
+    "continuation_request": _l("/trainee-management", "request"),
+    # quizzes
+    "quiz_submitted": _l("/graduation-quiz/{id}", "quiz", fallback="/trainee-management"),
+    "quiz_submitted_trainer": _l("/graduation-quiz/{id}", "quiz", fallback="/trainer-dashboard"),
+    "quiz_issued": _l("/my-quiz", "quiz"),
+    "quiz_result_confirmed": _l("/my-quiz", "quiz"),
+    "quiz_unsubmitted_reminder": _l("/my-quiz", "quiz"),
+    "quiz_remediation_scheduled": _l("/my-quiz", "quiz"),
+    # trainees and trainers
+    "driver_trainee_declined": _l("/dispatch", "trainee"),
+    "driver_trainee_supervisor_declined": _l("/dispatch", "trainee"),
+    "trainee_decline": _l("/dispatch", "trainee"),
+    "trainer_decline_reassignment": _l("/dispatch", "trainee"),
+    "trainee_unassigned": _l("/dispatch", "trainee"),
+    "trainee_reassigned": _l("/dispatch", "trainee"),
+    "trainee_ncns": _l("/dispatch", "trainee"),
+    "trainee_left_early": _l("/trainee-management", "trainee"),
+    "trainee_reassign_warning": _l("/trainee-management", "trainee"),
+    "training_record_unsubmitted": _l("/trainee-management", "trainee"),
+    "training_phase_closed": _l("/trainee-management", "trainee"),
+    "graduation": _l("/trainee-management", "trainee"),
+    "trainee_graduated": _l("/trainee-management", "trainee"),
+    "trainee_bumped": _l("/trainee-management", "trainee"),
+    "trainee_reset": _l("/trainee-management", "trainee"),
+    "trainee_arrived": _l("/trainer-dashboard", "trainee"),
+    "training_record_due": _l("/trainer-dashboard", "trainee"),
+    "phase4_failed": _l("/phase4-observation", "trainee"),
+    "underperforming_trainer": _l("/trainer-marks", "trainee"),
+    "exemplary_trainer": _l("/trainer-marks", "trainee"),
+    # timecards
+    "timecard_mismatch": _l("/admin", "timecard"),
+    "timecard_pending_manager": _l("/admin", "timecard"),
+    "timecard_disputed": _l("/admin", "timecard"),
+    "timecard_update_failed": _l("/admin", "timecard"),
+    "timecard_applied": _l("/account", "timecard"),
+    "timecard_rejected": _l("/account", "timecard"),
+    # returns to station
+    "rts_submitted": _l("/dispatch-home", "rts"),
+    "rts_approved": _l("/my-route", "rts"),
+    "rts_rejected": _l("/my-route", "rts"),
+    # people, feedback, campaigns
+    "email_bounced": _l("/assets", "employee"),
+    "employee_offboarding": _l("/assets", "employee"),
+    "feedback_submitted": _l("/feedback", "feedback"),
+    "campaign_schedule_ended": _l("/campaigns", "campaign"),
+    # page-level: the page (with the date where there is one) is the destination
+    "dispatch_assignment": _l("/"),
+    "dispatch_assignment_info": _l("/"),
+    "dispatch_finalized": _l("/"),
+    "truck_transfer": _l("/"),
+    "operating_mode_change": _l("/"),
+    "role_change": _l("/account"),
+    "credentials_sent": _l("/my-training"),
+    "dispatch_finalization_reminder": _l("/dispatch"),
+    "crew_all_confirmed": _l("/dispatch"),
+    "ban_override_reassignment": _l("/dispatch"),
+    "zone_sort_complete": _l("/sort"),
+    "manifest_enrichment": _l("/sort"),
+    "sort_packages_dropped": _l("/build-routes"),
+    "fuel_log_reminder": _l("/field-ops"),
+    "route_ready": _l("/my-route"),
+    "discord_integration_failed": _l("/dispatch"),
+    "email_delivery_failed": _l("/dispatch"),
+    "identity_revocation_failed": _l("/dispatch"),
+    "tenant_notice": _l("/notifications"),
+}
+
+#: Where an unknown or retired type opens.
+FALLBACK_LINK = Link("/notifications")
+
+
+def link_for(notification_type: str) -> Link:
+    return LINKS.get(notification_type, FALLBACK_LINK)

@@ -271,6 +271,7 @@ async def employee_signoff(
             company_id=caller.company_id,
             employee_id=person.id,
             type="timecard_pending_manager",
+            target_id=adjustment.id,   # ADR-519
             message=f"{caller.name.title()} has signed off on a timecard adjustment for "
                 f"{adjustment.work_date}. Manager approval required.",
         )
@@ -377,6 +378,7 @@ async def manager_sign_off(
                 company_id=caller.company_id,
                 employee_id=person.id,
                 type="timecard_update_failed",
+                target_id=adjustment.id,   # ADR-519
                 message=notif_message,
             )
 
@@ -426,6 +428,7 @@ async def manager_sign_off(
         company_id=caller.company_id,
         employee_id=adjustment.employee_id,
         type="timecard_applied",
+        target_id=adjustment.id,   # ADR-519
         message=notif_message,
     )
     db.commit()
@@ -491,6 +494,7 @@ def reject_adjustment(
             company_id=caller.company_id,
             audience=Audience.MANAGEMENT,
             type="timecard_disputed",
+            target_id=adjustment.id,   # ADR-519
             message=(
                 f"{caller.name.title()} has disputed their timecard adjustment for "
                 f"{adjustment.work_date}. Please review."
@@ -503,6 +507,7 @@ def reject_adjustment(
             company_id=caller.company_id,
             employee_id=adjustment.employee_id,
             type="timecard_rejected",
+            target_id=adjustment.id,   # ADR-519
             message=(
                 f"Your timecard adjustment for {adjustment.work_date} has been rejected "
                 f"by your manager. Please contact your manager for details."

@@ -4,6 +4,7 @@ import { CheckCircle2, XCircle, X, Bell, ChevronDown } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type { Notification } from '../contexts/NotificationContext';
+import { notificationHref } from '../utils/notificationLink';
 import { partitionNotifications } from './notifications/classify';
 import { NotificationTicker } from './notifications/NotificationTicker';
 import { TONE_CARD, TONE_TEXT, URGENT_CARD, isTicker, isUrgent } from './notifications/tone';
@@ -244,8 +245,11 @@ const NotificationBanner: React.FC = () => {
                       injury alert is the warningless wall ADR-381 described. The
                       link resolves the alert by taking the reader to the thing
                       it is about. */}
+                  {/* ADR-519: the item itself (that incident, that help
+                      request), not just its page. Falls back to the old
+                      per-type page for a server that sends no link. */}
                   <Link
-                    to={urgentDestination(n.type)}
+                    to={n.link ? notificationHref(n) : urgentDestination(n.type)}
                     className="mt-2 inline-flex items-center gap-1 text-xs font-medium
                                text-danger hover:underline"
                   >
@@ -455,7 +459,14 @@ const InfoCard: React.FC<{ n: Notification; onDismiss: (id: string) => void }> =
       <span aria-hidden="true" className={`shrink-0 mt-0.5 ${TONE_TEXT[n.tone] ?? TONE_TEXT.neutral}`}>
         {n.icon}
       </span>
-      <p className="flex-1 text-sm text-foreground">{renderMessage(n.message)}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-foreground">{renderMessage(n.message)}</p>
+        {/* ADR-519: open the thing it is about; opening it also clears it. */}
+        <Link to={notificationHref(n)} onClick={() => onDismiss(n.id)}
+          className="mt-1 inline-flex text-xs font-medium text-primary hover:underline">
+          Open
+        </Link>
+      </div>
       <button
         onClick={() => onDismiss(n.id)}
         className="text-muted-foreground hover:text-foreground transition-colors ml-2"

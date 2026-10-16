@@ -312,6 +312,7 @@ def _notify_schedule_ended(db, schedule: CampaignSchedule) -> None:
             company_id=schedule.company_id,
             employee_id=employee_id,
             type="campaign_schedule_ended",
+            target_id=schedule.campaign_id,   # ADR-519
             message=message,
         )
 

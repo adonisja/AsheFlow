@@ -43,7 +43,8 @@ from app.services.notification_spec import RETIRED, SPEC, Severity, Tone
 # declare none — a key that appears only for some types is a key the Pydantic
 # model and the hand-built SSE dict can disagree about, which is the drift
 # TestTheTwoTransportsAgree exists to catch.
-_REGISTRY_FIELDS = ("severity", "label", "tone", "icon", "channels", "actions")
+# "link" added by ADR-519: where tapping the notification goes.
+_REGISTRY_FIELDS = ("severity", "label", "tone", "icon", "channels", "actions", "link")
 
 
 class TestTheSchemaCarriesTheRegistryFields:

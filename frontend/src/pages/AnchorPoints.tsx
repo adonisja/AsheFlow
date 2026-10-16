@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send, History, Navigation, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -461,7 +462,11 @@ interface AnchorPointWithNames extends AnchorPoint {
 }
 
 function DispatchView() {
-  const [date, setDate]       = useState(getLocalYMD());
+  // ADR-519: a notification opens this page at its truck and day
+  // (`?id=<truck>&date=<YYYY-MM-DD>`).
+  const [params] = useSearchParams();
+  const focusTruck = params.get('id');
+  const [date, setDate]       = useState(params.get('date') || getLocalYMD());
   const [records, setRecords] = useState<AnchorPointWithNames[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -492,6 +497,13 @@ function DispatchView() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Bring the linked truck into view once its card exists.
+  useEffect(() => {
+    if (!focusTruck || loading) return;
+    document.getElementById(`truck-${focusTruck}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusTruck, loading, records]);
+  const focusMissing = !!focusTruck && !loading && records.length > 0 && !records.some(r => r.truck_id === focusTruck);
+
   const confirm = async (apId: string) => {
     setConfirming(apId);
     try {
@@ -516,6 +528,7 @@ function DispatchView() {
     <div className="space-y-6">
       <div className="flex items-center gap-3 flex-wrap">
         <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input" />
+        {focusMissing && <span className="text-xs text-muted-foreground">That truck has no anchor point on this day.</span>}
         <button onClick={load} className="btn-ghost flex items-center gap-2">
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
@@ -543,7 +556,8 @@ function DispatchView() {
         const driver_name = sorted[0]?.driver_name;
 
         return (
-          <div key={truckId} className="card-elevated space-y-3">
+          <div key={truckId} id={`truck-${truckId}`}
+            className={`card-elevated space-y-3 ${truckId === focusTruck ? 'ring-2 ring-primary' : ''}`}>
             {/* Truck header */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2">

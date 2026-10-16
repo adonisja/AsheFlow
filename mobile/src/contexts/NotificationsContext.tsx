@@ -26,6 +26,9 @@ import type { NotificationSeverity, NotificationTone } from '@components/notific
 
 export interface NotificationAction { label: string; route: string; style: string }
 
+/** Where tapping it goes (ADR-519). `route` is a web path with any id filled. */
+export interface NotificationLink { route: string; kind: string | null; id: string | null; date: string | null }
+
 export interface LiveNotification {
   id: string;
   type: string;
@@ -39,6 +42,7 @@ export interface LiveNotification {
   icon?: string;
   channels?: string[];
   actions?: NotificationAction[];
+  link?: NotificationLink;
 }
 
 interface NotificationsValue {
@@ -51,13 +55,16 @@ interface NotificationsValue {
    *  would lose an urgent arrival that landed beside a newer ticker event. */
   arrivals: LiveNotification[];
   clearArrivals: () => void;
+  /** ADR-519 D5: the help request open in its sheet, or null. */
+  helpRequestId: string | null;
+  openHelpRequest: (id: string | null) => void;
 }
 
 const POLL_MS = 60_000;
 
 const NotificationsCtx = createContext<NotificationsValue>({
   unread: [], refresh: async () => {}, markRead: async () => {},
-  arrivals: [], clearArrivals: () => {},
+  arrivals: [], clearArrivals: () => {}, helpRequestId: null, openHelpRequest: () => {},
 });
 
 export const useNotifications = () => useContext(NotificationsCtx);
@@ -66,6 +73,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const { fetchId } = useEmployeeId();
   const [unread, setUnread] = useState<LiveNotification[]>([]);
   const [arrivals, setArrivals] = useState<LiveNotification[]>([]);
+  const [helpRequestId, openHelpRequest] = useState<string | null>(null);
   const known = useRef<Set<string> | null>(null);   // null until the first load
   const inFlight = useRef(false);
 
@@ -121,7 +129,8 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const value = useMemo(() => ({
     unread, refresh, markRead, arrivals, clearArrivals: () => setArrivals([]),
-  }), [unread, refresh, markRead, arrivals]);
+    helpRequestId, openHelpRequest,
+  }), [unread, refresh, markRead, arrivals, helpRequestId]);
 
   return <NotificationsCtx.Provider value={value}>{children}</NotificationsCtx.Provider>;
 }

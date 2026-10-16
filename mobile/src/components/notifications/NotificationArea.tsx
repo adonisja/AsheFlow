@@ -35,16 +35,30 @@ import { formatRelative } from './time';
 const INBOX = 'Notifications';
 const BANNER_MS = 5000;
 
-/** Where a notification's first action goes on this phone, else the inbox. */
-function useOpen() {
+/**
+ * Open what a notification is about (ADR-519), else the inbox. Exported so the
+ * inbox and the area open things the same way.
+ *
+ *   help_request -> its sheet (there is no tab for one request)
+ *   anything else -> the link's route mapped to a tab, with {id, date, kind}
+ *                    so a screen that can focus the item does
+ *   no link (an older server) -> the type's first registry action, as before
+ */
+export function useOpenNotification() {
   const { capabilities } = useAuth();
+  const { openHelpRequest } = useNotifications();
   const switchTab = useTabSwitch();
-  return useCallback((n: LiveNotification) => {
-    const route = n.actions?.[0]?.route;
-    const target = route ? resolveActionRoute(route, capabilities?.features ?? []) : null;
-    switchTab(target ?? INBOX);   // never nowhere (D6)
-  }, [capabilities, switchTab]);
+  return useCallback((n: Pick<LiveNotification, 'link' | 'actions'>) => {
+    const link = n.link;
+    if (link?.kind === 'help_request' && link.id) { openHelpRequest(link.id); return; }
+    const features = capabilities?.features ?? [];
+    let target = link ? resolveActionRoute(link.route.split('?')[0], features) : null;
+    if (!target && n.actions?.[0]?.route) target = resolveActionRoute(n.actions[0].route, features);
+    const params = link && (link.id || link.date) ? { id: link.id, date: link.date, kind: link.kind } : undefined;
+    switchTab(target ?? INBOX, target ? params : undefined);   // never nowhere (ADR-516 D6)
+  }, [capabilities, openHelpRequest, switchTab]);
 }
+const useOpen = useOpenNotification;
 
 const label = (n: LiveNotification) => n.label || n.type.replace(/_/g, ' ');
 

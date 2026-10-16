@@ -29,6 +29,7 @@ import OperationsAnalytics from './pages/OperationsAnalytics';
 import Campaigns from './pages/Campaigns';
 import AnchorPoints from './pages/AnchorPoints';
 import CrewStatus from './pages/CrewStatus';
+import HelpRequestPage from './pages/HelpRequest';
 import CaptainDashboard from './pages/CaptainDashboard';
 import WorkforceSort from './pages/WorkforceSort';
 import ToteAddresses from './pages/ToteAddresses';
@@ -580,6 +581,8 @@ function App() {
                 /build-routes: both are route-lead work on one truck-day. */}
             <Route path="/tote-addresses" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><ToteAddresses /></ProtectedRoute>} />
             <Route path="/build-routes" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><WorkforceSort /></ProtectedRoute>} />
+            {/* ADR-519 D5: what "Driver Needs Help" opens. */}
+            <Route path="/help-requests/:id" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management']}><HelpRequestPage /></ProtectedRoute>} />
             <Route
               path="/crew-status"
               element={

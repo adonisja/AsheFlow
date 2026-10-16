@@ -15,6 +15,7 @@ to ADP from here — findings are created in `pending_employee` and reach payrol
 only after the employee signs off and a manager approves.
 """
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.celery_app import celery_app
@@ -87,7 +88,11 @@ def _open_finding(
     """
     description = _describe(finding_type, timecard.work_date, flex, adp_start, adp_end)
 
+    # ADR-519: the id is assigned here, not at flush, because the notification
+    # below links to it (ADR-510: a default id is None until flush).
+    adjustment_id = uuid.uuid4()
     db.add(TimeCardAdjustment(
+        id=adjustment_id,
         company_id=integration.company_id,
         employee_id=employee.id,
         flex_timesheet_id=flex.id,
@@ -108,6 +113,7 @@ def _open_finding(
         company_id=integration.company_id,
         employee_id=employee.id,
         type="timecard_mismatch",
+        target_id=adjustment_id,   # ADR-519
         message=f"Action required: {description} Please review and sign off in AsheFlow.",
     )
 

@@ -154,6 +154,7 @@ def approve_time_off_request(
         company_id=caller.company_id,
         employee_id=db_request.employee_id,
         type="pto_approved",
+        target_id=db_request.id,   # ADR-519
         message=f"Your PTO request for {db_request.date} has been approved.",
     )
     write_audit(
@@ -193,6 +194,7 @@ def reject_time_off_request(
         company_id=caller.company_id,
         employee_id=db_request.employee_id,
         type="pto_rejected",
+        target_id=db_request.id,   # ADR-519
         message=f"Your PTO request for {db_request.date} was not approved.",
     )
     write_audit(

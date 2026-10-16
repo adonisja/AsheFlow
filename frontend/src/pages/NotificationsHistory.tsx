@@ -6,7 +6,9 @@ import {
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
+import { Link } from 'react-router-dom';
 import type { Notification } from '../contexts/NotificationContext';
+import { notificationHref } from '../utils/notificationLink';
 import { TONE_TEXT } from '../components/notifications/tone';
 
 interface HistoryNotification extends Notification {
@@ -203,9 +205,11 @@ export default function NotificationsHistory() {
             >
               <div className="mt-0.5">{iconFor(n)}</div>
               <div className="flex-1 min-w-0">
-                <p className={`text-sm ${n.is_read ? 'text-muted-foreground' : 'text-foreground font-medium'}`}>
+                {/* ADR-519: the message opens the thing it is about. */}
+                <Link to={notificationHref(n)} onClick={() => { if (!n.is_read) handleMarkRead(n.id); }}
+                  className={`block text-sm hover:underline ${n.is_read ? 'text-muted-foreground' : 'text-foreground font-medium'}`}>
                   {n.message}
-                </p>
+                </Link>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-xs text-muted-foreground">{labelFor(n)}</span>
                   <span className="text-muted-foreground/40 text-xs">·</span>

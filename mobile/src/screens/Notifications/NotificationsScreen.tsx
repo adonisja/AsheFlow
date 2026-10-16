@@ -13,7 +13,8 @@ import { useMyTruck } from '../../hooks/useMyTruck';
 import { NotificationTicker } from '@components/notifications/NotificationTicker';
 import { formatRelative } from '@components/notifications/time';
 import PageHeader from '@components/ui/PageHeader';
-import { useNotifications } from '@contexts/NotificationsContext';
+import { useNotifications, type NotificationLink } from '@contexts/NotificationsContext';
+import { useOpenNotification } from '@components/notifications/NotificationArea';
 import {
   isTicker, isUrgent, toneStyle, urgentStyle,
   type NotificationSeverity, type NotificationTone,
@@ -39,6 +40,9 @@ type Notification = {
   tone?: NotificationTone;
   icon?: string;
   channels?: string[];
+  /** ADR-519: where tapping it goes. */
+  link?: NotificationLink;
+  actions?: { label: string; route: string; style: string }[];
 };
 
 type ConfirmationStatus = 'pending' | 'confirmed' | 'declined' | null;
@@ -512,13 +516,16 @@ export default function NotificationsScreen() {
     finally { setMarkingAll(false); }
   }, [refreshLive]);
 
+  const openNotification = useOpenNotification();
   const handleTap = useCallback((item: Notification) => {
     if ((item.type === 'dispatch_assignment' || item.type === 'dispatch_assignment_info') && item.dispatch_date) {
       setActiveNotif(item);
-    } else if (!item.is_read) {
-      markAsRead(item.id);
+      return;
     }
-  }, [markAsRead]);
+    if (!item.is_read) markAsRead(item.id);
+    // ADR-519: open the thing it is about, unless it points back at this inbox.
+    if (item.link && item.link.route !== '/notifications') openNotification(item);
+  }, [markAsRead, openNotification]);
 
   const handleResponded = useCallback((notifId: string) => {
     setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, is_read: true } : n));

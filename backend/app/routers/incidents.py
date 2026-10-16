@@ -98,6 +98,7 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
             company_id=incident.company_id,
             employee_id=emp.id,
             type=notif_type,
+            target_id=incident.id,   # ADR-519
             message=message,
         )
 
@@ -188,6 +189,7 @@ def submit_incident(
         company_id=reporter.company_id,
         employee_id=reporter.id,
         type="incident_submitted",
+        target_id=incident.id,   # ADR-519
         message=f"Your {category_label} incident report for "
             f"{incident.date.strftime('%a, %b %d')} has been submitted and is under review.",
     )
@@ -419,6 +421,7 @@ def resolve_incident(
         company_id=resolver.company_id,
         employee_id=incident.reporter_id,
         type="incident_resolved",
+        target_id=incident.id,   # ADR-519
         message=f"Your {incident.category.replace('_', ' ')} incident report from {incident.date.strftime('%a, %b %d')} has been reviewed and marked resolved.",
     )
     write_audit(

@@ -104,6 +104,7 @@ def submit_change_request(
             company_id=caller.company_id,
             employee_id=emp.id,
             type="assignment_change_request",
+            target_id=new_req.id,   # ADR-519
             message=f"{employee.name} has requested a truck reassignment for "
                 f"{payload.requested_date.strftime('%A, %b %d')}."
                 + (f" Reason: {payload.reason}" if payload.reason else ""),
@@ -215,6 +216,7 @@ def approve_change_request(
         company_id=caller.company_id,
         employee_id=req.employee_id,
         type="assignment_change_approved",
+        target_id=req.id,   # ADR-519
         message=f"Your truck reassignment request for {req.requested_date.strftime('%A, %b %d')} has been approved. Dispatch will update your assignment shortly.",
     )
     write_audit(
@@ -263,6 +265,7 @@ def reject_change_request(
         company_id=caller.company_id,
         employee_id=req.employee_id,
         type="assignment_change_rejected",
+        target_id=req.id,   # ADR-519
         message=f"Your truck reassignment request for {req.requested_date.strftime('%A, %b %d')} was not approved.",
     )
     write_audit(

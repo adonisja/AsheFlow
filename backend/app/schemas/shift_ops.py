@@ -144,3 +144,30 @@ class StationHandoffResponse(BaseModel):
     notes: Optional[str] = None
     submitted_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Help request detail (ADR-519) — what "Driver Needs Help" opens
+# ---------------------------------------------------------------------------
+
+class HelpRequestDriverOut(BaseModel):
+    id: UUID
+    name: Optional[str] = None
+    phone: Optional[str] = None     # None for office roles (ADR-458)
+
+
+class HelpRequestTruckOut(BaseModel):
+    id: UUID
+    name: str
+
+
+class HelpRequestOut(BaseModel):
+    id: UUID
+    date: date
+    check_in_number: int
+    routes_remaining: int
+    working_crew_count: int
+    ncns_count: int
+    submitted_at: Optional[datetime] = None
+    driver: HelpRequestDriverOut
+    truck: Optional[HelpRequestTruckOut] = None

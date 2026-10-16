@@ -95,6 +95,7 @@ def generate_quiz_remediation(
             company_id=company_id,
             employee_id=recipient.id,
             type="quiz_remediation_scheduled",
+            target_id=quiz.id,   # ADR-519
             message=message,
         )
 

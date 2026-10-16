@@ -122,6 +122,7 @@ def retry_failed_adp_writes():
                             company_id=integration.company_id,
                             employee_id=person.id,
                             type="timecard_update_failed",
+                            target_id=adjustment.id,   # ADR-519
                             message=notif_message,
                         )
 

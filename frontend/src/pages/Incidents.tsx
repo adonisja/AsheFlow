@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import SelectMenu from '../components/ui/SelectMenu';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -270,13 +271,28 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
   );
 }
 
+/** ADR-519: scroll the linked incident into view once the list has loaded. */
+function useScrollToLinked(ids: string[]) {
+  const [params] = useSearchParams();
+  const target = params.get('id');
+  useEffect(() => {
+    if (target && ids.includes(target)) {
+      document.getElementById(`incident-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [target, ids.join(',')]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return { target, missing: !!target && ids.length > 0 && !ids.includes(target) };
+}
+
 // ---------------------------------------------------------------------------
 // My Incidents History
 // ---------------------------------------------------------------------------
 
 function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKey: number }) {
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const { missing: linkedMissing } = useScrollToLinked(incidents.map(i => i.id));
+  // ADR-519: a notification opens this page at its incident (`?id=`).
+  const [params] = useSearchParams();
+  const [expanded, setExpanded] = useState<string | null>(params.get('id'));
   const [category, setCategory] = useState('');
   const [bump, setBump] = useState(0);
 
@@ -292,6 +308,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
     <div className="card space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="section-title">My Incidents</h2>
+        {linkedMissing && <p className="w-full text-xs text-muted-foreground">This item is no longer available.</p>}
         <div className="w-full sm:w-56">
           <SelectMenu
             value={category}
@@ -309,7 +326,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
         <p className="text-center py-6 text-subtle text-sm">{category ? 'No incidents in this category.' : 'No incidents yet.'}</p>
       )}
       {incidents.map(inc => (
-        <div key={inc.id} className="rounded-xl border border-border bg-background overflow-hidden">
+        <div key={inc.id} id={`incident-${inc.id}`} className={`rounded-xl border bg-background overflow-hidden ${params.get('id') === inc.id ? 'border-primary ring-2 ring-primary/40' : 'border-border'}`}>
           <button
             onClick={() => setExpanded(expanded === inc.id ? null : inc.id)}
             className="w-full flex items-center justify-between p-3 text-left hover:bg-accent/30 transition-colors"
@@ -360,10 +377,13 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
 function ManagementView() {
   const { confirmState, confirm, cancelConfirm } = useConfirm();
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const { missing: linkedMissing } = useScrollToLinked(incidents.map(i => i.id));
   const [filterSeverity, setFilterSeverity] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterResolved, setFilterResolved] = useState('');
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // ADR-519: a notification opens this page at its incident (`?id=`).
+  const [params] = useSearchParams();
+  const [expanded, setExpanded] = useState<string | null>(params.get('id'));
   const [resolving, setResolving] = useState<string | null>(null);
   // ADR-512 D14: an incident with a stolen-package report is accepted from the
   // report (both signatures required), so its generic Mark Resolved is hidden.
@@ -409,6 +429,7 @@ function ManagementView() {
   return (
     <div className="space-y-4">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+      {linkedMissing && <p className="text-xs text-muted-foreground">This item is no longer available.</p>}
       {/* Filters */}
       <div className="card">
         <div className="flex flex-wrap gap-3">
@@ -459,7 +480,7 @@ function ManagementView() {
       ) : (
         <div className="space-y-2">
           {incidents.map(inc => (
-            <div key={inc.id} className={`rounded-xl border overflow-hidden ${
+            <div key={inc.id} id={`incident-${inc.id}`} className={`rounded-xl border overflow-hidden ${params.get('id') === inc.id ? 'ring-2 ring-primary/40 ' : ''}${
               inc.severity === 'critical' ? 'border-danger/40' :
               inc.severity === 'warning'  ? 'border-warning/40' : 'border-border'
             } bg-background`}>

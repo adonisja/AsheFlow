@@ -57,6 +57,20 @@ export interface Notification {
    *  contract, so a gate cannot send one surface somewhere the other cannot
    *  reach. */
   actions: NotificationAction[];
+
+  /** Where tapping it goes (ADR-519), resolved per read like `channels`.
+   *  Optional: a server before ADR-519 does not send it, and a surface then
+   *  falls back to the notifications page. */
+  link?: NotificationLink;
+}
+
+/** ADR-519. `route` is a web path with any `{id}` already filled. `kind` and
+ *  `id` name the item the page should focus; `date` is the row's dispatch day. */
+export interface NotificationLink {
+  route: string;
+  kind: string | null;
+  id: string | null;
+  date: string | null;
 }
 
 /** One control on a notification. `style` is a semantic role, never a colour —
