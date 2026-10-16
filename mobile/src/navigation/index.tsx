@@ -352,7 +352,8 @@ function MainShell() {
           renders nothing when it has nothing to show. */}
       <NotificationsProvider>
         <View style={{ flex: 1 }}>
-          <NotificationTopArea />
+          {/* ADR-524: not on the inbox itself, where it repeats the list's first rows. */}
+          {activeKey !== 'Notifications' && <NotificationTopArea />}
           {/* A NESTED provider, so screens measure their safe area from here.
               Native SafeAreaView takes its insets from the nearest provider's
               position (getSafeAreaInsets(providerView)), not its own: without

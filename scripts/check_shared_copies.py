@@ -103,6 +103,11 @@ PAIRS = [
         "frontend/src/components/notifications/classify.ts",
         "mobile/src/components/notifications/classify.ts",
     ),
+    Pair(
+        "notification relative time (ADR-516, web since ADR-524)",
+        "frontend/src/components/notifications/time.ts",
+        "mobile/src/components/notifications/time.ts",
+    ),
 ]
 
 

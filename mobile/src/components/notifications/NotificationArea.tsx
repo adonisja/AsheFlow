@@ -117,7 +117,8 @@ export function NotificationTopArea() {
   const insets = useSafeAreaInsets();
   const { unread, markRead } = useNotifications();
   const open = useOpen();
-  const [sheet, setSheet] = useState<'actions' | 'urgent' | null>(null);
+  const switchTab = useTabSwitch();
+  const [sheet, setSheet] = useState(false);
 
   const { urgent, needsYou: actions } = partitionArea(unread);
   const { pinned, overflow } = capUrgent(urgent);
@@ -126,40 +127,49 @@ export function NotificationTopArea() {
   const u = urgentStyle(c);
   return (
     <View style={[s.top, { paddingTop: insets.top + spacing.xs }]}>
-      {pinned.map(n => (
-        // Not a live region and not dismissable: a card to ACT on (ADR-487 D4a).
-        <View key={n.id} style={[s.urgent, { backgroundColor: u.bg, borderLeftColor: u.border, borderLeftWidth: u.barWidth }]}
-          accessibilityRole="alert">
-          <View style={s.headRow}>
-            <Text style={[s.urgentTitle, { color: u.text }]} numberOfLines={1}>
-              {n.icon ? `${n.icon} ` : ''}{label(n)}
-            </Text>
-            <Text style={s.when}>{formatRelative(n.created_at)}</Text>
+      {pinned.map(n => {
+        // ADR-524 D3 (owner's choice from three mock-ups, after a design survey):
+        // ONE banner. The newest unread urgent alert on a single line with a text
+        // Open, and the count of the rest INSIDE the same banner (iOS puts "N more"
+        // on the top card; Fluent groups under one bar with a count). Two separate
+        // red boxes doubled the weight of one message.
+        // Not a live region and not dismissable: acted on (ADR-487 D4a).
+        // Read BEFORE navigating: the destination fetches on focus, and navigating
+        // first let that fetch beat the PATCH (seen on the emulator, ADR-516).
+        const act = async () => { await markRead([n.id]); open(n); };
+        return (
+          <View key={n.id} style={[s.urgent, { backgroundColor: u.bg, borderLeftColor: u.border, borderLeftWidth: u.barWidth }]}
+            accessibilityRole="alert">
+            <View style={s.urgentMain}>
+              <Pressable style={s.urgentText} onPress={act} accessibilityRole="button"
+                accessibilityLabel={`${label(n)}, ${formatRelative(n.created_at)}. ${n.message}. Open.`}>
+                <View style={s.headRow}>
+                  <Text style={[s.urgentTitle, { color: u.text }]} numberOfLines={1}>
+                    {n.icon ? `${n.icon} ` : ''}{label(n)}
+                  </Text>
+                  <Text style={s.when}>· {formatRelative(n.created_at)}</Text>
+                </View>
+                <Text style={s.urgentMsg} numberOfLines={1}>{n.message}</Text>
+              </Pressable>
+              <Pressable onPress={act} style={s.urgentOpen} hitSlop={8} accessibilityRole="button">
+                <Text style={[s.urgentBtnText, { color: u.text }]}>{n.actions?.[0]?.label ?? 'Open'}</Text>
+              </Pressable>
+            </View>
+            {overflow.length > 0 && (
+              // ADR-524 D4 (owner): the rest live in the inbox, not a second list here.
+              <Pressable style={[s.urgentMore, { borderTopColor: u.border }]} onPress={() => switchTab(INBOX)}
+                accessibilityRole="button" accessibilityLabel={`${overflow.length} more urgent. View all notifications.`}>
+                <Text style={[s.urgentMoreText, { color: u.text }]}>
+                  {overflow.length} more urgent · View all
+                </Text>
+                <Text style={[s.chev, { color: u.text }]}>›</Text>
+              </Pressable>
+            )}
           </View>
-          <View style={s.urgentBody}>
-          <Text style={s.urgentMsg} numberOfLines={2}>{n.message}</Text>
-          <Pressable style={[s.urgentBtn, { borderColor: u.border }]}
-            accessibilityRole="button"
-            // Read BEFORE navigating: the destination fetches on focus, and
-            // navigating first let that fetch beat the PATCH (seen on the emulator).
-            onPress={async () => { await markRead([n.id]); open(n); }}>
-            <Text style={[s.urgentBtnText, { color: u.text }]}>{n.actions?.[0]?.label ?? 'Open'}</Text>
-          </Pressable>
-          </View>
-        </View>
-      ))}
-      {overflow.length > 0 && (
-        <Pressable style={[s.needRow, { backgroundColor: u.bg, borderLeftColor: u.border, borderLeftWidth: u.barWidth }]}
-          onPress={() => setSheet('urgent')}
-          accessibilityRole="button"
-          accessibilityLabel={`${overflow.length} more urgent. Open the list.`}>
-          <Text style={s.needIcon}>🚨</Text>
-          <Text style={[s.needText, { color: u.text }]}>{overflow.length} more urgent</Text>
-          <Text style={s.chev}>›</Text>
-        </Pressable>
-      )}
+        );
+      })}
       {actions.length > 0 && (
-        <Pressable style={s.needRow} onPress={() => setSheet('actions')}
+        <Pressable style={s.needRow} onPress={() => setSheet(true)}
           accessibilityRole="button"
           accessibilityLabel={`${actions.length} ${actions.length === 1 ? 'item needs' : 'items need'} you. Open the list.`}>
           <Text style={s.needIcon}>✋</Text>
@@ -167,9 +177,9 @@ export function NotificationTopArea() {
           <Text style={s.chev}>›</Text>
         </Pressable>
       )}
-      <ActionSheet visible={sheet !== null} title={sheet === 'urgent' ? 'Urgent' : 'Needs you'}
-        items={sheet === 'urgent' ? overflow : actions} onClose={() => setSheet(null)}
-        onAct={async n => { setSheet(null); await markRead([n.id]); open(n); }} />
+      <ActionSheet visible={sheet} title="Needs you"
+        items={actions} onClose={() => setSheet(false)}
+        onAct={async n => { setSheet(false); await markRead([n.id]); open(n); }} />
     </View>
   );
 }
@@ -298,17 +308,19 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     backgroundColor: c.background, paddingHorizontal: spacing.sm, paddingBottom: spacing.xs, gap: spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
   },
-  urgent: { borderRadius: radius.md, padding: spacing.sm, gap: 2 },
-  headRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
+  urgent: { borderRadius: radius.md, paddingLeft: spacing.sm, overflow: 'hidden' },
+  urgentMain: { flexDirection: 'row', alignItems: 'center', minHeight: MIN_TARGET, paddingVertical: spacing.xs },
+  urgentText: { flex: 1, gap: 1 },
+  urgentOpen: { minHeight: MIN_TARGET, justifyContent: 'center', paddingHorizontal: spacing.md },
+  urgentMore: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36,
+    paddingRight: spacing.md, borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  urgentMoreText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  headRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
   when: { fontSize: fontSize.xs, color: c.mutedForeground, flexShrink: 0 },
   urgentTitle: { flexShrink: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  // ADR-524 D3: message and Open side by side; Open no longer takes its own line.
-  urgentBody: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   urgentMsg: { flex: 1, fontSize: fontSize.sm, color: c.foreground },
-  urgentBtn: {
-    flexShrink: 0, borderWidth: 1, borderRadius: radius.md,
-    paddingHorizontal: spacing.md, minHeight: MIN_TARGET, justifyContent: 'center',
-  },
   urgentBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   needRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs, minHeight: MIN_TARGET,

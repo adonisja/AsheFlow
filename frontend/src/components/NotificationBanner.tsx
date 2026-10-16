@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { CheckCircle2, XCircle, X, Bell, ChevronDown } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type { Notification } from '../contexts/NotificationContext';
 import { notificationHref } from '../utils/notificationLink';
 import { partitionNotifications } from './notifications/classify';
+import { formatRelative } from './notifications/time';
 import { NotificationTicker } from './notifications/NotificationTicker';
 import { TONE_CARD, TONE_TEXT, URGENT_CARD, isTicker, isUrgent } from './notifications/tone';
 
@@ -39,28 +40,42 @@ function urgentActionLabel(type: string): string {
   return URGENT_ROUTES[type]?.label ?? 'View details';
 }
 
-/** One urgent alert (ADR-487 D4a, ADR-524 D3). Not dismissable without acting:
- *  Open reads it AND goes to the thing it is about. Before ADR-524 the link
- *  only navigated, so a handled alert stayed pinned. */
-function UrgentCard({ n, onOpen, flat = false }: { n: Notification; onOpen: (id: string) => void; flat?: boolean }) {
+/** The urgent banner (ADR-487 D4a, ADR-524 D3): the newest unread urgent alert
+ *  on one line with a text Open, and the count of the rest INSIDE the same
+ *  banner, linking to the full list (owner's choice after a survey: iOS puts
+ *  "N more" on the top card, Fluent groups under one bar with a count,
+ *  PatternFly's overflow links to the drawer). Not dismissable without
+ *  acting: Open reads it AND goes to the thing it is about. Before ADR-524 the
+ *  link only navigated, so a handled alert stayed pinned. */
+function UrgentCard({ n, onOpen, more }: { n: Notification; onOpen: (id: string) => void; more: number }) {
   return (
-    <div className={flat ? 'px-3 py-2.5' : `rounded-xl border p-3 ${URGENT_CARD}`}>
-      <div className="flex items-start gap-3">
-        <span aria-hidden="true" className="text-lg leading-none shrink-0 mt-0.5">{n.icon}</span>
+    <div role="alert" className={`rounded-xl border overflow-hidden ${URGENT_CARD}`}>
+      <div className="flex items-center gap-3 px-3 py-2">
+        <span aria-hidden="true" className="text-base leading-none shrink-0">{n.icon}</span>
         <div className="min-w-0 flex-1">
-          <div className={`text-sm font-semibold ${TONE_TEXT[n.tone] ?? TONE_TEXT.bad}`}>{n.label}</div>
-          <div className="mt-0.5 text-sm text-foreground line-clamp-2">{renderMessage(n.message)}</div>
+          <div className="flex items-baseline gap-1.5 min-w-0">
+            <span className={`text-sm font-semibold truncate ${TONE_TEXT[n.tone] ?? TONE_TEXT.bad}`}>{n.label}</span>
+            <span className="text-xs text-muted-foreground shrink-0">· {formatRelative(n.created_at)}</span>
+          </div>
+          <div className="text-sm text-foreground truncate">{renderMessage(n.message)}</div>
         </div>
         {/* ADR-519: the item itself, falling back to the per-type page. */}
         <Link
           to={n.link ? notificationHref(n) : urgentDestination(n.type)}
           onClick={() => onOpen(n.id)}
-          className="shrink-0 self-center inline-flex items-center rounded-lg border border-danger/40 px-3 py-1.5
-                     text-xs font-semibold text-danger hover:bg-danger/10"
+          className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold text-danger hover:bg-danger/10"
         >
           {urgentActionLabel(n.type)}
         </Link>
       </div>
+      {more > 0 && (
+        <Link to="/notifications"
+          className="flex items-center justify-between border-t border-danger/20 px-3 py-1.5
+                     text-xs font-semibold text-danger hover:bg-danger/5">
+          <span>{more} more urgent · View all</span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      )}
     </div>
   );
 }
@@ -129,8 +144,9 @@ const NotificationBanner: React.FC = () => {
   const { notifications, employeeId, markRead, markAllRead, refresh } = useNotificationContext();
   const [responses, setResponses] = useState<ResponseMap>({});
   const [responding, setResponding] = useState<string | null>(null);
-  // ADR-524: the urgent queue's "N more urgent" row, expanded in place.
-  const [moreUrgent, setMoreUrgent] = useState(false);
+  // ADR-524: the urgent banner is not shown on the notifications page itself,
+  // where it would repeat the first rows of the list.
+  const onInbox = useLocation().pathname.startsWith('/notifications');
   const [confirmationStatus, setConfirmationStatus] = useState<ConfirmationStatusMap>({});
   const [infoOpen, setInfoOpen] = useState(false);
   const fetchedDates = useRef<Set<string>>(new Set());
@@ -254,25 +270,8 @@ const NotificationBanner: React.FC = () => {
       {/* ADR-524: a queue. Only the newest unread urgent alert is shown in
           full; the rest are one row. `urgent` comes from unread notifications
           newest first, so opening (= reading) the shown one promotes the next. */}
-      {urgent.length > 0 && (
-        <div className="space-y-2">
-          <UrgentCard n={urgent[0]} onOpen={dismiss} />
-          {urgent.length > 1 && (
-            <div className={`rounded-xl border ${URGENT_CARD}`}>
-              <button type="button" onClick={() => setMoreUrgent(v => !v)} aria-expanded={moreUrgent}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm font-semibold text-danger">
-                <span aria-hidden="true">{urgent[1].icon}</span>
-                {urgent.length - 1} more urgent
-                <ChevronDown className={`ml-auto w-4 h-4 transition-transform motion-reduce:transition-none ${moreUrgent ? 'rotate-180' : ''}`} />
-              </button>
-              {moreUrgent && (
-                <div className="border-t border-danger/20 divide-y divide-danger/10 max-h-[40vh] overflow-y-auto">
-                  {urgent.slice(1).map(n => <UrgentCard key={n.id} n={n} onOpen={dismiss} flat />)}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+      {urgent.length > 0 && !onInbox && (
+        <UrgentCard n={urgent[0]} onOpen={dismiss} more={urgent.length - 1} />
       )}
 
       {/* HEIGHT CAP (ADR-275 D3) — a safety net, not the mechanism. D1 bounds the
