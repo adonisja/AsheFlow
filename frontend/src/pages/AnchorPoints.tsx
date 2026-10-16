@@ -564,19 +564,22 @@ function SummaryStrip({ boards, filter, onFilter }: {
     danger: 'text-danger', info: 'text-info', warning: 'text-warning', success: 'text-success', muted: 'text-foreground',
   };
   return (
-    <div className="grid grid-cols-5 gap-1.5 sm:gap-2" role="group" aria-label="Filter trucks by state">
+    <div className="flex gap-2 overflow-x-auto snap-x -mx-[var(--gutter)] px-[var(--gutter)] pb-1 sm:mx-0 sm:px-0 sm:pb-0 sm:grid sm:grid-cols-5 sm:overflow-visible"
+      role="group" aria-label="Filter trucks by state">
+      {/* Phones: one scrollable row of full-label chips (five boxes in ~350px
+          overflowed "To acknowledge"). From sm: a grid of five. ADR-523. */}
       {items.map(it => {
         const active = filter === it.key;
         return (
           <button key={it.key} type="button" aria-pressed={active}
             onClick={() => onFilter(active ? null : it.key)}
-            className={`text-left rounded-xl border px-2 py-2 sm:px-3 sm:py-2.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+            className={`shrink-0 snap-start min-w-[7.5rem] sm:min-w-0 text-left rounded-xl border px-3 py-2 sm:py-2.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               active ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-accent'
             } ${it.count === 0 && !active ? 'opacity-60' : ''}`}>
             <span className={`block text-xl sm:text-2xl font-semibold tabular-nums ${it.count > 0 ? num[it.tone] : 'text-muted-foreground'}`}>
               {it.count}
             </span>
-            <span className="block text-[11px] sm:text-xs leading-tight text-muted-foreground">{it.label}</span>
+            <span className="block text-xs leading-tight text-muted-foreground whitespace-nowrap">{it.label}</span>
           </button>
         );
       })}
@@ -608,7 +611,7 @@ function StepRow({ ap, late }: { ap: AnchorPoint; late: boolean }) {
           <span aria-hidden className={`relative block w-[11px] h-[11px] rounded-full border-2 ${
             st.warn ? 'border-danger bg-danger/20' : st.done ? 'border-primary bg-primary' : 'border-border bg-card'
           }`} />
-          <span className="mt-1.5 block text-[11px] uppercase tracking-wide text-muted-foreground">{st.label}</span>
+          <span className="mt-1.5 block text-[10px] sm:text-[11px] uppercase sm:tracking-wide text-muted-foreground">{st.label}</span>
           <span className={`block text-sm tabular-nums ${st.warn ? 'text-danger font-medium' : st.value ? 'text-foreground' : 'text-muted-foreground'}`}>
             {st.value ?? '—'}
           </span>
