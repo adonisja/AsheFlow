@@ -477,7 +477,7 @@ interface TruckBoard {
 
 const STATE_META: Record<TruckState, { label: string; tone: string; rank: number }> = {
   late:     { label: 'Late',            tone: 'danger',  rank: 0 },
-  en_route: { label: 'En route',        tone: 'warning', rank: 2 },
+  en_route: { label: 'En route',        tone: 'info',    rank: 2 },
   at_ap:    { label: 'At anchor point', tone: 'success', rank: 3 },
   departed: { label: 'Departed',        tone: 'muted',   rank: 4 },
 };
@@ -487,6 +487,7 @@ const TONE: Record<string, { chip: string; band: string; dot: string }> = {
   danger:  { chip: 'bg-danger/10 text-danger',   band: 'bg-danger/5 border-danger/20',   dot: 'bg-danger' },
   warning: { chip: 'bg-warning/10 text-warning', band: 'bg-warning/5 border-warning/20', dot: 'bg-warning' },
   success: { chip: 'bg-success/10 text-success', band: 'bg-success/5 border-success/20', dot: 'bg-success' },
+  info:    { chip: 'bg-info/10 text-info',       band: 'bg-info/5 border-info/20',       dot: 'bg-info' },
   muted:   { chip: 'bg-muted text-muted-foreground', band: 'bg-muted/40 border-border',  dot: 'bg-muted-foreground' },
 };
 
@@ -518,12 +519,28 @@ function buildBoards(records: AnchorPointWithNames[]): TruckBoard[] {
   return boards.sort((x, y) => rank(x) - rank(y) || x.truckName.localeCompare(y.truckName));
 }
 
+/** Minutes past an "h:mm AM" ETA on the AP's day, in the viewer's timezone.
+ *  The server flags lateness in the COMPANY timezone (ADR-112); a dispatcher
+ *  is normally in it, and this only words the chip, it never decides "late". */
+function minutesOver(ap: AnchorPoint, now: Date = new Date()): number | null {
+  const m = ap.eta?.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if (!m) return null;
+  const [y, mo, d] = ap.date.split('-').map(Number);
+  const h = (Number(m[1]) % 12) + (m[3].toUpperCase() === 'PM' ? 12 : 0);
+  const mins = Math.floor((now.getTime() - new Date(y, mo - 1, d, h, Number(m[2])).getTime()) / 60000);
+  return mins > 0 ? mins : null;
+}
+
+function overText(mins: number): string {
+  return mins < 60 ? `${mins} min over` : `${Math.floor(mins / 60)} h ${mins % 60} min over`;
+}
+
 /** Why the truck is in its state, in a few words. */
 function stateReason(b: TruckBoard): string | null {
   const ap = b.current;
   if (b.state === 'late') {
-    return [ap.eta && `ETA ${ap.eta}`, ap.running_late_flagged_at && `flagged ${formatTime(ap.running_late_flagged_at)}`]
-      .filter(Boolean).join(' · ') || null;
+    const over = minutesOver(ap);
+    return [ap.eta && `ETA ${ap.eta}`, over != null ? overText(over) : null].filter(Boolean).join(' · ') || null;
   }
   if (b.state === 'en_route') return ap.eta ? `ETA ${ap.eta}` : null;
   if (b.state === 'at_ap' && ap.arrived_at) return `since ${formatTime(ap.arrived_at)}`;
@@ -538,8 +555,8 @@ function SummaryStrip({ boards, filter, onFilter }: {
 }) {
   const items: { key: Exclude<Filter, null>; label: string; tone: string; count: number }[] = [
     { key: 'late',     label: 'Late',              tone: 'danger',  count: boards.filter(b => b.state === 'late').length },
-    { key: 'ack',      label: 'To acknowledge',    tone: 'info',    count: boards.filter(b => b.needsAck).length },
-    { key: 'en_route', label: 'En route',          tone: 'warning', count: boards.filter(b => b.state === 'en_route').length },
+    { key: 'ack',      label: 'To acknowledge',    tone: 'warning', count: boards.filter(b => b.needsAck).length },
+    { key: 'en_route', label: 'En route',          tone: 'info',    count: boards.filter(b => b.state === 'en_route').length },
     { key: 'at_ap',    label: 'At anchor point',   tone: 'success', count: boards.filter(b => b.state === 'at_ap').length },
     { key: 'departed', label: 'Departed',          tone: 'muted',   count: boards.filter(b => b.state === 'departed').length },
   ];
@@ -547,19 +564,19 @@ function SummaryStrip({ boards, filter, onFilter }: {
     danger: 'text-danger', info: 'text-info', warning: 'text-warning', success: 'text-success', muted: 'text-foreground',
   };
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2" role="group" aria-label="Filter trucks by state">
+    <div className="grid grid-cols-5 gap-1.5 sm:gap-2" role="group" aria-label="Filter trucks by state">
       {items.map(it => {
         const active = filter === it.key;
         return (
           <button key={it.key} type="button" aria-pressed={active}
             onClick={() => onFilter(active ? null : it.key)}
-            className={`text-left rounded-xl border px-3 py-2.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+            className={`text-left rounded-xl border px-2 py-2 sm:px-3 sm:py-2.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               active ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-accent'
             } ${it.count === 0 && !active ? 'opacity-60' : ''}`}>
-            <span className={`block text-2xl font-semibold tabular-nums ${it.count > 0 ? num[it.tone] : 'text-muted-foreground'}`}>
+            <span className={`block text-xl sm:text-2xl font-semibold tabular-nums ${it.count > 0 ? num[it.tone] : 'text-muted-foreground'}`}>
               {it.count}
             </span>
-            <span className="block text-xs text-muted-foreground">{it.label}</span>
+            <span className="block text-[11px] sm:text-xs leading-tight text-muted-foreground">{it.label}</span>
           </button>
         );
       })}
@@ -733,6 +750,8 @@ function DispatchView() {
         ...ap,
         truck_name:  truckMap[ap.truck_id]  ?? ap.truck_id,
         driver_name: empMap[ap.driver_id]   ?? ap.driver_id,
+        // The date read leaves confirmed_by_name empty; the roster is already here.
+        confirmed_by_name: ap.confirmed_by_name ?? (ap.confirmed_by ? empMap[ap.confirmed_by] ?? null : null),
       })));
     } catch {
       setError('Failed to load anchor points.');

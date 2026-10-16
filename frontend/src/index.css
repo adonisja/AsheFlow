@@ -352,6 +352,23 @@
     color: hsl(var(--placeholder));
   }
 
+  /* ADR-522 D6: 40 inputs across 10 files used `className="input"`, a class
+     that did not exist, so they rendered as raw browser inputs: white with
+     near-white text in dark mode (the Anchor Points date box was unreadable).
+     Same look as .input-field, WITHOUT w-full: those inputs have always sized
+     to their content, and this must not move any layout. */
+  .input {
+    @apply rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground
+           transition-colors duration-200;
+  }
+  .input:focus {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 0px;
+    border-color: hsl(var(--ring));
+  }
+  /* Native date/time pickers draw their own chrome; tell them the theme. */
+  .dark .input, .dark .input-field { color-scheme: dark; }
+
   .input-field {
     @apply w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm
            text-foreground
