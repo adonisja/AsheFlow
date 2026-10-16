@@ -56,13 +56,19 @@ describe('arrivalOutcome', () => {
 
 describe('capUrgent', () => {
   const u = (id: string) => n(id, 'urgent');
-  it('pins the newest two and collapses the rest, so the screen stays reachable', () => {
+  it('shows only the newest unread and counts the rest (ADR-524)', () => {
     const r = capUrgent([u('1'), u('2'), u('3'), u('4')]);
-    expect(r.pinned.map(x => x.id)).toEqual(['1', '2']);
-    expect(r.overflow.map(x => x.id)).toEqual(['3', '4']);
+    expect(r.pinned.map(x => x.id)).toEqual(['1']);
+    expect(r.overflow.map(x => x.id)).toEqual(['2', '3', '4']);
   });
-  it('has no overflow row at or under the cap', () => {
-    expect(capUrgent([u('1'), u('2')]).overflow).toEqual([]);
+  it('is a queue: reading the shown alert promotes the next most recent', () => {
+    const unread = [u('1'), u('2'), u('3')];
+    const afterRead = unread.filter(x => x.id !== capUrgent(unread).pinned[0].id);
+    expect(capUrgent(afterRead).pinned.map(x => x.id)).toEqual(['2']);
+    expect(capUrgent(afterRead).overflow.map(x => x.id)).toEqual(['3']);
+  });
+  it('has no overflow row for a single alert, and nothing for none', () => {
+    expect(capUrgent([u('1')]).overflow).toEqual([]);
     expect(capUrgent([]).pinned).toEqual([]);
   });
 });

@@ -39,6 +39,32 @@ function urgentActionLabel(type: string): string {
   return URGENT_ROUTES[type]?.label ?? 'View details';
 }
 
+/** One urgent alert (ADR-487 D4a, ADR-524 D3). Not dismissable without acting:
+ *  Open reads it AND goes to the thing it is about. Before ADR-524 the link
+ *  only navigated, so a handled alert stayed pinned. */
+function UrgentCard({ n, onOpen, flat = false }: { n: Notification; onOpen: (id: string) => void; flat?: boolean }) {
+  return (
+    <div className={flat ? 'px-3 py-2.5' : `rounded-xl border p-3 ${URGENT_CARD}`}>
+      <div className="flex items-start gap-3">
+        <span aria-hidden="true" className="text-lg leading-none shrink-0 mt-0.5">{n.icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className={`text-sm font-semibold ${TONE_TEXT[n.tone] ?? TONE_TEXT.bad}`}>{n.label}</div>
+          <div className="mt-0.5 text-sm text-foreground line-clamp-2">{renderMessage(n.message)}</div>
+        </div>
+        {/* ADR-519: the item itself, falling back to the per-type page. */}
+        <Link
+          to={n.link ? notificationHref(n) : urgentDestination(n.type)}
+          onClick={() => onOpen(n.id)}
+          className="shrink-0 self-center inline-flex items-center rounded-lg border border-danger/40 px-3 py-1.5
+                     text-xs font-semibold text-danger hover:bg-danger/10"
+        >
+          {urgentActionLabel(n.type)}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The assignment card's own palette (ADR-487 D4).
  *
@@ -103,6 +129,8 @@ const NotificationBanner: React.FC = () => {
   const { notifications, employeeId, markRead, markAllRead, refresh } = useNotificationContext();
   const [responses, setResponses] = useState<ResponseMap>({});
   const [responding, setResponding] = useState<string | null>(null);
+  // ADR-524: the urgent queue's "N more urgent" row, expanded in place.
+  const [moreUrgent, setMoreUrgent] = useState(false);
   const [confirmationStatus, setConfirmationStatus] = useState<ConfirmationStatusMap>({});
   const [infoOpen, setInfoOpen] = useState(false);
   const fetchedDates = useRef<Set<string>>(new Set());
@@ -223,42 +251,27 @@ const NotificationBanner: React.FC = () => {
       {/* URGENT — outside the cap, so it cannot be scrolled away. Not a live
           region: it is a card the reader is meant to ACT on, not an
           announcement to interrupt them with. */}
+      {/* ADR-524: a queue. Only the newest unread urgent alert is shown in
+          full; the rest are one row. `urgent` comes from unread notifications
+          newest first, so opening (= reading) the shown one promotes the next. */}
       {urgent.length > 0 && (
         <div className="space-y-2">
-          {urgent.map(n => (
-            <div
-              key={n.id}
-              className={`rounded-xl border p-3 ${URGENT_CARD}`}
-            >
-              <div className="flex items-start gap-3">
-                <span aria-hidden="true" className="text-lg leading-none shrink-0 mt-0.5">
-                  {n.icon}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className={`text-sm font-semibold ${TONE_TEXT[n.tone] ?? TONE_TEXT.bad}`}>
-                    {n.label}
-                  </div>
-                  <div className="mt-0.5 text-sm text-foreground">
-                    {renderMessage(n.message)}
-                  </div>
-                  {/* Dismissable only by ACTING. No X: a dismissed-but-unhandled
-                      injury alert is the warningless wall ADR-381 described. The
-                      link resolves the alert by taking the reader to the thing
-                      it is about. */}
-                  {/* ADR-519: the item itself (that incident, that help
-                      request), not just its page. Falls back to the old
-                      per-type page for a server that sends no link. */}
-                  <Link
-                    to={n.link ? notificationHref(n) : urgentDestination(n.type)}
-                    className="mt-2 inline-flex items-center gap-1 text-xs font-medium
-                               text-danger hover:underline"
-                  >
-                    {urgentActionLabel(n.type)}
-                  </Link>
+          <UrgentCard n={urgent[0]} onOpen={dismiss} />
+          {urgent.length > 1 && (
+            <div className={`rounded-xl border ${URGENT_CARD}`}>
+              <button type="button" onClick={() => setMoreUrgent(v => !v)} aria-expanded={moreUrgent}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm font-semibold text-danger">
+                <span aria-hidden="true">{urgent[1].icon}</span>
+                {urgent.length - 1} more urgent
+                <ChevronDown className={`ml-auto w-4 h-4 transition-transform motion-reduce:transition-none ${moreUrgent ? 'rotate-180' : ''}`} />
+              </button>
+              {moreUrgent && (
+                <div className="border-t border-danger/20 divide-y divide-danger/10 max-h-[40vh] overflow-y-auto">
+                  {urgent.slice(1).map(n => <UrgentCard key={n.id} n={n} onOpen={dismiss} flat />)}
                 </div>
-              </div>
+              )}
             </div>
-          ))}
+          )}
         </div>
       )}
 

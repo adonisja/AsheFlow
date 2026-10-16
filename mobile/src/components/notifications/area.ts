@@ -34,9 +34,12 @@ export function arrivalOutcome<T extends AreaNotification>(arrivals: T[]) {
 }
 
 /** How many URGENT cards stay pinned before the rest collapse into one row. */
-export const URGENT_PINNED = 2;
+export const URGENT_PINNED = 1;   // ADR-524: a queue, the newest unread shown
 
-/** Pin the newest URGENT cards; the rest become an "N more urgent" row.
+/** Pin the newest URGENT card; the rest become an "N more urgent" row.
+ *
+ *  ADR-524: a queue. The area is built from UNREAD, so reading the shown card
+ *  promotes the next most recent with no extra state.
  *
  *  Uncapped, every unread urgent notification was a full card at the top of
  *  every screen and the stack did not scroll: with nine open on the emulator

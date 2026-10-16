@@ -136,6 +136,7 @@ export function NotificationTopArea() {
             </Text>
             <Text style={s.when}>{formatRelative(n.created_at)}</Text>
           </View>
+          <View style={s.urgentBody}>
           <Text style={s.urgentMsg} numberOfLines={2}>{n.message}</Text>
           <Pressable style={[s.urgentBtn, { borderColor: u.border }]}
             accessibilityRole="button"
@@ -144,6 +145,7 @@ export function NotificationTopArea() {
             onPress={async () => { await markRead([n.id]); open(n); }}>
             <Text style={[s.urgentBtnText, { color: u.text }]}>{n.actions?.[0]?.label ?? 'Open'}</Text>
           </Pressable>
+          </View>
         </View>
       ))}
       {overflow.length > 0 && (
@@ -300,9 +302,11 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   headRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
   when: { fontSize: fontSize.xs, color: c.mutedForeground, flexShrink: 0 },
   urgentTitle: { flexShrink: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  urgentMsg: { fontSize: fontSize.sm, color: c.foreground },
+  // ADR-524 D3: message and Open side by side; Open no longer takes its own line.
+  urgentBody: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  urgentMsg: { flex: 1, fontSize: fontSize.sm, color: c.foreground },
   urgentBtn: {
-    alignSelf: 'flex-end', marginTop: spacing.xs, borderWidth: 1, borderRadius: radius.md,
+    flexShrink: 0, borderWidth: 1, borderRadius: radius.md,
     paddingHorizontal: spacing.md, minHeight: MIN_TARGET, justifyContent: 'center',
   },
   urgentBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
