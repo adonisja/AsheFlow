@@ -30,7 +30,7 @@ import { onPushOpened } from '@api/pushRegistration';
 import { useReducedMotionState } from '../../hooks/useReducedMotionState';
 import { NotificationTicker } from './NotificationTicker';
 import { toneStyle, urgentStyle } from './tone';
-import { arrivalOutcome, partitionArea } from './area';
+import { arrivalOutcome, capUrgent, partitionArea } from './area';
 import { formatRelative } from './time';
 
 const INBOX = 'Notifications';
@@ -70,16 +70,30 @@ export function PushTapHandler() {
   const open = useOpenNotification();
   const switchTab = useTabSwitch();
   const { refresh } = useNotifications();
-  useEffect(() => onPushOpened(data => {
+  const { capabilities } = useAuth();
+  // A cold-start tap arrives ~50 ms after mount, before capabilities load, and
+  // some routes cannot be resolved without them: `/my-route` is WorkforceRoute
+  // or MyRoute by capability (actionRoutes.ts), and with none known it would
+  // fall back to the inbox. So the tap is HELD until capabilities are known.
+  // (`/incidents` resolves either way: probed on the emulator with the hold
+  // removed, it still opened the incident.)
+  const [pending, setPending] = useState<Record<string, string> | null>(null);
+  // Subscribe ONCE: re-subscribing re-reads getInitialNotification, which the
+  // library answers once per message (measured: three subscriptions in four
+  // seconds of a cold start before this was a mount-only effect).
+  useEffect(() => onPushOpened(setPending), []);
+  useEffect(() => {
+    if (!pending || !capabilities) return;
+    setPending(null);
     refresh();
-    if (!data.link_route) { switchTab(INBOX); return; }
+    if (!pending.link_route) { switchTab(INBOX); return; }
     open({ link: {
-      route: data.link_route,
-      kind: data.link_kind ?? null,
-      id: data.link_id ?? null,
-      date: data.link_date ?? null,
+      route: pending.link_route,
+      kind: pending.link_kind ?? null,
+      id: pending.link_id ?? null,
+      date: pending.link_date ?? null,
     } });
-  }), [open, switchTab, refresh]);
+  }, [pending, capabilities, open, switchTab, refresh]);
   return null;
 }
 
@@ -103,15 +117,16 @@ export function NotificationTopArea() {
   const insets = useSafeAreaInsets();
   const { unread, markRead } = useNotifications();
   const open = useOpen();
-  const [sheet, setSheet] = useState(false);
+  const [sheet, setSheet] = useState<'actions' | 'urgent' | null>(null);
 
   const { urgent, needsYou: actions } = partitionArea(unread);
+  const { pinned, overflow } = capUrgent(urgent);
   if (!urgent.length && !actions.length) return null;
 
   const u = urgentStyle(c);
   return (
     <View style={[s.top, { paddingTop: insets.top + spacing.xs }]}>
-      {urgent.map(n => (
+      {pinned.map(n => (
         // Not a live region and not dismissable: a card to ACT on (ADR-487 D4a).
         <View key={n.id} style={[s.urgent, { backgroundColor: u.bg, borderLeftColor: u.border, borderLeftWidth: u.barWidth }]}
           accessibilityRole="alert">
@@ -131,8 +146,18 @@ export function NotificationTopArea() {
           </Pressable>
         </View>
       ))}
+      {overflow.length > 0 && (
+        <Pressable style={[s.needRow, { backgroundColor: u.bg, borderLeftColor: u.border, borderLeftWidth: u.barWidth }]}
+          onPress={() => setSheet('urgent')}
+          accessibilityRole="button"
+          accessibilityLabel={`${overflow.length} more urgent. Open the list.`}>
+          <Text style={s.needIcon}>🚨</Text>
+          <Text style={[s.needText, { color: u.text }]}>{overflow.length} more urgent</Text>
+          <Text style={s.chev}>›</Text>
+        </Pressable>
+      )}
       {actions.length > 0 && (
-        <Pressable style={s.needRow} onPress={() => setSheet(true)}
+        <Pressable style={s.needRow} onPress={() => setSheet('actions')}
           accessibilityRole="button"
           accessibilityLabel={`${actions.length} ${actions.length === 1 ? 'item needs' : 'items need'} you. Open the list.`}>
           <Text style={s.needIcon}>✋</Text>
@@ -140,14 +165,15 @@ export function NotificationTopArea() {
           <Text style={s.chev}>›</Text>
         </Pressable>
       )}
-      <ActionSheet visible={sheet} items={actions} onClose={() => setSheet(false)}
-        onAct={async n => { setSheet(false); await markRead([n.id]); open(n); }} />
+      <ActionSheet visible={sheet !== null} title={sheet === 'urgent' ? 'Urgent' : 'Needs you'}
+        items={sheet === 'urgent' ? overflow : actions} onClose={() => setSheet(null)}
+        onAct={async n => { setSheet(null); await markRead([n.id]); open(n); }} />
     </View>
   );
 }
 
-function ActionSheet({ visible, items, onClose, onAct }: {
-  visible: boolean; items: LiveNotification[]; onClose: () => void; onAct: (n: LiveNotification) => void;
+function ActionSheet({ visible, title, items, onClose, onAct }: {
+  visible: boolean; title: string; items: LiveNotification[]; onClose: () => void; onAct: (n: LiveNotification) => void;
 }) {
   const c = useColors(); const s = styles(c);
   const insets = useSafeAreaInsets();
@@ -157,7 +183,7 @@ function ActionSheet({ visible, items, onClose, onAct }: {
       <Pressable style={s.scrim} onPress={onClose} accessibilityLabel="Close" />
       <View style={[s.sheet, { paddingBottom: insets.bottom + spacing.md }]}>
         <View style={s.grabber} />
-        <Text style={s.sheetTitle}>Needs you</Text>
+        <Text style={s.sheetTitle}>{title}</Text>
         <ScrollView style={s.sheetList}>
           {items.map(n => {
             const t = toneStyle(n.tone ?? 'neutral', c);

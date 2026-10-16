@@ -3,7 +3,7 @@
  * owner made: urgent is pinned, action items collapse to one row, ticker types
  * scroll, and only the right arrivals interrupt with a banner.
  */
-import { arrivalOutcome, partitionArea } from '../area';
+import { arrivalOutcome, capUrgent, partitionArea } from '../area';
 
 const n = (id: string, severity?: 'urgent' | 'action' | 'notice' | 'info', ticker = false) =>
   ({ id, severity, channels: ticker ? ['banner', 'ticker'] : ['banner'] });
@@ -51,5 +51,18 @@ describe('arrivalOutcome', () => {
 
   it('banners INFO about the reader (pto_approved-like)', () => {
     expect(arrivalOutcome([n('me', 'info')]).banner?.id).toBe('me');
+  });
+});
+
+describe('capUrgent', () => {
+  const u = (id: string) => n(id, 'urgent');
+  it('pins the newest two and collapses the rest, so the screen stays reachable', () => {
+    const r = capUrgent([u('1'), u('2'), u('3'), u('4')]);
+    expect(r.pinned.map(x => x.id)).toEqual(['1', '2']);
+    expect(r.overflow.map(x => x.id)).toEqual(['3', '4']);
+  });
+  it('has no overflow row at or under the cap', () => {
+    expect(capUrgent([u('1'), u('2')]).overflow).toEqual([]);
+    expect(capUrgent([]).pinned).toEqual([]);
   });
 });

@@ -32,3 +32,16 @@ export function arrivalOutcome<T extends AreaNotification>(arrivals: T[]) {
     banner: arrivals.find(n => !isUrgent(n.severity) && !isTicker(n.channels)) ?? null,
   };
 }
+
+/** How many URGENT cards stay pinned before the rest collapse into one row. */
+export const URGENT_PINNED = 2;
+
+/** Pin the newest URGENT cards; the rest become an "N more urgent" row.
+ *
+ *  Uncapped, every unread urgent notification was a full card at the top of
+ *  every screen and the stack did not scroll: with nine open on the emulator
+ *  it covered the whole app, tab bar included. `urgent` is newest first, as
+ *  the inbox delivers it, so the pinned cards are the most recent. */
+export function capUrgent<T>(urgent: T[], max: number = URGENT_PINNED) {
+  return { pinned: urgent.slice(0, max), overflow: urgent.slice(max) };
+}
