@@ -8,11 +8,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { useMyTruck } from '../../hooks/useMyTruck';
 import { NotificationTicker } from '@components/notifications/NotificationTicker';
 import { formatRelative } from '@components/notifications/time';
+import PageHeader from '@components/ui/PageHeader';
 import { useNotifications } from '@contexts/NotificationsContext';
 import {
   isTicker, isUrgent, toneStyle, urgentStyle,
@@ -432,7 +432,6 @@ const modalStyles = (c: ThemeColors) => StyleSheet.create({
 export default function NotificationsScreen() {
   const c = useColors();
   const { user } = useAuth();
-  const switchTab = useTabSwitch();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -626,36 +625,19 @@ export default function NotificationsScreen() {
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
 
-      {/* ── Header ── */}
-      <View style={s.header}>
-        {/* Back */}
-        <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
-          <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
-        </TouchableOpacity>
-
-        {/* Centred title + badge */}
-        <View style={s.headerCenter}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
-            <Text style={s.pageTitle}>Notifications</Text>
-            {unreadCount > 0 && (
-              <View style={[s.unreadBadge, { backgroundColor: c.danger }]}>
-                <Text style={s.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Right action */}
-        <View style={s.headerRight}>
-          {unreadCount > 0 && (
-            <TouchableOpacity onPress={markAllRead} disabled={markingAll}>
-              {markingAll
-                ? <ActivityIndicator color={c.primary} size="small" />
-                : <Text style={[s.markAllText, { color: c.primary }]}>All read</Text>}
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+      {/* ADR-517: the shared header. No back chevron: this is a top-level tab. */}
+      <PageHeader
+        title="Notifications"
+        badge={unreadCount}
+        right={unreadCount > 0 ? (
+          <TouchableOpacity onPress={markAllRead} disabled={markingAll} accessibilityRole="button"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            {markingAll
+              ? <ActivityIndicator color={c.primary} size="small" />
+              : <Text style={[s.markAllText, { color: c.primary }]}>All read</Text>}
+          </TouchableOpacity>
+        ) : undefined}
+      />
 
       {loading ? (
         <View style={s.center}><ActivityIndicator color={c.primary} size="large" /></View>

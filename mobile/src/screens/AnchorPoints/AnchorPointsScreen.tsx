@@ -5,6 +5,7 @@ import {
   ActivityIndicator, Alert, ScrollView, Modal, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import PageHeader from '@components/ui/PageHeader';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
@@ -199,23 +200,21 @@ export default function AnchorPointsScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      {/* ── Header ── */}
-      <View style={s.header}>
-        <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
-          <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
-        </TouchableOpacity>
-        <View style={s.headerCenter}>
-          <Text style={s.pageTitle}>Anchor Point</Text>
-          {crew?.truck_name ? (
-            <Text style={s.subtitle}>{crew.truck_name} · {todayISO()}</Text>
-          ) : (
-            <Text style={[s.subtitle, { color: c.danger }]}>No truck assignment today</Text>
-          )}
-        </View>
-        <TouchableOpacity style={s.refreshBtn} onPress={() => { setRefreshing(true); fetchAPs(); }}>
-          <Text style={{ color: c.primary, fontSize: fontSize.lg }}>↻</Text>
-        </TouchableOpacity>
-      </View>
+      {/* ADR-517: the shared header. No back chevron on a top-level tab; the
+          date reads "Thu, Oct 15", not ISO. */}
+      <PageHeader
+        title="Anchor Point"
+        subtitle={crew?.truck_name
+          ? `${crew.truck_name} · ${new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`
+          : 'No truck assignment today'}
+        subtitleTone={crew?.truck_name ? 'muted' : 'danger'}
+        right={
+          <TouchableOpacity style={s.refreshBtn} accessibilityRole="button" accessibilityLabel="Refresh"
+            onPress={() => { setRefreshing(true); fetchAPs(); }}>
+            <Text style={{ color: c.primary, fontSize: fontSize.lg }}>↻</Text>
+          </TouchableOpacity>
+        }
+      />
 
       {/* ── Locked gate ── */}
       {!isUnlocked ? (

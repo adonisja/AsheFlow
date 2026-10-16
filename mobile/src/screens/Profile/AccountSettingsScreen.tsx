@@ -243,7 +243,6 @@ export default function AccountSettingsScreen() {
 
   return (
     <View style={s.safe}>
-      {/* hideToggle: this screen has its own System/Light/Dark control in the body */}
 
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
 

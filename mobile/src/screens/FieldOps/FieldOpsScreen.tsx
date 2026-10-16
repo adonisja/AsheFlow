@@ -42,6 +42,7 @@ import {
   TextInput, Alert, Switch, Modal, FlatList, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import PageHeader from '@components/ui/PageHeader';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
@@ -600,7 +601,6 @@ export default function FieldOpsScreen() {
   // reach this screen and match no render branch, getting a header over
   // nothing. The driver's 19 steps are untouched below (ADR-307).
   const isCaptain = hasRole('captain');
-  const switchTab = useTabSwitch();
   const isDriver = hasRole('driver');
   const isWalker = hasRole('walker');
 
@@ -1061,6 +1061,7 @@ export default function FieldOpsScreen() {
   if (loadingId) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
+        <PageHeader title="Field Ops" />{/* the header stays while loading (ADR-517) */}
         <View style={s.center}><ActivityIndicator size="large" color={c.primary} /></View>
       </SafeAreaView>
     );
@@ -1068,6 +1069,7 @@ export default function FieldOpsScreen() {
   if (!employeeId) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
+        <PageHeader title="Field Ops" />
         <View style={s.center}><Text style={{ color: c.mutedForeground }}>Could not load profile.</Text></View>
       </SafeAreaView>
     );
@@ -1075,28 +1077,22 @@ export default function FieldOpsScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      {/* ADR-517: the shared header, fixed above the scroll (it used to scroll
+          away), no back chevron on a top-level tab, a readable date. */}
+      <PageHeader
+        title="Field Ops"
+        subtitle={new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+        right={isDriver && hasAssignment ? (
+          <View style={[s.stepBadge, { backgroundColor: (completedSteps === TOTAL_STEPS ? c.success : c.primary) + '18', borderColor: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
+            <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
+              {completedSteps}/{TOTAL_STEPS}
+            </Text>
+          </View>
+        ) : undefined}
+      />
       <ScrollView style={s.scroll} contentContainerStyle={s.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />}>
 
-        {/* ── Header ── */}
-        <View style={s.screenHeader}>
-          <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
-            <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
-          </TouchableOpacity>
-          <View style={s.screenHeaderCenter}>
-            <Text style={s.pageTitle}>Field Ops</Text>
-            <Text style={s.subtitle}>{localToday()}</Text>
-          </View>
-          {isDriver && hasAssignment ? (
-            <View style={[s.stepBadge, { backgroundColor: (completedSteps === TOTAL_STEPS ? c.success : c.primary) + '18', borderColor: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
-              <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
-                {completedSteps}/{TOTAL_STEPS}
-              </Text>
-            </View>
-          ) : (
-            <View style={s.backBtn} />
-          )}
-        </View>
 
         {/* ADR-319 D0/D1 — the captain's body. Workforce-mode only: the route
             column comes from WorkforceRouteOut.assigned_to, and full mode
