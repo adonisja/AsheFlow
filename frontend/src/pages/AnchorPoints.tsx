@@ -557,7 +557,7 @@ function DispatchView() {
 
         return (
           <div key={truckId} id={`truck-${truckId}`}
-            className={`card-elevated space-y-3 ${truckId === focusTruck ? 'ring-2 ring-primary' : ''}`}>
+            className={`card-elevated space-y-3 ${truckId === focusTruck ? 'outline outline-2 outline-offset-2 outline-primary' : ''}`}>
             {/* Truck header */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2">

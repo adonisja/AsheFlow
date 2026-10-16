@@ -42,7 +42,7 @@ export * from './roles';
 import { TAB_GATES } from './roles';
 import MyRoleScreen from '@screens/MyRole/MyRoleScreen';
 import InterruptiveHost from '@components/notifications/InterruptiveHost';
-import { ArrivalBanner, NotificationTickerDock, NotificationTopArea } from '@components/notifications/NotificationArea';
+import { ArrivalBanner, NotificationTickerDock, NotificationTopArea, PushTapHandler } from '@components/notifications/NotificationArea';
 import HelpRequestSheet from '@components/notifications/HelpRequestSheet';
 import { NotificationsProvider } from '@contexts/NotificationsContext';
 import { registerForPush } from '@api/pushRegistration';
@@ -366,6 +366,7 @@ function MainShell() {
           <HorizontalTabBar tabs={visibleTabs} activeKey={activeKey} onSelect={setActiveKey} />
           <ArrivalBanner />
           <HelpRequestSheet />{/* ADR-519 D5 */}
+          <PushTapHandler />{/* ADR-519 D8: a tapped push opens its item */}
         </View>
       </NotificationsProvider>
     </TabParamsContext.Provider>

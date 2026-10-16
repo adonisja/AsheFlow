@@ -26,6 +26,7 @@ import { spacing, radius, fontSize, fontWeight, elevate, type ThemeColors } from
 import { MIN_TARGET, tick } from '@components/ui/primitives';
 import { useTabSwitch } from '@navigation/index';
 import { resolveActionRoute } from '@navigation/actionRoutes';
+import { onPushOpened } from '@api/pushRegistration';
 import { useReducedMotionState } from '../../hooks/useReducedMotionState';
 import { NotificationTicker } from './NotificationTicker';
 import { toneStyle, urgentStyle } from './tone';
@@ -59,6 +60,28 @@ export function useOpenNotification() {
   }, [capabilities, openHelpRequest, switchTab]);
 }
 const useOpen = useOpenNotification;
+
+/**
+ * A tapped system push opens what it is about, exactly as tapping it in the
+ * app would (ADR-519 D8). Mounted once, inside the providers. A push from an
+ * older server has no `link_route` and opens the inbox.
+ */
+export function PushTapHandler() {
+  const open = useOpenNotification();
+  const switchTab = useTabSwitch();
+  const { refresh } = useNotifications();
+  useEffect(() => onPushOpened(data => {
+    refresh();
+    if (!data.link_route) { switchTab(INBOX); return; }
+    open({ link: {
+      route: data.link_route,
+      kind: data.link_kind ?? null,
+      id: data.link_id ?? null,
+      date: data.link_date ?? null,
+    } });
+  }), [open, switchTab, refresh]);
+  return null;
+}
 
 const label = (n: LiveNotification) => n.label || n.type.replace(/_/g, ' ');
 

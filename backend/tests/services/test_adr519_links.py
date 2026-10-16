@@ -154,3 +154,29 @@ def test_every_link_route_is_mapped_or_declared_unmapped_on_mobile(route):
     by kind (a help request opens a sheet), so they are not in the map."""
     assert f"'{route}'" in _code(MOBILE_ROUTES), (
         f"{route} (a notification link) is neither mapped nor DELIBERATELY_UNMAPPED in actionRoutes.ts")
+
+
+# ── D8: a tapped push carries the same link ───────────────────────────────────
+
+def test_push_data_carries_the_link_as_strings():
+    from types import SimpleNamespace
+    from datetime import date
+    from app.tasks.push_delivery_task import _push_data
+    row = SimpleNamespace(id="n1", type="anchor_point_running_late",
+                          target_id="truck-9", dispatch_date=date(2026, 10, 15))
+    data = _push_data(row)
+    assert data == {"notification_id": "n1", "type": "anchor_point_running_late",
+                    "link_route": "/anchor-points", "link_kind": "truck",
+                    "link_id": "truck-9", "link_date": "2026-10-15"}
+    assert all(isinstance(v, str) for v in data.values())   # FCM v1 rejects others
+
+
+def test_push_data_omits_what_the_row_lacks_rather_than_sending_None():
+    # str(None) is "None", which a client would read as an id (the ADR-510 shape).
+    from types import SimpleNamespace
+    from app.tasks.push_delivery_task import _push_data
+    row = SimpleNamespace(id="n2", type="incident_critical", target_id=None, dispatch_date=None)
+    data = _push_data(row)
+    assert "link_id" not in data and "link_date" not in data
+    assert "None" not in data.values()
+    assert data["link_route"] == "/incidents"

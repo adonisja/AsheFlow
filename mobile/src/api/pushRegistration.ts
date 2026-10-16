@@ -142,6 +142,34 @@ export function onForegroundMessage(listener: () => void): () => void {
 }
 
 /**
+ * Call `listener` with a push's data when the user TAPS it (ADR-519 D8):
+ * from the background (`onNotificationOpenedApp`) or from a cold start
+ * (`getInitialNotification`, read once). The server puts the notification's
+ * link in the data as `link_route` / `link_kind` / `link_id` / `link_date`.
+ * Android only, required lazily, like the other listeners here.
+ */
+export function onPushOpened(listener: (data: Record<string, string>) => void): () => void {
+  const noop = () => {};
+  if (Platform.OS !== 'android') return noop;
+  try {
+    const { getMessaging, onNotificationOpenedApp, getInitialNotification } =
+      require('@react-native-firebase/messaging');
+    const m = getMessaging();
+    const emit = (msg: { data?: Record<string, unknown> } | null) => {
+      if (!msg?.data) return;
+      const data: Record<string, string> = {};
+      for (const [k, v] of Object.entries(msg.data)) if (typeof v === 'string') data[k] = v;
+      listener(data);
+    };
+    getInitialNotification(m).then(emit).catch(() => {});
+    return onNotificationOpenedApp(m, emit);
+  } catch (e) {
+    if (__DEV__) console.warn('[push] tap listener unavailable:', (e as Error)?.message);
+    return noop;
+  }
+}
+
+/**
  * Revoke this device. Call BEFORE the session tokens are cleared — the DELETE
  * is authenticated, so afterwards it would 401 and the device would keep
  * receiving the previous user's notifications.
