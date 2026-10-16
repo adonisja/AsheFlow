@@ -262,7 +262,26 @@
      these, so they always agree. Pick by CONTENT:
        layout-wide  tables, dashboards, dense data
        layout-form  single-column forms and reading (~75ch at 16px) */
-  .layout-wide { @apply w-full mx-auto; max-width: min(100%, 80rem); }
+  /* ADR-523: ONE shell width, and it grows with the screen.
+
+     The navbar was `max-w-7xl mx-auto px-8` (padding INSIDE a 1280px box)
+     while `main` padded OUTSIDE its 1280px child, so at any width over 1280
+     the logo and the page title started 32px apart and the page read as
+     off-centre. Every chrome container now uses .layout-shell, and `main`
+     uses the same --gutter, so all edges agree at every width.
+
+     80rem was a fixed cap: a 1920px monitor got 300px+ of dead margin per
+     side. --shell-max is 120rem; beyond it, content centres. */
+  :root { --shell-max: 120rem; --gutter: 1rem; }
+  @media (min-width: 640px)  { :root { --gutter: 1.5rem; } }
+  @media (min-width: 1024px) { :root { --gutter: 2rem; } }
+  .layout-shell {
+    width: 100%;
+    margin-inline: auto;
+    padding-inline: var(--gutter);
+    max-width: calc(var(--shell-max) + 2 * var(--gutter));
+  }
+  .layout-wide { @apply w-full mx-auto; max-width: min(100%, var(--shell-max)); }
 
   /* Dynamic rather than a single number. 768px was chosen because it was the
      most common existing wrapper — a popularity argument, not a design one.

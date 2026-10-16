@@ -135,7 +135,7 @@ export default function Surveyors() {
   const ready = name.trim() && email.trim() && version.trim() && signedOn && holdsAgreement;
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6 space-y-5">
+    <div className="space-y-5">
       <SectionHeader eyebrow="Platform" title="Surveyors"
         description="People who add to the survey register. Each one signs the contributor agreement first; this creates their account and admits them in one step." />
 

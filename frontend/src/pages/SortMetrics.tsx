@@ -125,7 +125,7 @@ export default function SortMetrics() {
   const mixedVersions = versions.length > 1;
 
   return (
-    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-5">
+    <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2">
           <RouteIcon className="w-5 h-5 text-brand" />

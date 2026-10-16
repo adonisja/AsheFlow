@@ -73,7 +73,7 @@ const Layout = () => {
           and the floating support widget sits in that corner covering it. 96px
           was tried first and overshot — the page then ended in obvious dead
           space. 56px clears the widget without looking empty. */}
-      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 pt-6 pb-14">
+      <main className="flex-1 w-full px-[var(--gutter)] pt-6 pb-14">
         <div className={`${widthClass} mb-4 space-y-3`}>
           {/* ADR-381 D1 — above the notification banner deliberately. This
               one is about losing access; those are about today's work, and a

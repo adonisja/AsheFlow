@@ -818,7 +818,7 @@ function DispatchView() {
               <button className="underline" onClick={() => setFilter(null)}>Show all</button>
             </p>
           )}
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
             {shown.map(b => (
               <TruckCard key={b.truckId} board={b} focused={b.truckId === focusTruck}
                 confirming={confirming} onConfirm={confirm} />

@@ -480,7 +480,7 @@ export default function WalkerPerformance() {
   );
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 animate-slide-up">
+    <div className="space-y-8 animate-slide-up">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl gradient-primary shadow-sm shadow-primary/30">
