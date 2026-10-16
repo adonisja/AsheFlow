@@ -642,6 +642,14 @@ export interface AnchorPoint {
   arrived_at: string | null;
   confirmed_by: string | null;
   confirmed_at: string | null;
+  // ADR-522 D5: returned by AnchorPointResponse all along; declared now.
+  lat?: number | null;
+  lng?: number | null;
+  expected_departure_at?: string | null;
+  actual_departed_at?: string | null;
+  is_running_late?: boolean;
+  running_late_flagged_at?: string | null;
+  confirmed_by_name?: string | null;
 }
 
 // ---------------------------------------------------------------------------

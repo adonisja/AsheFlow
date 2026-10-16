@@ -31,6 +31,7 @@ from uuid import UUID
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -192,6 +193,71 @@ def _maybe_flag_late(db: Session, ap: AnchorPoint, truck_name: str, driver_name:
         eta             = ap.eta,
         minutes_late    = minutes_late,
     ))
+    return True
+
+
+async def _raise_late_if_overdue(db: Session, ap: AnchorPoint) -> bool:
+    """Flag an overdue AP and tell the crew, dispatch and Discord, once (ADR-522 D4).
+
+    Both reads call this: the crew's `/truck/{id}/active` (ADR-112) and the
+    dispatch board's `/date/{date}`. Before ADR-522 only the crew read did, so
+    with no crew member in the app a truck an hour past its ETA stayed
+    "preliminary" on the board and nobody was told.
+
+    Two readers can race. Both can pass `_maybe_flag_late`'s check; the unique
+    constraint on `anchor_point_late_flags.anchor_point_id` decides it at the
+    FLUSH, before anyone is notified, so the loser rolls back and stays quiet
+    instead of returning 500 or notifying twice.
+    """
+    if not _maybe_flag_late(db, ap, "", ""):
+        return False
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        return False
+
+    company_id = ap.company_id
+    truck = db.query(Truck).filter(Truck.id == ap.truck_id, Truck.company_id == company_id).first()
+    truck_name = truck.name if truck else str(ap.truck_id)
+    driver = db.query(Employee).filter(
+        Employee.id == ap.driver_id, Employee.company_id == company_id,   # ADR-522: was unscoped
+    ).first()
+    driver_name = driver.name if driver else str(ap.driver_id)
+
+    # ETA is local (company tz) — same parse as _maybe_flag_late.
+    _eta_dt = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p").replace(
+        tzinfo=company_tz(db, company_id))
+    minutes_late = int((datetime.now(timezone.utc) - _eta_dt).total_seconds() / 60)
+
+    notif_message = (
+        f"{truck_name} — {driver_name} is running late "
+        f"(ETA was {ap.eta}, {minutes_late} min overdue)"
+    )
+    crew_ids      = _crew_employee_ids(db, ap.truck_id, ap.date, company_id)
+    dispatch_emps = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.role.in_(["dispatch", "admin"]),
+        Employee.is_active == True,
+    ).all()
+    all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
+    _notify(db, all_notify, "anchor_point_running_late", notif_message, company_id,
+            target_id=ap.truck_id, dispatch_date=ap.date)
+
+    db.commit()
+    db.refresh(ap)
+
+    if truck and truck.discord_channel_id:
+        await _post_embed_to_discord(truck.discord_channel_id, company_id, {
+            "title": f"⏰ Running Late — {truck_name}",
+            "color": 0xEF4444,  # red
+            "fields": [
+                {"name": "Driver",       "value": driver_name,        "inline": True},
+                {"name": "ETA Was",      "value": ap.eta,             "inline": True},
+                {"name": "Minutes Late", "value": str(minutes_late),  "inline": True},
+            ],
+            "footer": "Driver has not yet confirmed arrival",
+        })
     return True
 
 
@@ -659,65 +725,44 @@ async def get_active_anchor_point_for_truck(
     if ap is None:
         return None
 
-    # Running-late check — idempotent, only fires once per AP
-    if _maybe_flag_late(db, ap, "", ""):
-        # Fetch names for the notification
-        truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
-        truck_name = truck.name if truck else str(truck_id)
-        driver = db.query(Employee).filter(Employee.id == ap.driver_id).first()
-        driver_name = driver.name if driver else str(ap.driver_id)
-
-        # ETA is local (company tz) — same fix as _maybe_flag_late.
-        _eta_dt = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p").replace(
-            tzinfo=company_tz(db, caller.company_id))
-        minutes_late = int((datetime.now(timezone.utc) - _eta_dt).total_seconds() / 60)
-
-        notif_message = (
-            f"{truck_name} — {driver_name} is running late "
-            f"(ETA was {ap.eta}, {minutes_late} min overdue)"
-        )
-        crew_ids      = _crew_employee_ids(db, truck_id, today, caller.company_id)
-        dispatch_emps = db.query(Employee).filter(
-            Employee.company_id == caller.company_id,
-            Employee.role.in_(["dispatch", "admin"]),
-            Employee.is_active == True,
-        ).all()
-        all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
-        _notify(db, all_notify, "anchor_point_running_late", notif_message, caller.company_id,
-                target_id=truck_id, dispatch_date=ap.date)
-
-        db.commit()
-        db.refresh(ap)
-
-        if truck and truck.discord_channel_id:
-            await _post_embed_to_discord(truck.discord_channel_id, caller.company_id, {
-                "title": f"⏰ Running Late — {truck_name}",
-                "color": 0xEF4444,  # red
-                "fields": [
-                    {"name": "Driver",       "value": driver_name,        "inline": True},
-                    {"name": "ETA Was",      "value": ap.eta,             "inline": True},
-                    {"name": "Minutes Late", "value": str(minutes_late),  "inline": True},
-                ],
-                "footer": "Driver has not yet confirmed arrival",
-            })
+    # Running-late check — idempotent, only fires once per AP (ADR-112, ADR-522)
+    await _raise_late_if_overdue(db, ap)
 
     return ap
 
 
 @router.get("/date/{target_date}", response_model=List[AnchorPointResponse])
-def get_anchor_points_for_date(
+async def get_anchor_points_for_date(
     target_date: date,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_dispatch),
 ):
-    """All anchor point submissions for a given date. Dispatch/admin only."""
-    return (
-        db.query(AnchorPoint)
-        .filter(AnchorPoint.date == target_date, AnchorPoint.company_id == caller.company_id)
-        .order_by(AnchorPoint.truck_id, AnchorPoint.sequence.asc())
-        .all()
-    )
+    """All anchor point submissions for a given date. Dispatch/admin only.
+
+    ADR-522 D4: on the company's TODAY this read also runs the late check, so
+    the board shows a late truck as late without waiting for a crew member to
+    open the app. Never on another date: `_maybe_flag_late` parses the ETA
+    against the AP's own date, so browsing a past day would flag (and notify)
+    every AP that was never marked arrived.
+    """
+    def _rows():
+        return (
+            db.query(AnchorPoint)
+            .filter(AnchorPoint.date == target_date, AnchorPoint.company_id == caller.company_id)
+            .order_by(AnchorPoint.truck_id, AnchorPoint.sequence.asc())
+            .all()
+        )
+
+    rows = _rows()
+    if target_date == company_today(db, caller.company_id):
+        flagged = False
+        for ap in rows:
+            if ap.status == "preliminary" and not ap.is_running_late:
+                flagged = await _raise_late_if_overdue(db, ap) or flagged
+        if flagged:
+            rows = _rows()   # a lost race rolls back and expires the loaded rows
+    return rows
 
 
 @router.get("/truck/{truck_id}", response_model=List[AnchorPointResponse])
