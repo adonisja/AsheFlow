@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { localYMD } from '@hooks/localDate';
 import { errorText } from '@api/errorText';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
@@ -237,7 +238,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
 
   // The confirmation window is open only during the 'active' dispatch phase.
   // Past-date and finalized dispatches are read-only regardless of status.
-  const localToday = new Date().toISOString().slice(0, 10);
+  const localToday = localYMD();
   const isPastDate = !!notif?.dispatch_date && notif.dispatch_date < localToday;
   const isFinalized = dispatchPhase === 'completed';
   // dispatch_assignment_info is always informational — no action required
@@ -497,7 +498,7 @@ export default function NotificationsScreen() {
       refreshLive();
       // Server marks everything except assignments still awaiting a
       // Confirm/Decline (today/future) — mirror that locally.
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localYMD();
       setNotifications(prev => prev.map(n =>
         n.type === 'dispatch_assignment' && (!n.dispatch_date || n.dispatch_date >= today)
           ? n
@@ -564,7 +565,7 @@ export default function NotificationsScreen() {
     const isDispatch  = item.type === 'dispatch_assignment';
     const isInfoOnly  = item.type === 'dispatch_assignment_info';
     const unread      = !item.is_read;
-    const isPast      = !!item.dispatch_date && item.dispatch_date < new Date().toISOString().slice(0, 10);
+    const isPast      = !!item.dispatch_date && item.dispatch_date < localYMD();
 
     return (
       <TouchableOpacity

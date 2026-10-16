@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { localDayOf } from '@hooks/localDate';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
@@ -116,7 +117,7 @@ export default function TrainerPerformanceScreen() {
             <View style={[st.severityDot, { backgroundColor: c.danger }]} />
             <View style={{ flex: 1 }}>
               <Text style={st.markContext}>{m.reason}</Text>
-              <Text style={st.markMeta}>{m.trainee_name} · {(m.record_date ?? m.created_at.split('T')[0])}</Text>
+              <Text style={st.markMeta}>{m.trainee_name} · {(m.record_date ?? localDayOf(m.created_at))}</Text>
             </View>
             <Text style={st.chevron}>{expanded.has(m.id) ? '▲' : '▼'}</Text>
           </View>

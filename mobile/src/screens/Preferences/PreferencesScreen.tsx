@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { localYMD, localDayOf } from '@hooks/localDate';
 import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
@@ -281,7 +282,7 @@ export default function PreferencesScreen() {
   const submitReassign = useCallback(async () => {
     if (!employeeId) return;
     setReassigning(true);
-    const today = new Date().toISOString().split('T')[0];
+    const today = localYMD();
     try {
       await apiClient.post('/assignment-change-requests/', {
         employee_id: employeeId,
@@ -439,7 +440,7 @@ export default function PreferencesScreen() {
                 <View style={{ flex: 1, gap: 4 }}>
                   <Text style={[s.relName, { color: c.foreground }]}>{r.requested_date}</Text>
                   {r.reason && <Text style={[s.hint, { color: c.mutedForeground }]}>{r.reason}</Text>}
-                  <Text style={[s.hint, { color: c.mutedForeground }]}>{r.created_at.split('T')[0]}</Text>
+                  <Text style={[s.hint, { color: c.mutedForeground }]}>{localDayOf(r.created_at)}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 6 }}>
                   <View style={[s.statusBadge, { backgroundColor: statusColor(r.status, c) + '20' }]}>

@@ -18,13 +18,13 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { errorText } from '../../utils/errorText';
-import { formatDate } from '../../utils/date';
+import { formatDate, getLocalYMD } from '../../utils/date';
 import type {
   SurveyArea, SurveyAreaIn, SurveyAreaKind, SurveyContributor, SurveyContributorInvite, SurveyContributorInvited,
 } from '../../api/types';
 import { ProgressBar } from '../survey/surveyUi';
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = getLocalYMD;
 const inputCls = 'w-full rounded-lg border border-input bg-background px-3 py-2 text-sm';
 
 export default function Surveyors() {

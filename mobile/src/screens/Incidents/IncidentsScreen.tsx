@@ -19,6 +19,7 @@ type Incident = {
   severity: string;
   description: string;
   resolved: boolean;
+  date: string;          // the local day it happened (ADR-521)
   created_at: string;
   // ADR-512: on a stolen-package incident with a report
   stolen_report_state?: State | null;
@@ -273,7 +274,7 @@ export default function IncidentsScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={s.incCategory}>{CATEGORY_LABELS[inc.category] ?? inc.category}</Text>
                     <Text style={s.incMeta}>
-                      {inc.created_at.split('T')[0]}{inc.my_report_version === 'reviewer' ? ' · Verified by you' : ''}
+                      {inc.date}{inc.my_report_version === 'reviewer' ? ' · Verified by you' : ''}
                     </Text>
                     {inc.stolen_report_state && (
                       <StateLine state={inc.stolen_report_state} verifier={inc.my_report_version === 'reviewer' ? 'you' : null} />

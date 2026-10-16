@@ -21,3 +21,13 @@ export function localYMD(d: Date = new Date()): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
+/** The local calendar day of a server timestamp (ADR-521).
+ *
+ * NOT `iso.split('T')[0]`: that is the UTC day, so a report filed at 10:40 PM
+ * Eastern on the 15th lists as the 16th. Prefer a record's own `date` field
+ * when it has one; this is for records that only carry a timestamp.
+ */
+export function localDayOf(iso: string): string {
+  return localYMD(new Date(iso));
+}
