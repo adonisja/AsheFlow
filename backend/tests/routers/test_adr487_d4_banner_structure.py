@@ -139,7 +139,9 @@ class TestTheUrgentRegionIsOutsideTheCap:
         spans = _all_capped_spans(src)
         assert spans, "no max-h-[40vh] element found at all"
 
-        renders = [m.start() for m in re.finditer(r"urgent\.map", src)]
+        # ADR-524: the region renders one <UrgentCard> (the newest) rather than
+        # mapping every alert. Either form counts as an URGENT render.
+        renders = [m.start() for m in re.finditer(r"urgent\.map|<UrgentCard\b", src)]
         assert renders, "the URGENT region is not rendered anywhere"
 
         for at in renders:
@@ -209,9 +211,19 @@ class TestUrgentCannotBeDismissedUnacted:
 
     def test_the_urgent_card_carries_an_action_link(self):
         src = BANNER.read_text()
-        start = src.index("{urgent.length > 0 &&")
-        end = src.index("HEIGHT CAP", start)
-        assert "urgentDestination" in src[start:end]
+        start = src.index("function UrgentCard(")
+        body = src[start:src.index("\n}\n", start)]
+        assert "urgentDestination" in body
+
+    def test_opening_an_urgent_alert_marks_it_read(self):
+        """ADR-524 D2. "Dismissable only by acting" needs the act to be recorded.
+        Before ADR-524 the link only navigated, so a handled alert stayed pinned
+        and the queue could never advance past it."""
+        src = BANNER.read_text()
+        start = src.index("function UrgentCard(")
+        body = src[start:src.index("\n}\n", start)]
+        assert re.search(r"onClick=\{\(\) => onOpen\(n\.id\)\}", body), "Open does not mark the alert read"
+        assert re.search(r"<UrgentCard[^>]*onOpen=\{dismiss\}", src), "UrgentCard is not wired to markRead"
 
     def test_every_urgent_type_has_a_real_route(self):
         """A link to an invented path is ADR-381 in its purest form: the feature
