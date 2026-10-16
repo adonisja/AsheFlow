@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -38,6 +39,7 @@ def create_feedback(
     """
     company_id = caller.company_id if caller else None
     db_feedback = Feedback(
+        id=uuid.uuid4(),   # ADR-519: linked from the notification below, before any flush
         type=feedback.type,
         message=feedback.message,
         employee_id=caller.id if caller else None,
@@ -69,6 +71,7 @@ def create_feedback(
             company_id=company_id,
             audience=Audience.ADMIN_ONLY,
             type="feedback_submitted",
+            target_id=db_feedback.id,   # ADR-519
             message=notif_message,
         )
     else:

@@ -38,6 +38,7 @@ from botocore.exceptions import BotoCoreError
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.notification import Notification
+from app.schemas.notification import resolve_link
 from app.services.notification_spec import Severity, resolve_spec
 from app.models.device_token import DevicePlatform, DeviceToken
 from app.services.push_delivery import (
@@ -46,6 +47,22 @@ from app.services.push_delivery import (
 from app.services.push_quiet_hours import describe, release_at
 
 logger = logging.getLogger(__name__)
+
+
+def _push_data(notif) -> dict:
+    """What a tapped push needs to open its item (ADR-519 D8).
+
+    The same link the inbox carries, flattened: FCM v1 data values must be
+    strings, and an absent field is OMITTED rather than sent as "None" (which
+    `_payload`'s str() coercion would otherwise produce, and a client would
+    read as an id).
+    """
+    data = {"notification_id": str(notif.id), "type": notif.type}
+    link = resolve_link(notif.type, notif)
+    for key in ("route", "kind", "id", "date"):
+        if link.get(key):
+            data[f"link_{key}"] = str(link[key])
+    return data
 
 
 @celery_app.task(
@@ -133,7 +150,7 @@ def send_push(self, notification_id: str) -> dict:
             # carries its own emoji.
             title = f"{spec.icon} {spec.label}" if spec.icon else spec.label
             if send_to_device(db, device, title=title, body=notif.message,
-                              data={"notification_id": str(notif.id), "type": notif.type}):
+                              data=_push_data(notif)):
                 device.last_seen_at = datetime.now(timezone.utc)
                 sent += 1
             else:

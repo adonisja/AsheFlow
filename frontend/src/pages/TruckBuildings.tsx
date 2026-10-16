@@ -11,6 +11,7 @@
  * walking banks for this data rather than reviewers of other people's notes.
  */
 import { useState, useEffect, useCallback } from 'react';
+import { getLocalYMD } from '../utils/date';
 import { Link } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import { buildingTypeLabel } from '../utils/addressProfile';
@@ -20,7 +21,7 @@ import { errorText } from '../utils/errorText';
 import type { TruckBuildingsResponse, TruckBuildingStop } from '../api/types';
 
 function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalYMD();
 }
 
 /** An address the ADR-219 purge has already nulled. The stop still counts —

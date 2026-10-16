@@ -120,6 +120,17 @@ class TestTheRegistryIsComplete:
             f"NOT_NOTIFICATION_TYPES with a reason if it is not a notification."
         )
 
+    def test_no_raise_site_names_a_retired_type(self):
+        """ADR-518. The test above accepts SPEC | RETIRED, so a raise site still
+        sending a RETIRED type passed it, and raising one throws at runtime:
+        every critical injury report failed with 'incident_critical_injury' is
+        RETIRED, and the incident was never saved."""
+        resurrected = _literal_types_in_source() & set(RETIRED)
+        assert not resurrected, (
+            f"raise site(s) still name RETIRED type(s) {sorted(resurrected)}: raising "
+            f"one throws (ADR-487 D1). Raise the replacement type instead."
+        )
+
     def test_the_source_walk_actually_found_something(self):
         """A walk that finds nothing passes the test above vacuously.
 

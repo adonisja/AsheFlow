@@ -112,6 +112,7 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
                 company_id=trainee.company_id,
                 employee_id=recipient.id,
                 type=outcome_type,
+                target_id=trainee.id,   # ADR-519
                 message=message_mgmt,
             )
 
@@ -120,6 +121,7 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
             company_id=trainee.company_id,
             employee_id=trainee.id,
             type="graduation",
+            target_id=trainee.id,   # ADR-519
             message=message_self,
         )
 

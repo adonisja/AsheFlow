@@ -21,6 +21,7 @@ import {
   TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import PageHeader from '@components/ui/PageHeader';
 
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
@@ -316,6 +317,8 @@ export default function CampaignsScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      {/* ADR-517: the shared header, in place of a heading inside the scroll. */}
+      <PageHeader title="Campaigns" />
       <ScrollView
         contentContainerStyle={s.content}
         refreshControl={
@@ -323,7 +326,6 @@ export default function CampaignsScreen() {
                           tintColor={c.primary} />
         }
       >
-        <Text style={s.heading}>Campaigns</Text>
 
         {done && <Text style={s.success}>{done}</Text>}
         {error && <Text style={s.error}>{error}</Text>}

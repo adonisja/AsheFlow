@@ -69,7 +69,7 @@ function TitleBar() {
 
   return (
     <div className="relative z-10 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-4">
+      <div className="layout-shell h-12 flex items-center justify-between gap-4">
         {/* Brand — the tenant navbar's tile treatment, in violet */}
         <div className="flex items-center gap-2 font-bold text-base tracking-tight shrink-0">
           <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-brand/15 border border-brand/30">
@@ -171,7 +171,7 @@ export default function SuperAdminLayout() {
             with the brand is what made this feel cramped: the links had to
             compete for width with a wordmark that never changes. */}
         <nav className="glass border-x-0 border-t-0 border-b border-border/60 rounded-none">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="layout-shell">
             <div className="flex items-center justify-between h-10">
               <div className="hidden md:flex items-center min-w-0 flex-1">
                 <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none pr-2">
@@ -215,7 +215,7 @@ export default function SuperAdminLayout() {
         </nav>
       </header>
 
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 layout-shell py-6">
         {/* ADR-396 — this shell deliberately omits the tenant-scoped pieces of
             the main Layout (NotificationBanner, CommandPalette, FeedbackModal),
             all of which resolve the caller through an Employee row a super admin

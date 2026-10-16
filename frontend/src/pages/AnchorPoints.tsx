@@ -1,6 +1,7 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send, History, Navigation, Plus } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send, History, Navigation, Plus, AlertTriangle, ExternalLink, ChevronDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
@@ -460,12 +461,282 @@ interface AnchorPointWithNames extends AnchorPoint {
   driver_name?: string;
 }
 
+// ADR-522 D1: one truck state, derived in one place. The truck's CURRENT anchor
+// point is its newest non-relocated one; earlier ones are history.
+type TruckState = 'late' | 'en_route' | 'at_ap' | 'departed';
+
+interface TruckBoard {
+  truckId: string;
+  truckName: string;
+  driverName: string;
+  current: AnchorPointWithNames;
+  history: AnchorPointWithNames[];   // relocated, newest first
+  state: TruckState;
+  needsAck: boolean;
+}
+
+const STATE_META: Record<TruckState, { label: string; tone: string; rank: number }> = {
+  late:     { label: 'Late',            tone: 'danger',  rank: 0 },
+  en_route: { label: 'En route',        tone: 'info',    rank: 2 },
+  at_ap:    { label: 'At anchor point', tone: 'success', rank: 3 },
+  departed: { label: 'Departed',        tone: 'muted',   rank: 4 },
+};
+
+// Tone -> classes. Literal strings so Tailwind's scanner keeps them.
+const TONE: Record<string, { chip: string; band: string; dot: string }> = {
+  danger:  { chip: 'bg-danger/10 text-danger',   band: 'bg-danger/5 border-danger/20',   dot: 'bg-danger' },
+  warning: { chip: 'bg-warning/10 text-warning', band: 'bg-warning/5 border-warning/20', dot: 'bg-warning' },
+  success: { chip: 'bg-success/10 text-success', band: 'bg-success/5 border-success/20', dot: 'bg-success' },
+  info:    { chip: 'bg-info/10 text-info',       band: 'bg-info/5 border-info/20',       dot: 'bg-info' },
+  muted:   { chip: 'bg-muted text-muted-foreground', band: 'bg-muted/40 border-border',  dot: 'bg-muted-foreground' },
+};
+
+function stateOf(ap: AnchorPoint): TruckState {
+  if (ap.actual_departed_at) return 'departed';
+  if (ap.status === 'arrived') return 'at_ap';
+  return ap.is_running_late ? 'late' : 'en_route';
+}
+
+function buildBoards(records: AnchorPointWithNames[]): TruckBoard[] {
+  const byTruck = new Map<string, AnchorPointWithNames[]>();
+  for (const ap of records) byTruck.set(ap.truck_id, [...(byTruck.get(ap.truck_id) ?? []), ap]);
+  const boards: TruckBoard[] = [];
+  for (const [truckId, aps] of byTruck) {
+    const newestFirst = [...aps].sort((a, b) => b.sequence - a.sequence);
+    const current = newestFirst.find(ap => ap.status !== 'relocated') ?? newestFirst[0];
+    boards.push({
+      truckId,
+      truckName: current.truck_name ?? truckId,
+      driverName: current.driver_name ?? '',
+      current,
+      history: newestFirst.filter(ap => ap.id !== current.id),
+      state: stateOf(current),
+      needsAck: aps.some(ap => ap.status !== 'relocated' && !ap.confirmed_at),
+    });
+  }
+  // ADR-522 D3: late first, then anything awaiting acknowledgment, then by state.
+  const rank = (b: TruckBoard) => b.state === 'late' ? 0 : b.needsAck ? 1 : STATE_META[b.state].rank;
+  return boards.sort((x, y) => rank(x) - rank(y) || x.truckName.localeCompare(y.truckName));
+}
+
+/** Minutes past an "h:mm AM" ETA on the AP's day, in the viewer's timezone.
+ *  The server flags lateness in the COMPANY timezone (ADR-112); a dispatcher
+ *  is normally in it, and this only words the chip, it never decides "late". */
+function minutesOver(ap: AnchorPoint, now: Date = new Date()): number | null {
+  const m = ap.eta?.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if (!m) return null;
+  const [y, mo, d] = ap.date.split('-').map(Number);
+  const h = (Number(m[1]) % 12) + (m[3].toUpperCase() === 'PM' ? 12 : 0);
+  const mins = Math.floor((now.getTime() - new Date(y, mo - 1, d, h, Number(m[2])).getTime()) / 60000);
+  return mins > 0 ? mins : null;
+}
+
+function overText(mins: number): string {
+  return mins < 60 ? `${mins} min over` : `${Math.floor(mins / 60)} h ${mins % 60} min over`;
+}
+
+/** Why the truck is in its state, in a few words. */
+function stateReason(b: TruckBoard): string | null {
+  const ap = b.current;
+  if (b.state === 'late') {
+    const over = minutesOver(ap);
+    return [ap.eta && `ETA ${ap.eta}`, over != null ? overText(over) : null].filter(Boolean).join(' · ') || null;
+  }
+  if (b.state === 'en_route') return ap.eta ? `ETA ${ap.eta}` : null;
+  if (b.state === 'at_ap' && ap.arrived_at) return `since ${formatTime(ap.arrived_at)}`;
+  if (b.state === 'departed' && ap.actual_departed_at) return `at ${formatTime(ap.actual_departed_at)}`;
+  return null;
+}
+
+type Filter = TruckState | 'ack' | null;
+
+function SummaryStrip({ boards, filter, onFilter }: {
+  boards: TruckBoard[]; filter: Filter; onFilter: (f: Filter) => void;
+}) {
+  const items: { key: Exclude<Filter, null>; label: string; tone: string; count: number }[] = [
+    { key: 'late',     label: 'Late',              tone: 'danger',  count: boards.filter(b => b.state === 'late').length },
+    { key: 'ack',      label: 'To acknowledge',    tone: 'warning', count: boards.filter(b => b.needsAck).length },
+    { key: 'en_route', label: 'En route',          tone: 'info',    count: boards.filter(b => b.state === 'en_route').length },
+    { key: 'at_ap',    label: 'At anchor point',   tone: 'success', count: boards.filter(b => b.state === 'at_ap').length },
+    { key: 'departed', label: 'Departed',          tone: 'muted',   count: boards.filter(b => b.state === 'departed').length },
+  ];
+  const num: Record<string, string> = {
+    danger: 'text-danger', info: 'text-info', warning: 'text-warning', success: 'text-success', muted: 'text-foreground',
+  };
+  return (
+    <div className="flex gap-2 overflow-x-auto snap-x scroll-px-[var(--gutter)] -mx-[var(--gutter)] px-[var(--gutter)] pb-1 sm:mx-0 sm:px-0 sm:pb-0 sm:grid sm:grid-cols-5 sm:overflow-visible"
+      role="group" aria-label="Filter trucks by state">
+      {/* Phones: one scrollable row of full-label chips (five boxes in ~350px
+          overflowed "To acknowledge"). From sm: a grid of five. ADR-523. */}
+      {items.map(it => {
+        const active = filter === it.key;
+        return (
+          <button key={it.key} type="button" aria-pressed={active}
+            onClick={() => onFilter(active ? null : it.key)}
+            className={`shrink-0 snap-start min-w-[7.5rem] sm:min-w-0 text-left rounded-xl border px-3 py-2 sm:py-2.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+              active ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-accent'
+            } ${it.count === 0 && !active ? 'opacity-60' : ''}`}>
+            <span className={`block text-xl sm:text-2xl font-semibold tabular-nums ${it.count > 0 ? num[it.tone] : 'text-muted-foreground'}`}>
+              {it.count}
+            </span>
+            <span className="block text-xs leading-tight text-muted-foreground whitespace-nowrap">{it.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Submitted -> ETA -> Arrived -> Departed, each with its time or a dash. */
+function StepRow({ ap, late }: { ap: AnchorPoint; late: boolean }) {
+  const steps: { label: string; value: string | null; done: boolean; warn?: boolean }[] = [
+    { label: 'Submitted', value: formatTime(ap.submitted_at), done: true },
+    { label: 'ETA',       value: ap.eta, done: !!ap.arrived_at, warn: late },
+    { label: 'Arrived',   value: ap.arrived_at ? formatTime(ap.arrived_at) : null, done: !!ap.arrived_at },
+    {
+      label: 'Departed',
+      value: ap.actual_departed_at ? formatTime(ap.actual_departed_at)
+        : ap.expected_departure_at ? `planned ${formatTime(ap.expected_departure_at)}` : null,
+      done: !!ap.actual_departed_at,
+    },
+  ];
+  return (
+    <ol className="grid grid-cols-4">
+      {steps.map((st, i) => (
+        <li key={st.label} className="relative pr-2">
+          {/* connector to the next step */}
+          {i < steps.length - 1 && (
+            <span aria-hidden className={`absolute left-3 right-0 top-[5px] h-px ${steps[i + 1].done ? 'bg-primary/50' : 'bg-border'}`} />
+          )}
+          <span aria-hidden className={`relative block w-[11px] h-[11px] rounded-full border-2 ${
+            st.warn ? 'border-danger bg-danger/20' : st.done ? 'border-primary bg-primary' : 'border-border bg-card'
+          }`} />
+          <span className="mt-1.5 block text-[10px] sm:text-[11px] uppercase sm:tracking-wide text-muted-foreground">{st.label}</span>
+          <span className={`block text-sm tabular-nums ${st.warn ? 'text-danger font-medium' : st.value ? 'text-foreground' : 'text-muted-foreground'}`}>
+            {st.value ?? '—'}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function mapsHref(ap: AnchorPoint): string {
+  const q = ap.lat != null && ap.lng != null ? `${ap.lat},${ap.lng}` : ap.location;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+function TruckCard({ board, focused, confirming, onConfirm }: {
+  board: TruckBoard; focused: boolean; confirming: string | null; onConfirm: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const meta = STATE_META[board.state];
+  const tone = TONE[meta.tone];
+  const ap = board.current;
+  const reason = stateReason(board);
+  const unacked = [ap, ...board.history].filter(x => x.status !== 'relocated' && !x.confirmed_at);
+
+  return (
+    <article id={`truck-${board.truckId}`} aria-label={`${board.truckName}, ${meta.label}`}
+      className={`card !p-0 overflow-hidden ${focused ? 'outline outline-2 outline-offset-2 outline-primary' : ''}`}>
+      {/* Header band: who, and the one state that matters, with its reason */}
+      <header className={`flex items-center justify-between gap-3 flex-wrap px-5 py-3 border-b ${tone.band}`}>
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="grid place-items-center w-9 h-9 rounded-xl bg-card border border-border shrink-0">
+            <Truck className="w-4 h-4 text-foreground" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-foreground leading-tight truncate">{board.truckName}</h3>
+            <p className="text-xs text-muted-foreground truncate">{board.driverName}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${tone.chip}`}>
+            {board.state === 'late' ? <AlertTriangle className="w-3.5 h-3.5" />
+              : board.state === 'at_ap' ? <CheckCircle2 className="w-3.5 h-3.5" />
+              : board.state === 'departed' ? <Navigation className="w-3.5 h-3.5" />
+              : <Clock className="w-3.5 h-3.5" />}
+            {meta.label}
+            {reason && <span className="font-normal opacity-80">· {reason}</span>}
+          </span>
+          {unacked.length > 0 && (
+            <button onClick={() => onConfirm(unacked[0].id)} disabled={confirming === unacked[0].id}
+              className="btn-primary !px-3 !py-1.5 text-xs disabled:opacity-50">
+              {confirming === unacked[0].id
+                ? <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                : <CheckCircle2 className="w-3.5 h-3.5" />}
+              Acknowledge
+            </button>
+          )}
+        </div>
+      </header>
+
+      <div className="px-5 py-4 space-y-4">
+        {/* Where the truck is (or is going) */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              Anchor point #{ap.sequence}{board.history.length > 0 ? ' · current' : ''}
+            </p>
+            <p className="text-lg font-semibold text-foreground leading-snug">{ap.location}</p>
+            {ap.notes && <p className="text-sm text-muted-foreground">{ap.notes}</p>}
+          </div>
+          <a href={mapsHref(ap)} target="_blank" rel="noopener noreferrer"
+            className="btn-ghost !px-2.5 !py-1.5 text-xs shrink-0">
+            <MapPin className="w-3.5 h-3.5" /> Maps <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+
+        <StepRow ap={ap} late={board.state === 'late'} />
+
+        {/* Who has seen it */}
+        <div className="flex items-center justify-between gap-3 flex-wrap pt-3 border-t border-border text-xs">
+          {ap.confirmed_at ? (
+            <span className="inline-flex items-center gap-1.5 text-success">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Acknowledged {formatTime(ap.confirmed_at)}{ap.confirmed_by_name ? ` by ${ap.confirmed_by_name}` : ''}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Not acknowledged yet</span>
+          )}
+          {board.history.length > 0 && (
+            <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+              className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground">
+              <History className="w-3.5 h-3.5" />
+              Moved {board.history.length} {board.history.length === 1 ? 'time' : 'times'}
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
+            </button>
+          )}
+        </div>
+
+        {open && board.history.length > 0 && (
+          <ol className="space-y-2 border-l border-border pl-4">
+            {board.history.map(h => (
+              <li key={h.id} className="relative text-xs">
+                <span aria-hidden className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-border" />
+                <span className="text-muted-foreground">#{h.sequence} · submitted {formatTime(h.submitted_at)}
+                  {h.arrived_at && ` · arrived ${formatTime(h.arrived_at)}`}</span>
+                <p className="text-foreground line-through decoration-muted-foreground/50">{h.location}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </article>
+  );
+}
+
 function DispatchView() {
-  const [date, setDate]       = useState(getLocalYMD());
+  // ADR-519: a notification opens this page at its truck and day
+  // (`?id=<truck>&date=<YYYY-MM-DD>`).
+  const [params] = useSearchParams();
+  const focusTruck = params.get('id');
+  const [date, setDate]       = useState(params.get('date') || getLocalYMD());
   const [records, setRecords] = useState<AnchorPointWithNames[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [filter, setFilter]   = useState<Filter>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -482,6 +753,8 @@ function DispatchView() {
         ...ap,
         truck_name:  truckMap[ap.truck_id]  ?? ap.truck_id,
         driver_name: empMap[ap.driver_id]   ?? ap.driver_id,
+        // The date read leaves confirmed_by_name empty; the roster is already here.
+        confirmed_by_name: ap.confirmed_by_name ?? (ap.confirmed_by ? empMap[ap.confirmed_by] ?? null : null),
       })));
     } catch {
       setError('Failed to load anchor points.');
@@ -491,6 +764,13 @@ function DispatchView() {
   }, [date]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Bring the linked truck into view once its card exists.
+  useEffect(() => {
+    if (!focusTruck || loading) return;
+    document.getElementById(`truck-${focusTruck}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusTruck, loading, records]);
+  const focusMissing = !!focusTruck && !loading && records.length > 0 && !records.some(r => r.truck_id === focusTruck);
 
   const confirm = async (apId: string) => {
     setConfirming(apId);
@@ -504,18 +784,15 @@ function DispatchView() {
     }
   };
 
-  // Group by truck, show active AP per truck prominently
-  const byTruck = records.reduce<Record<string, AnchorPointWithNames[]>>((acc, ap) => {
-    const key = ap.truck_id;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(ap);
-    return acc;
-  }, {});
+  const boards = buildBoards(records);
+  const shown = boards.filter(b =>
+    filter === null ? true : filter === 'ack' ? b.needsAck : b.state === filter);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex items-center gap-3 flex-wrap">
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input" />
+        <input type="date" value={date} onChange={e => { setDate(e.target.value); setFilter(null); }} className="input" />
+        {focusMissing && <span className="text-xs text-muted-foreground">That truck has no anchor point on this day.</span>}
         <button onClick={load} className="btn-ghost flex items-center gap-2">
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
@@ -536,72 +813,22 @@ function DispatchView() {
         </div>
       )}
 
-      {!loading && Object.entries(byTruck).map(([truckId, truckAPs]) => {
-        const sorted  = [...truckAPs].sort((a, b) => a.sequence - b.sequence);
-        const activeAP = sorted.find(ap => ap.status === 'preliminary' || ap.status === 'arrived');
-        const truck_name  = sorted[0]?.truck_name;
-        const driver_name = sorted[0]?.driver_name;
-
-        return (
-          <div key={truckId} className="card-elevated space-y-3">
-            {/* Truck header */}
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <Truck className="w-4 h-4 text-muted-foreground" />
-                <span className="font-semibold text-foreground text-sm">{truck_name}</span>
-                <span className="text-xs text-muted-foreground">· {driver_name}</span>
-              </div>
-              {activeAP && (
-                <StatusBadge status={activeAP.status} />
-              )}
-            </div>
-
-            {/* AP timeline for this truck */}
-            <div className="space-y-2">
-              {sorted.map(ap => (
-                <div
-                  key={ap.id}
-                  className={`flex items-start justify-between gap-3 p-3 rounded-xl border ${
-                    ap.status === 'relocated'
-                      ? 'border-border opacity-50'
-                      : 'border-primary/20 bg-primary/4'
-                  }`}
-                >
-                  <div className="space-y-0.5 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-semibold text-muted-foreground">AP #{ap.sequence}</span>
-                      <StatusBadge status={ap.status} />
-                      {ap.confirmed_at && (
-                        <span className="text-xs text-success font-medium">Acknowledged {formatTime(ap.confirmed_at)}</span>
-                      )}
-                    </div>
-                    <p className="text-sm font-medium text-foreground truncate">{ap.location}</p>
-                    {ap.eta && <p className="text-xs text-muted-foreground">ETA: {ap.eta}</p>}
-                    {ap.notes && <p className="text-xs text-muted-foreground">{ap.notes}</p>}
-                    <p className="text-xs text-muted-foreground">
-                      Submitted {formatTime(ap.submitted_at)}
-                      {ap.arrived_at && ` · Arrived ${formatTime(ap.arrived_at)}`}
-                    </p>
-                  </div>
-                  {!ap.confirmed_at && ap.status !== 'relocated' && (
-                    <button
-                      onClick={() => confirm(ap.id)}
-                      disabled={confirming === ap.id}
-                      className="btn-primary shrink-0 flex items-center gap-1.5 text-xs disabled:opacity-50"
-                    >
-                      {confirming === ap.id
-                        ? <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                        : <CheckCircle2 className="w-3 h-3" />
-                      }
-                      Acknowledge
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+      {!loading && boards.length > 0 && (
+        <>
+          <SummaryStrip boards={boards} filter={filter} onFilter={setFilter} />
+          {shown.length === 0 && (
+            <p className="text-sm text-muted-foreground">No trucks in this group.{' '}
+              <button className="underline" onClick={() => setFilter(null)}>Show all</button>
+            </p>
+          )}
+          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+            {shown.map(b => (
+              <TruckCard key={b.truckId} board={b} focused={b.truckId === focusTruck}
+                confirming={confirming} onConfirm={confirm} />
+            ))}
           </div>
-        );
-      })}
+        </>
+      )}
     </div>
   );
 }

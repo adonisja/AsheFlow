@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { CheckCircle2, XCircle, X, Bell, ChevronDown } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type { Notification } from '../contexts/NotificationContext';
+import { notificationHref } from '../utils/notificationLink';
 import { partitionNotifications } from './notifications/classify';
+import { formatRelative } from './notifications/time';
 import { NotificationTicker } from './notifications/NotificationTicker';
 import { TONE_CARD, TONE_TEXT, URGENT_CARD, isTicker, isUrgent } from './notifications/tone';
 
@@ -36,6 +38,46 @@ function urgentDestination(type: string): string {
 
 function urgentActionLabel(type: string): string {
   return URGENT_ROUTES[type]?.label ?? 'View details';
+}
+
+/** The urgent banner (ADR-487 D4a, ADR-524 D3): the newest unread urgent alert
+ *  on one line with a text Open, and the count of the rest INSIDE the same
+ *  banner, linking to the full list (owner's choice after a survey: iOS puts
+ *  "N more" on the top card, Fluent groups under one bar with a count,
+ *  PatternFly's overflow links to the drawer). Not dismissable without
+ *  acting: Open reads it AND goes to the thing it is about. Before ADR-524 the
+ *  link only navigated, so a handled alert stayed pinned. */
+function UrgentCard({ n, onOpen, more }: { n: Notification; onOpen: (id: string) => void; more: number }) {
+  return (
+    <div role="alert" className={`rounded-xl border overflow-hidden ${URGENT_CARD}`}>
+      <div className="flex items-center gap-3 px-3 py-2">
+        <span aria-hidden="true" className="text-base leading-none shrink-0">{n.icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-1.5 min-w-0">
+            <span className={`text-sm font-semibold truncate ${TONE_TEXT[n.tone] ?? TONE_TEXT.bad}`}>{n.label}</span>
+            <span className="text-xs text-muted-foreground shrink-0">· {formatRelative(n.created_at)}</span>
+          </div>
+          <div className="text-sm text-foreground truncate">{renderMessage(n.message)}</div>
+        </div>
+        {/* ADR-519: the item itself, falling back to the per-type page. */}
+        <Link
+          to={n.link ? notificationHref(n) : urgentDestination(n.type)}
+          onClick={() => onOpen(n.id)}
+          className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold text-danger hover:bg-danger/10"
+        >
+          {urgentActionLabel(n.type)}
+        </Link>
+      </div>
+      {more > 0 && (
+        <Link to="/notifications"
+          className="flex items-center justify-between border-t border-danger/20 px-3 py-1.5
+                     text-xs font-semibold text-danger hover:bg-danger/5">
+          <span>{more} more urgent · View all</span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -102,6 +144,9 @@ const NotificationBanner: React.FC = () => {
   const { notifications, employeeId, markRead, markAllRead, refresh } = useNotificationContext();
   const [responses, setResponses] = useState<ResponseMap>({});
   const [responding, setResponding] = useState<string | null>(null);
+  // ADR-524: the urgent banner is not shown on the notifications page itself,
+  // where it would repeat the first rows of the list.
+  const onInbox = useLocation().pathname.startsWith('/notifications');
   const [confirmationStatus, setConfirmationStatus] = useState<ConfirmationStatusMap>({});
   const [infoOpen, setInfoOpen] = useState(false);
   const fetchedDates = useRef<Set<string>>(new Set());
@@ -222,40 +267,11 @@ const NotificationBanner: React.FC = () => {
       {/* URGENT — outside the cap, so it cannot be scrolled away. Not a live
           region: it is a card the reader is meant to ACT on, not an
           announcement to interrupt them with. */}
-      {urgent.length > 0 && (
-        <div className="space-y-2">
-          {urgent.map(n => (
-            <div
-              key={n.id}
-              className={`rounded-xl border p-3 ${URGENT_CARD}`}
-            >
-              <div className="flex items-start gap-3">
-                <span aria-hidden="true" className="text-lg leading-none shrink-0 mt-0.5">
-                  {n.icon}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className={`text-sm font-semibold ${TONE_TEXT[n.tone] ?? TONE_TEXT.bad}`}>
-                    {n.label}
-                  </div>
-                  <div className="mt-0.5 text-sm text-foreground">
-                    {renderMessage(n.message)}
-                  </div>
-                  {/* Dismissable only by ACTING. No X: a dismissed-but-unhandled
-                      injury alert is the warningless wall ADR-381 described. The
-                      link resolves the alert by taking the reader to the thing
-                      it is about. */}
-                  <Link
-                    to={urgentDestination(n.type)}
-                    className="mt-2 inline-flex items-center gap-1 text-xs font-medium
-                               text-danger hover:underline"
-                  >
-                    {urgentActionLabel(n.type)}
-                  </Link>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+      {/* ADR-524: a queue. Only the newest unread urgent alert is shown in
+          full; the rest are one row. `urgent` comes from unread notifications
+          newest first, so opening (= reading) the shown one promotes the next. */}
+      {urgent.length > 0 && !onInbox && (
+        <UrgentCard n={urgent[0]} onOpen={dismiss} more={urgent.length - 1} />
       )}
 
       {/* HEIGHT CAP (ADR-275 D3) — a safety net, not the mechanism. D1 bounds the
@@ -455,7 +471,14 @@ const InfoCard: React.FC<{ n: Notification; onDismiss: (id: string) => void }> =
       <span aria-hidden="true" className={`shrink-0 mt-0.5 ${TONE_TEXT[n.tone] ?? TONE_TEXT.neutral}`}>
         {n.icon}
       </span>
-      <p className="flex-1 text-sm text-foreground">{renderMessage(n.message)}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-foreground">{renderMessage(n.message)}</p>
+        {/* ADR-519: open the thing it is about; opening it also clears it. */}
+        <Link to={notificationHref(n)} onClick={() => onDismiss(n.id)}
+          className="mt-1 inline-flex text-xs font-medium text-primary hover:underline">
+          Open
+        </Link>
+      </div>
       <button
         onClick={() => onDismiss(n.id)}
         className="text-muted-foreground hover:text-foreground transition-colors ml-2"

@@ -51,6 +51,13 @@ const STATIC: Record<string, string> = {
   // reachable without first knowing which tab it hides under.
   '/my-role': 'MyRole',
   '/incidents': 'Incidents',     // ADR-512: stolen-package report to review
+  // ADR-519: notification links. Each is a page with a phone screen.
+  '/': 'Home',
+  '/anchor-points': 'AnchorPoints',
+  '/campaigns': 'Campaigns',
+  '/my-training': 'MyTraining',
+  '/my-quiz': 'MyTraining',
+  '/notifications': 'Notifications',
 };
 
 /**
@@ -65,6 +72,11 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   // Dispatch oversight is a web surface. A walker's phone has no fleet view and
   // should not: the intended split is mobile=do, web=see.
   '/dispatch',
+  // ADR-519: oversight pages a notification can link to. Web only by the same
+  // split; on the phone these open the inbox instead.
+  '/dispatch-home', '/admin', '/assets', '/feedback', '/trainee-management',
+  '/trainer-marks', '/phase4-observation', '/vehicle-compliance', '/sort',
+  '/crew-status', '/build-routes',
 ]);
 
 /**

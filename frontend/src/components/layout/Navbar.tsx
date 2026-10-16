@@ -162,7 +162,7 @@ function TitleBar() {
     // own z-index went, because a child cannot escape its parent's stacking
     // context. Lifting the whole bar fixes both dropdowns at once.
     <div className="relative z-10 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-4">
+      <div className="layout-shell h-12 flex items-center justify-between gap-4">
         {/* Brand */}
         <div className="flex items-center gap-2 font-bold text-base tracking-tight shrink-0">
           <div className="flex items-center justify-center w-7 h-7 rounded-lg gradient-primary shadow-glow-primary">
@@ -322,7 +322,7 @@ const Navbar = () => {
 
       {/* Nav strip */}
       <nav className="glass border-x-0 border-t-0 border-b border-border/60 rounded-none">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="layout-shell">
           <div className="flex items-center justify-between h-10">
 
             {/* Desktop: scrollable link row */}

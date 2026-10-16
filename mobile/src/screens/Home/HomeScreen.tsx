@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
   TouchableOpacity,
@@ -19,6 +19,7 @@ import {
 } from '@theme/index';
 import { Avatar, Skeleton } from '@components/ui/primitives';
 import { partitionNotifications } from '@components/notifications/classify';
+import { useNotifications } from '@contexts/NotificationsContext';
 import CompanyStandingCard from '@components/CompanyStandingCard';
 
 function greet() {
@@ -217,6 +218,16 @@ export default function HomeScreen() {
     fetchAssignment();
     fetchNotifications();
   }, [fetchAssignment, fetchNotifications]));
+
+  // ADR-516. The inbox card follows the live notification store: when the set
+  // of unread ids changes (an arrival, a read elsewhere), refetch. Keyed on the
+  // ids, not the array, so the store's 60 s poll does not refetch for nothing.
+  // This fetch stays because it carries the per-date confirmation check above.
+  const { unread: liveUnread } = useNotifications();
+  const unreadKey = liveUnread.map(n => n.id).join(',');
+  useEffect(() => {
+    fetchNotifications();
+  }, [unreadKey, fetchNotifications]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

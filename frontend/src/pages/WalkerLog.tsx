@@ -1047,7 +1047,8 @@ export default function WalkerLog({ dataset = 'routes' }: {
   return (
     <div className="wl-touch min-h-screen bg-background text-foreground p-4 sm:p-8">
       <style>{TOUCH_CSS}</style>
-      <div className="mx-auto max-w-6xl space-y-6">
+      {/* Outside Layout, so it centres itself, at the shared shell width (ADR-523). */}
+      <div className="layout-wide space-y-6">
       <SectionHeader
         /* ADR-436 D3. This page is used in a van in direct sunlight and in a
            dark warehouse at 5am, and it followed the OS with no way to

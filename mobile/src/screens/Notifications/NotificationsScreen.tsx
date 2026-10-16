@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { localYMD } from '@hooks/localDate';
 import { errorText } from '@api/errorText';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
@@ -8,10 +9,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { useMyTruck } from '../../hooks/useMyTruck';
 import { NotificationTicker } from '@components/notifications/NotificationTicker';
+import { formatRelative } from '@components/notifications/time';
+import PageHeader from '@components/ui/PageHeader';
+import { useNotifications, type NotificationLink } from '@contexts/NotificationsContext';
+import { useOpenNotification } from '@components/notifications/NotificationArea';
 import {
   isTicker, isUrgent, toneStyle, urgentStyle,
   type NotificationSeverity, type NotificationTone,
@@ -37,6 +41,9 @@ type Notification = {
   tone?: NotificationTone;
   icon?: string;
   channels?: string[];
+  /** ADR-519: where tapping it goes. */
+  link?: NotificationLink;
+  actions?: { label: string; route: string; style: string }[];
 };
 
 type ConfirmationStatus = 'pending' | 'confirmed' | 'declined' | null;
@@ -68,19 +75,6 @@ function iconFor(n: Notification): string {
 
 function stripMarkdown(text: string): string {
   return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
-}
-
-function formatRelative(iso: string) {
-  try {
-    const diff = Date.now() - new Date(iso).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1)  return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24)  return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return days === 1 ? 'Yesterday' : `${days}d ago`;
-  } catch { return ''; }
 }
 
 // ── Confirmation status cache (30-second TTL, keyed by dispatch_date) ────────
@@ -244,7 +238,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
 
   // The confirmation window is open only during the 'active' dispatch phase.
   // Past-date and finalized dispatches are read-only regardless of status.
-  const localToday = new Date().toISOString().slice(0, 10);
+  const localToday = localYMD();
   const isPastDate = !!notif?.dispatch_date && notif.dispatch_date < localToday;
   const isFinalized = dispatchPhase === 'completed';
   // dispatch_assignment_info is always informational — no action required
@@ -443,7 +437,6 @@ const modalStyles = (c: ThemeColors) => StyleSheet.create({
 export default function NotificationsScreen() {
   const c = useColors();
   const { user } = useAuth();
-  const switchTab = useTabSwitch();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -475,7 +468,12 @@ export default function NotificationsScreen() {
     }
   }, [resolveEmployeeId]);
 
-  useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
+  // ADR-516: follow the live store, so an arrival while the inbox is open
+  // appears here too (it only fetched on mount before). Keyed on unread ids,
+  // so the store's 60 s poll does not refetch for nothing.
+  const { unread: liveUnread, refresh: refreshLive } = useNotifications();
+  const liveKey = liveUnread.map(n => n.id).join(',');
+  useEffect(() => { fetchNotifications(); }, [fetchNotifications, liveKey]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -487,8 +485,9 @@ export default function NotificationsScreen() {
     try {
       await apiClient.patch(`/notifications/${id}/read`);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      refreshLive();   // the pinned area and Home follow what is read here
     } catch { /* no-op */ }
-  }, []);
+  }, [refreshLive]);
 
   const markAllRead = useCallback(async () => {
     const eid = employeeDbId.current;
@@ -496,9 +495,10 @@ export default function NotificationsScreen() {
     setMarkingAll(true);
     try {
       const res = await apiClient.patch(`/notifications/employee/${eid}/read-all`);
+      refreshLive();
       // Server marks everything except assignments still awaiting a
       // Confirm/Decline (today/future) — mirror that locally.
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localYMD();
       setNotifications(prev => prev.map(n =>
         n.type === 'dispatch_assignment' && (!n.dispatch_date || n.dispatch_date >= today)
           ? n
@@ -515,15 +515,18 @@ export default function NotificationsScreen() {
       Alert.alert('Error', errorText(e, 'Could not mark notifications read.'));
     }
     finally { setMarkingAll(false); }
-  }, []);
+  }, [refreshLive]);
 
+  const openNotification = useOpenNotification();
   const handleTap = useCallback((item: Notification) => {
     if ((item.type === 'dispatch_assignment' || item.type === 'dispatch_assignment_info') && item.dispatch_date) {
       setActiveNotif(item);
-    } else if (!item.is_read) {
-      markAsRead(item.id);
+      return;
     }
-  }, [markAsRead]);
+    if (!item.is_read) markAsRead(item.id);
+    // ADR-519: open the thing it is about, unless it points back at this inbox.
+    if (item.link && item.link.route !== '/notifications') openNotification(item);
+  }, [markAsRead, openNotification]);
 
   const handleResponded = useCallback((notifId: string) => {
     setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, is_read: true } : n));
@@ -562,7 +565,7 @@ export default function NotificationsScreen() {
     const isDispatch  = item.type === 'dispatch_assignment';
     const isInfoOnly  = item.type === 'dispatch_assignment_info';
     const unread      = !item.is_read;
-    const isPast      = !!item.dispatch_date && item.dispatch_date < new Date().toISOString().slice(0, 10);
+    const isPast      = !!item.dispatch_date && item.dispatch_date < localYMD();
 
     return (
       <TouchableOpacity
@@ -630,36 +633,19 @@ export default function NotificationsScreen() {
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
 
-      {/* ── Header ── */}
-      <View style={s.header}>
-        {/* Back */}
-        <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
-          <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
-        </TouchableOpacity>
-
-        {/* Centred title + badge */}
-        <View style={s.headerCenter}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
-            <Text style={s.pageTitle}>Notifications</Text>
-            {unreadCount > 0 && (
-              <View style={[s.unreadBadge, { backgroundColor: c.danger }]}>
-                <Text style={s.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Right action */}
-        <View style={s.headerRight}>
-          {unreadCount > 0 && (
-            <TouchableOpacity onPress={markAllRead} disabled={markingAll}>
-              {markingAll
-                ? <ActivityIndicator color={c.primary} size="small" />
-                : <Text style={[s.markAllText, { color: c.primary }]}>All read</Text>}
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+      {/* ADR-517: the shared header. No back chevron: this is a top-level tab. */}
+      <PageHeader
+        title="Notifications"
+        badge={unreadCount}
+        right={unreadCount > 0 ? (
+          <TouchableOpacity onPress={markAllRead} disabled={markingAll} accessibilityRole="button"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            {markingAll
+              ? <ActivityIndicator color={c.primary} size="small" />
+              : <Text style={[s.markAllText, { color: c.primary }]}>All read</Text>}
+          </TouchableOpacity>
+        ) : undefined}
+      />
 
       {loading ? (
         <View style={s.center}><ActivityIndicator color={c.primary} size="large" /></View>
@@ -691,9 +677,16 @@ export default function NotificationsScreen() {
                   >
                     <Text style={s.urgentIcon}>{iconFor(item)}</Text>
                     <View style={s.urgentBody}>
-                      <Text style={[s.urgentLabel, { color: u.text }]}>
-                        {labelFor(item)}
-                      </Text>
+                      <View style={s.urgentHead}>
+                        <Text style={[s.urgentLabel, { color: u.text }]}>
+                          {labelFor(item)}
+                        </Text>
+                        {/* How long it has been going on: the alerts that most
+                            need it were the only rows without one. */}
+                        <Text style={[s.urgentTime, { color: c.mutedForeground }]}>
+                          {formatRelative(item.created_at)}
+                        </Text>
+                      </View>
                       <Text style={[s.urgentMessage, { color: c.foreground }]}>
                         {stripMarkdown(item.message)}
                       </Text>
@@ -827,6 +820,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   urgentIcon:    { fontSize: fontSize.lg, marginTop: 1 },
   urgentBody:    { flex: 1, gap: 2 },
+  urgentHead:    { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+  urgentTime:    { fontSize: fontSize.xs },
   urgentLabel:   { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   urgentMessage: { fontSize: fontSize.sm },
 

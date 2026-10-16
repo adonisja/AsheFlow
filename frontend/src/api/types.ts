@@ -642,6 +642,14 @@ export interface AnchorPoint {
   arrived_at: string | null;
   confirmed_by: string | null;
   confirmed_at: string | null;
+  // ADR-522 D5: returned by AnchorPointResponse all along; declared now.
+  lat?: number | null;
+  lng?: number | null;
+  expected_departure_at?: string | null;
+  actual_departed_at?: string | null;
+  is_running_late?: boolean;
+  running_late_flagged_at?: string | null;
+  confirmed_by_name?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -831,6 +839,22 @@ export interface StolenPackageFiled {
   incident_id: string;
   reviewers_notified: number;
   review_required: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Help request (ADR-519 D5): GET /shift-ops/help-requests/{id}
+// ---------------------------------------------------------------------------
+
+export interface HelpRequest {
+  id: string;
+  date: string;
+  check_in_number: number;
+  routes_remaining: number;
+  working_crew_count: number;
+  ncns_count: number;
+  submitted_at: string | null;
+  driver: { id: string; name: string | null; phone: string | null };
+  truck: { id: string; name: string } | null;
 }
 
 // ---------------------------------------------------------------------------

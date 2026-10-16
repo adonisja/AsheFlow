@@ -169,7 +169,12 @@ case "$PLATFORM" in
     echo "Building and launching on Android..."
     # run-android sets up `adb reverse tcp:8081` for Metro automatically; the
     # app itself reaches the backend via 10.0.2.2:8000 (see mobile/src/api/client.ts).
-    (cd mobile && npx react-native run-android) || exit 1
+    # --active-arch-only: build ONLY the connected device's ABI (arm64-v8a on an
+    # Apple-silicon emulator). gradle.properties lists four ABIs for release
+    # builds; bundling all four made the debug APK 161 MB, and the emulator's
+    # 6 GB data partition ran out of room to install it ("Requested internal
+    # only, but not enough space"). Release builds are unaffected.
+    (cd mobile && npx react-native run-android --active-arch-only) || exit 1
 
     finish_metro
     ;;

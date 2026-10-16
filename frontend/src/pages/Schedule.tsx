@@ -644,7 +644,7 @@ const Schedule = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <ConfirmDialog {...workerConfirmState} onCancel={workerCancelConfirm} />
       <h1 className="page-title">My Schedule</h1>
 

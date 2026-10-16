@@ -164,6 +164,7 @@ def approve_employee_off_day(
         company_id=caller.company_id,
         employee_id=off_day.employee_id,
         type="offday_approved",
+        target_id=off_day.id,   # ADR-519
         message=f"Your request to have {off_day.day_of_week}s off has been approved.",
     )
     write_audit(
@@ -202,6 +203,7 @@ def reject_employee_off_day(
         company_id=caller.company_id,
         employee_id=off_day.employee_id,
         type="offday_rejected",
+        target_id=off_day.id,   # ADR-519
         message=f"Your request to have {off_day.day_of_week}s off was not approved.",
     )
     write_audit(

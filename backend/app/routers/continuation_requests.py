@@ -104,6 +104,7 @@ def submit_continuation_request(
         company_id=caller.company_id,
         employee_id=payload.trainer_id,
         type="continuation_request",
+        target_id=new_request.id,   # ADR-519
         message=f"{trainee.name} has requested to continue training with you on their next assigned day.",
     )
 

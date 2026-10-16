@@ -11,6 +11,7 @@
  * addresses nobody has profiled, then the known set for reference.
  */
 import React, { useState, useCallback } from 'react';
+import { localYMD } from '@hooks/localDate';
 import {
   View,
   Text,
@@ -66,7 +67,7 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localYMD();
 }
 
 function StopRow({ stop, c }: { stop: TruckBuildingStop; c: ThemeColors }) {

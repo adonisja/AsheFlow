@@ -7,7 +7,7 @@ import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
@@ -42,6 +42,9 @@ export * from './roles';
 import { TAB_GATES } from './roles';
 import MyRoleScreen from '@screens/MyRole/MyRoleScreen';
 import InterruptiveHost from '@components/notifications/InterruptiveHost';
+import { ArrivalBanner, NotificationTickerDock, NotificationTopArea, PushTapHandler } from '@components/notifications/NotificationArea';
+import HelpRequestSheet from '@components/notifications/HelpRequestSheet';
+import { NotificationsProvider } from '@contexts/NotificationsContext';
 import { registerForPush } from '@api/pushRegistration';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
@@ -61,8 +64,17 @@ import SurveyNavigator          from '@screens/Survey/SurveyScreens';   // ADR-5
 import MfaGracePrompt           from '@components/MfaGracePrompt';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
-const TabSwitchContext = createContext<(key: string) => void>(() => {});
+/** What a notification link hands the tab it opens (ADR-519): the item to focus. */
+export type TabParams = { id?: string | null; date?: string | null; kind?: string | null };
+const TabSwitchContext = createContext<(key: string, params?: TabParams) => void>(() => {});
 export const useTabSwitch = () => useContext(TabSwitchContext);
+/** The params the last switch handed THIS tab, or null. `nonce` changes on every
+ *  switch, so opening the same item twice still re-focuses it. */
+const TabParamsContext = createContext<{ key: string; params: TabParams; nonce: number } | null>(null);
+export function useTabParams(key: string) {
+  const v = useContext(TabParamsContext);
+  return v && v.key === key ? v : null;
+}
 
 // ── Navigator param lists ─────────────────────────────────────────────────────
 export type RootStackParamList = {
@@ -302,9 +314,11 @@ function MainShell() {
   }, []);
 
   // Remap 'NotificationsTab' alias so HomeScreen can switch to it by a stable name
-  const switchTab = useCallback((key: string) => {
+  const [tabParams, setTabParams] = useState<{ key: string; params: TabParams; nonce: number } | null>(null);
+  const switchTab = useCallback((key: string, params?: TabParams) => {
     const target = key === 'NotificationsTab' ? 'Notifications' : key;
     setActiveKey(target);
+    setTabParams(params ? { key: target, params, nonce: Date.now() } : null);
   }, []);
 
   // ADR-289: capabilities arrive AFTER the first render, so a tab that was
@@ -321,6 +335,7 @@ function MainShell() {
 
   return (
     <TabSwitchContext.Provider value={switchTab}>
+    <TabParamsContext.Provider value={tabParams}>
       {/* ADR-381 D2 — the skippable half of the grace period. Renders over
           the shell rather than replacing it, because while counting down they
           may still work. Mounted here so it appears ONCE PER LAUNCH: MainShell
@@ -332,12 +347,30 @@ function MainShell() {
           OVER the shell rather than replacing it, because a prompt is not a
           wall — and the gate inside it is the one case that behaves like one. */}
       <InterruptiveHost />
-      <View style={{ flex: 1 }}>
+      {/* ADR-516. The notification area lives here, OUTSIDE every screen, so it
+          cannot be scrolled away (ADR-381) and shows on every tab. Each piece
+          renders nothing when it has nothing to show. */}
+      <NotificationsProvider>
         <View style={{ flex: 1 }}>
-          <ActiveScreen />
+          {/* ADR-524: not on the inbox itself, where it repeats the list's first rows. */}
+          {activeKey !== 'Notifications' && <NotificationTopArea />}
+          {/* A NESTED provider, so screens measure their safe area from here.
+              Native SafeAreaView takes its insets from the nearest provider's
+              position (getSafeAreaInsets(providerView)), not its own: without
+              this, a screen pushed down by the top area still added the
+              status-bar inset and left a blank gap (seen on the emulator). */}
+          <SafeAreaProvider style={{ flex: 1 }}>
+            <ActiveScreen />
+          </SafeAreaProvider>
+          {/* Not on the inbox: it lists everything and has its own ticker. */}
+          {activeKey !== 'Notifications' && <NotificationTickerDock />}
+          <HorizontalTabBar tabs={visibleTabs} activeKey={activeKey} onSelect={setActiveKey} />
+          <ArrivalBanner />
+          <HelpRequestSheet />{/* ADR-519 D5 */}
+          <PushTapHandler />{/* ADR-519 D8: a tapped push opens its item */}
         </View>
-        <HorizontalTabBar tabs={visibleTabs} activeKey={activeKey} onSelect={setActiveKey} />
-      </View>
+      </NotificationsProvider>
+    </TabParamsContext.Provider>
     </TabSwitchContext.Provider>
   );
 }

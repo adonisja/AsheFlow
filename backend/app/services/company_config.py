@@ -467,9 +467,6 @@ class ResolvedConfig:
     # configured a target for that metric; callers must render the reported value
     # with no pass/fail judgement rather than treating None as a failure.
 
-    def target_for(self, key: str) -> float | None:
-        """Configured target for a metric key, or None if unset."""
-        return getattr(self, METRIC_TARGET_FIELD[key], None)
 
 
 # ---------------------------------------------------------------------------

@@ -143,6 +143,7 @@ def submit_schedule_change_request(
             company_id=caller.company_id,
             employee_id=reviewer.id,
             type="schedule_change_request",
+            target_id=req.id,   # ADR-519
             message=f"{caller.name} has submitted a request to {type_label}."
             + (f" Reason: {payload.reason}" if payload.reason else ""),
         )
@@ -306,6 +307,7 @@ def approve_schedule_change_request(
         company_id=reviewer.company_id,
         employee_id=req.employee_id,
         type="schedule_change_approved",
+        target_id=req.id,   # ADR-519
         message=f"Your request to {type_label} has been approved and your schedule has been updated.",
     )
     write_audit(
@@ -358,6 +360,7 @@ def reject_schedule_change_request(
         company_id=reviewer.company_id,
         employee_id=req.employee_id,
         type="schedule_change_rejected",
+        target_id=req.id,   # ADR-519
         message="Your schedule change request was reviewed and not approved.",
     )
     write_audit(

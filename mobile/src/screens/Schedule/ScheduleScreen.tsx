@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { localDayOf } from '@hooks/localDate';
 import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
@@ -526,7 +527,7 @@ function SCRHistory({ list, c, onNew }: { list: SCR[]; c: ThemeColors; onNew: ()
             <View key={r.id} style={[s.listRow, i < list.length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
               <View style={{ flex: 1, gap: 3 }}>
                 <Text style={[s.reqDate, { color: c.foreground }]}>{SCR_TYPE_LABELS[r.request_type]}</Text>
-                <Text style={[s.reqMeta, { color: c.mutedForeground }]}>{r.created_at.split('T')[0]}</Text>
+                <Text style={[s.reqMeta, { color: c.mutedForeground }]}>{localDayOf(r.created_at)}</Text>
                 {r.days_to_add.length > 0   && <Text style={[s.reqMeta, { color: c.mutedForeground }]}>Add: {r.days_to_add.join(', ')}</Text>}
                 {r.days_to_drop.length > 0  && <Text style={[s.reqMeta, { color: c.mutedForeground }]}>Drop: {r.days_to_drop.join(', ')}</Text>}
                 {r.proposed_schedule?.length ? <Text style={[s.reqMeta, { color: c.mutedForeground }]}>Proposed: {r.proposed_schedule.join(', ')}</Text> : null}

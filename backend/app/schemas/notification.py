@@ -5,9 +5,17 @@ from pydantic import BaseModel, ConfigDict
 
 import logging
 
-from app.services.notification_spec import Channel, Severity, Tone, resolve_spec
+from app.services.notification_spec import Channel, Severity, Tone, link_for, resolve_spec
 
 logger = logging.getLogger(__name__)
+
+
+class NotificationLinkOut(BaseModel):
+    """Where a notification opens (ADR-519)."""
+    route: str
+    kind: Optional[str] = None
+    id: Optional[str] = None
+    date: Optional[str] = None
 
 
 class NotificationActionOut(BaseModel):
@@ -93,6 +101,12 @@ class NotificationResponse(BaseModel):
     # label or the style. The `style` is a semantic role ("primary", "danger"),
     # never a colour — the surfaces own different palettes.
     actions: list[NotificationActionOut] = []
+
+    # ADR-519: where tapping it goes, resolved per read like `channels`.
+    # `route` has any `{id}` filled; `kind` and `id` let a screen focus the item;
+    # `date` is the row's dispatch_date. Always present (never None) so both
+    # transports carry the same keys.
+    link: "NotificationLinkOut"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -260,4 +274,27 @@ def spec_fields(notification_type: str, row=None, db=None) -> dict:
         # After degrade_channels, so a degraded gate (now a prompt) is settled too.
         fields["channels"] = drop_if_settled(db, row, fields["channels"])
 
+    fields["link"] = resolve_link(notification_type, row)
     return fields
+
+
+def resolve_link(notification_type: str, row=None) -> dict:
+    """ADR-519: the registry's Link for this type, with the row's reference.
+
+    A templated route (`/help-requests/{id}`) needs the id; a row written before
+    ADR-519 has none, so it opens the link's fallback page instead of a broken
+    path. A kind with no id still opens its page; the client simply has nothing
+    to focus.
+    """
+    link = link_for(notification_type)
+    target_id = getattr(row, "target_id", None) if row is not None else None
+    d = getattr(row, "dispatch_date", None) if row is not None else None
+    route = link.route
+    if "{id}" in route:
+        route = route.replace("{id}", target_id) if target_id else (link.fallback or "/notifications")
+    return {
+        "route": route,
+        "kind": link.kind,
+        "id": target_id if link.kind else None,
+        "date": d.isoformat() if d is not None else None,
+    }

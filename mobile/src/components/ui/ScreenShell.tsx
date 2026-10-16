@@ -1,12 +1,11 @@
 import React from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, RefreshControl,
-  ActivityIndicator, TouchableOpacity, Platform,
+  View, ScrollView, StyleSheet, RefreshControl, ActivityIndicator, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
-import ThemeToggle from '@components/ui/ThemeToggle';
+import { spacing, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 type Edge = 'top' | 'bottom' | 'left' | 'right';
 
@@ -24,11 +23,11 @@ type Props = {
   noHeader?: boolean;
   /** Show a back chevron on the left; tapping calls this */
   onBack?: () => void;
-  /** Extra element rendered on the right side of the header (e.g. refresh button).
-   * When omitted, a quick light/dark ThemeToggle is shown by default (ADR-207). */
+  /** The screen's own action on the right of the header (e.g. refresh).
+   *  No default: the theme toggle lives in Account (ADR-517 D3). */
   headerRight?: React.ReactNode;
-  /** Suppress the default header ThemeToggle (e.g. Account, which has its own control) */
-  hideThemeToggle?: boolean;
+  /** `danger` tints the subtitle (e.g. "No truck assignment today."). */
+  subtitleTone?: 'muted' | 'danger';
   /** Pinned element between the header and the scroll (e.g. a segmented tab bar). */
   belowHeader?: React.ReactNode;
   /**
@@ -42,7 +41,7 @@ type Props = {
 
 export default function ScreenShell({
   title, subtitle, loading, refreshing, onRefresh, children,
-  edges = ['top'], noHeader = false, onBack, headerRight, hideThemeToggle = false,
+  edges = ['top'], noHeader = false, onBack, headerRight, subtitleTone,
   belowHeader, keyboardInsets = false,
 }: Props) {
   const c = useColors();
@@ -51,6 +50,11 @@ export default function ScreenShell({
   if (loading) {
     return (
       <SafeAreaView style={s.safe} edges={edges}>
+        {/* The header stays while loading, so the title does not flash in. */}
+        {!noHeader && title ? (
+          <PageHeader title={title} subtitle={subtitle} subtitleTone={subtitleTone}
+            right={headerRight} onBack={onBack} />
+        ) : null}
         <View style={s.center}><ActivityIndicator size="large" color={c.primary} /></View>
       </SafeAreaView>
     );
@@ -58,29 +62,11 @@ export default function ScreenShell({
 
   return (
     <SafeAreaView style={s.safe} edges={edges}>
-      {!noHeader && (
-        <View style={s.header}>
-          {/* Left — back button or spacer */}
-          <View style={s.headerSide}>
-            {onBack && (
-              <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
-                <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Centre — title + subtitle stacked */}
-          <View style={s.headerCenter}>
-            <Text style={s.title}>{title}</Text>
-            {subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
-          </View>
-
-          {/* Right — custom action, else a quick light/dark toggle by default */}
-          <View style={s.headerSide}>
-            {headerRight ?? (hideThemeToggle ? null : <ThemeToggle />)}
-          </View>
-        </View>
-      )}
+      {/* ADR-517: the one shared header, not a copy of it. */}
+      {!noHeader && title ? (
+        <PageHeader title={title} subtitle={subtitle} subtitleTone={subtitleTone}
+          right={headerRight} onBack={onBack} />
+      ) : null}
       {belowHeader}
       <ScrollView
         style={s.scroll}
@@ -108,22 +94,6 @@ export default function ScreenShell({
 
 const styles = (c: ThemeColors) => StyleSheet.create({
   safe:           { flex: 1, backgroundColor: c.background },
-  header:         {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-    backgroundColor: c.background,
-    borderBottomWidth: 1,
-    borderBottomColor: c.border,
-  },
-  headerSide:     { width: 44, alignItems: 'center' },
-  headerCenter:   { flex: 1, alignItems: 'center' },
-  backBtn:        { padding: spacing.xs },
-  backChevron:    { fontSize: 30, lineHeight: 32, fontWeight: '300' },
-  title:          { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: c.foreground },
-  subtitle:       { fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 },
   scroll:         { flex: 1 },
   content:        { padding: spacing.md, paddingBottom: 80 },
   center:         { flex: 1, justifyContent: 'center', alignItems: 'center' },

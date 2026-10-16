@@ -190,6 +190,7 @@ def issue_quiz(
         company_id=caller.company_id,
         employee_id=trainee_id,
         type="quiz_issued",
+        target_id=quiz.id,   # ADR-519
         message="Your graduation quiz is ready. Open AsheFlow to complete it. "
             "Submit your answers before the end of your shift today.",
     )
@@ -294,6 +295,7 @@ def submit_quiz(
             company_id=caller.company_id,
             employee_id=recipient.id,
             type="quiz_submitted",
+            target_id=quiz.id,   # ADR-519
             message=mgmt_message,
         )
 
@@ -315,6 +317,7 @@ def submit_quiz(
                     company_id=caller.company_id,
                     employee_id=record.trainer_id,
                     type="quiz_submitted_trainer",
+                    target_id=quiz.id,   # ADR-519
                     message=f"{caller.name} has submitted their graduation quiz (attempt {quiz.attempt_number}).",
                 )
 
@@ -442,6 +445,7 @@ def review_quiz(
             company_id=caller.company_id,
             employee_id=quiz.trainee_id,
             type="quiz_result_confirmed",
+            target_id=quiz.id,   # ADR-519
             message=trainee_msg,
         )
 

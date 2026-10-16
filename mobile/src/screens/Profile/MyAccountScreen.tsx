@@ -51,8 +51,7 @@ export default function MyAccountScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      {/* hideToggle on Settings only — that tab owns the theme control in its body */}
-      <PageHeader title={HEADER_TITLE[activeTab]} hideToggle={activeTab === 'settings'} />
+      <PageHeader title={HEADER_TITLE[activeTab]} />
 
       <View style={s.tabBarWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabBarScroll}>

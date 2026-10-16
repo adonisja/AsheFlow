@@ -162,6 +162,7 @@ def sync_adp_employees() -> dict:
                             company_id=integration.company_id,
                             audience=Audience.MANAGEMENT,
                             type="employee_offboarding",
+                            target_id=employee.id,   # ADR-519
                             message=(
                                 f"Offboarded terminated employee {employee.name} "
                                 f"completed at {offboard_date.strftime('%A %b %d')}."

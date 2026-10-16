@@ -144,6 +144,7 @@ def _flag(db: Session, address: str, bounce_type: str, when: datetime) -> int:
                 company_id=emp.company_id,
                 employee_id=manager.id,
                 type="email_bounced",
+                target_id=emp.id,   # ADR-519
                 message=f"Email to {emp.name} {reason} their address. "
                          f"Check the address on their profile and resend.",
             )

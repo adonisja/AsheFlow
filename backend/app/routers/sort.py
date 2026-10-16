@@ -2706,6 +2706,7 @@ def confirm_load(
             company_id=caller.company_id,
             employee_id=peer.id,
             type="load_confirmed",
+            target_id=truck_id,   # ADR-519
             dispatch_date=sort_date,
             message=f"{caller.name} confirmed loading for {truck_label}{short_note}.",
         )
@@ -2787,6 +2788,7 @@ def unconfirm_load(
             company_id=caller.company_id,
             employee_id=peer.id,
             type="load_confirmed",
+            target_id=truck_id,   # ADR-519
             dispatch_date=sort_date,
             message=f"{caller.name} reopened loading for {truck_label}.",
         )
@@ -3008,6 +3010,7 @@ def add_freight(
                 company_id=caller.company_id,
                 employee_id=peer.id,
                 type="load_confirmed",
+                target_id=None,   # ADR-519: several trucks at once: the sort page, by date
                 dispatch_date=sort_date,
                 message=f"{caller.name} added {added} item(s) to {labels}.",
             )

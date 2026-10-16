@@ -100,6 +100,7 @@ def check_training_submissions() -> dict:
                     company_id=record.company_id,
                     employee_id=recipient.id,
                     type="training_record_unsubmitted",
+                    target_id=record.trainee_id,   # ADR-519
                     message=message,
                 )
 

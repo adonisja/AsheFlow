@@ -121,6 +121,55 @@ export async function registerForPush(): Promise<() => void> {
 }
 
 /**
+ * Call `listener` when a push arrives while the app is open (ADR-516 D5).
+ *
+ * FCM does not display a foreground message on Android; it hands it to the
+ * app, which until now dropped it. The notification area refreshes from the
+ * server rather than trusting the payload, so the listener takes no message:
+ * the push is only a nudge that something new exists. Required lazily for the
+ * same reason as `messaging()`: iOS must never evaluate the package.
+ */
+export function onForegroundMessage(listener: () => void): () => void {
+  const noop = () => {};
+  if (Platform.OS !== 'android') return noop;
+  try {
+    const { getMessaging, onMessage } = require('@react-native-firebase/messaging');
+    return onMessage(getMessaging(), () => listener());
+  } catch (e) {
+    if (__DEV__) console.warn('[push] foreground listener unavailable:', (e as Error)?.message);
+    return noop;
+  }
+}
+
+/**
+ * Call `listener` with a push's data when the user TAPS it (ADR-519 D8):
+ * from the background (`onNotificationOpenedApp`) or from a cold start
+ * (`getInitialNotification`, read once). The server puts the notification's
+ * link in the data as `link_route` / `link_kind` / `link_id` / `link_date`.
+ * Android only, required lazily, like the other listeners here.
+ */
+export function onPushOpened(listener: (data: Record<string, string>) => void): () => void {
+  const noop = () => {};
+  if (Platform.OS !== 'android') return noop;
+  try {
+    const { getMessaging, onNotificationOpenedApp, getInitialNotification } =
+      require('@react-native-firebase/messaging');
+    const m = getMessaging();
+    const emit = (msg: { data?: Record<string, unknown> } | null) => {
+      if (!msg?.data) return;
+      const data: Record<string, string> = {};
+      for (const [k, v] of Object.entries(msg.data)) if (typeof v === 'string') data[k] = v;
+      listener(data);
+    };
+    getInitialNotification(m).then(emit).catch(() => {});
+    return onNotificationOpenedApp(m, emit);
+  } catch (e) {
+    if (__DEV__) console.warn('[push] tap listener unavailable:', (e as Error)?.message);
+    return noop;
+  }
+}
+
+/**
  * Revoke this device. Call BEFORE the session tokens are cleared — the DELETE
  * is authenticated, so afterwards it would 401 and the device would keep
  * receiving the previous user's notifications.

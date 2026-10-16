@@ -33,6 +33,11 @@ class Notification(Base):
     dispatch_date = Column(Date, nullable=True)
     # dispatch_assignment: expires at confirmation deadline; dispatch_assignment_info: expires at midnight of dispatch_date; others: NULL
     expires_at    = Column(DateTime(timezone=True), nullable=True)
+    # ADR-519: the id of the thing this notification is about (an incident, a
+    # help request, a truck, a request...). Its KIND comes from the registry
+    # (notification_spec.LINKS), so the two cannot disagree. With dispatch_date
+    # it is the whole reference. Nullable: rows before ADR-519 open their page.
+    target_id     = Column(String(64), nullable=True)
 
     # ── Delivery state (ADR-487 D3) ──────────────────────────────────────────
     #

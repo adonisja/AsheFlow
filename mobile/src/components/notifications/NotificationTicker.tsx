@@ -194,7 +194,11 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     overflow: 'hidden',
   },
   strip: { height: 32, justifyContent: 'center' },
-  scroller: { flexDirection: 'row', alignItems: 'center' },
+  // A wide canvas, so each copy of the line lays out at its NATURAL width. In a
+  // screen-wide parent, `numberOfLines={1}` truncated every copy with "…"
+  // before it moved, so the full line never scrolled past (ADR-516, seen on
+  // the emulator once the ticker ran outside the inbox). The shell clips it.
+  scroller: { flexDirection: 'row', alignItems: 'center', width: 10000 },
   scrollText: {
     fontSize: fontSize.xs,
     color: c.mutedForeground,
