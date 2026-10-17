@@ -3,7 +3,7 @@ import { formatDate } from '../utils/date';
 import SelectMenu from '../components/ui/SelectMenu';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
+  AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow } from '../api/types';
@@ -327,8 +327,11 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
               <label className="block text-sm font-medium text-foreground">
                 Role <span className="text-danger">*</span>
               </label>
-              <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
-                <div className="flex-1">
+              {/* ADR-531 D2: no wrapper box or chevron of our own -- SelectMenu
+                  draws both, and the extra pair rendered as a box inside a box
+                  with two arrows. */}
+              <div>
+                <div>
                   {/* Was `required`. SelectMenu does not participate in native
                       form validation, but this list has no empty option -- the
                       value is always one of allowedRoles -- so `required` was
@@ -348,9 +351,6 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                     onChange={v => set('role', v)}
                   />
                 </div>
-                <span className="flex items-center pr-3 text-muted-foreground pointer-events-none shrink-0">
-                  <ChevronDown className="w-4 h-4" />
-                </span>
               </div>
               {roleNotice && (
                 <p className="text-xs text-warning bg-warning/10 border border-warning/20 rounded-lg px-2.5 py-1.5">
@@ -1019,7 +1019,6 @@ function PeopleTab() {
               onChange={v => { setFilter(v); setPage(0); }}
             />
           </div>
-          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
         <div className="relative">
           <div className="w-44">
@@ -1036,7 +1035,6 @@ function PeopleTab() {
               onChange={v => { setStatusFilter(v as typeof statusFilter); setPage(0); }}
             />
           </div>
-          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
         <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
           <RefreshCw className="w-4 h-4" />
@@ -2251,7 +2249,6 @@ function FleetTab() {
               onChange={v => setStatusFilter(v as typeof statusFilter)}
             />
           </div>
-          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
         <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
           <RefreshCw className="w-4 h-4" />

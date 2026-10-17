@@ -59,6 +59,12 @@ export default function SelectMenu({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // ADR-531. The panel, wherever it is rendered. A portalled panel lives in
+  // document.body, OUTSIDE `ref` -- so testing `ref` alone read every press on
+  // an option as an outside click, closed the list on mousedown, and the
+  // option's onClick never ran. Every portalled menu silently kept its old
+  // value (the invite form invited a Driver whatever role was picked).
+  const panelRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
 
   // Measured before paint, so a portalled panel never shows at the wrong spot
@@ -72,7 +78,9 @@ export default function SelectMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     // A fixed panel cannot follow its trigger, so scrolling must dismiss it
@@ -95,6 +103,7 @@ export default function SelectMenu({
   // modes cannot drift apart on a later edit.
   const panel = (
     <div
+      ref={panelRef}
       role="listbox"
       style={portal && rect
         ? { position: 'fixed', top: rect.top, left: rect.left, width: rect.width }

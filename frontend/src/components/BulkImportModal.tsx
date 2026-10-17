@@ -15,7 +15,7 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import {
   X, Upload, CheckCircle2, XCircle, AlertTriangle,
-  ChevronDown, Download, ArrowRight, RotateCcw,
+  Download, ArrowRight, RotateCcw,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
@@ -424,7 +424,6 @@ function PreviewStep({ rows, onChange, onSubmit, onBack, submitting }: {
                         portal
                         onChange={v => update(i, 'role', v)}
                       />
-                      <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
                     </div>
                   </td>
                   <td className="px-3 py-1.5">
