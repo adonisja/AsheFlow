@@ -49,7 +49,13 @@ class TestEarnedRolesCannotBeAssignedAtHire:
         assert "field_supervisor" not in employees.EARNED_ROLES
 
     def test_the_check_is_one_membership_test(self):
-        assert "if employee.role in EARNED_ROLES and not onboarding:" in SRC
+        """ADR-532: now one shared rule (_grant_refusal) for create, bulk and
+        edit. Run it rather than match its source -- every earned role is
+        refused at hire, for admins too, with the EARNED_ROLES message."""
+        for role, msg in employees.EARNED_ROLES.items():
+            for caller in ("admin", "management"):
+                assert employees._grant_refusal(caller, role, onboarding=False) == (400, msg)
+        assert "_grant_refusal(caller.role, employee.role, onboarding)" in SRC
 
     def test_each_refusal_names_the_entry_path(self):
         """'You cannot do that' without 'do this instead' sends the manager to
@@ -66,19 +72,21 @@ class TestEarnedRolesCannotBeAssignedAtHire:
 
 class TestManagementMayCreateBothEntryRoles:
     def test_the_two_track_entry_points(self):
-        """ADR-264 D2 — two parallel tracks, so two entry points."""
-        assert 'employee.role not in ("driver_trainee", "trainee")' in SRC
+        """ADR-264 D2 — two parallel tracks, so two entry points. ADR-532 adds
+        dispatch (owner, 2026-10-17)."""
+        for role in ("driver_trainee", "trainee", "dispatch"):
+            assert employees._grant_refusal("management", role, onboarding=False) is None
 
     def test_driver_was_replaced_not_supplemented(self):
         """Leaving `driver` in the allowed set would let management create one
         directly, defeating the earned-role rule for exactly the caller who
         hires most often."""
-        i = SRC.index('caller.role == "management"')
-        window = SRC[i : i + 220]
-        assert '"driver"' not in window.replace('"driver_trainee"', "")
+        assert "driver" not in employees.ROLE_GRANTS["management"]
+        assert employees._grant_refusal("management", "driver", onboarding=False) is not None
 
     def test_the_error_names_what_they_can_create(self):
-        assert "driver trainee or trainee accounts" in SRC
+        _, detail = employees._grant_refusal("management", "admin", onboarding=False)
+        assert "trainees, driver trainees and dispatchers" in detail
 
 
 class TestBothTracksHaveAnEntryPoint:
@@ -109,30 +117,34 @@ class TestBulkImportEnforcesTheSameRule:
 
     BULK = inspect.getsource(employees.bulk_import_employees)
 
+    CHECK = "refusal = _grant_refusal(caller.role, row.role, onboarding)"
+
     def test_it_checks_the_earned_roles(self):
-        assert "if row.role in EARNED_ROLES and not onboarding:" in self.BULK
+        """ADR-532: the shared rule, which covers earned roles AND who grants."""
+        assert self.CHECK in self.BULK
 
     def test_it_uses_the_shared_constant_not_a_copy(self):
         """A duplicated list drifts the first time one is edited and not the
-        other — which is exactly how captain came to be hireable."""
+        other — which is exactly how captain came to be hireable (and how a
+        manager's CSV could create an admin, ADR-532)."""
         assert "EARNED_ROLES = {" not in self.BULK
-        assert "EARNED_ROLES[row.role]" in self.BULK
+        assert "ROLE_GRANTS = {" not in self.BULK
 
     def test_a_bad_row_is_skipped_not_fatal(self):
         """One bad row in a hundred-row CSV must not discard the ninety-nine
         good ones."""
-        i = self.BULK.index("if row.role in EARNED_ROLES and not onboarding:")
+        i = self.BULK.index(self.CHECK)
         block = self.BULK[i : i + 400]
         assert 'status="skipped"' in block
         assert "continue" in block
         assert "raise" not in block
 
     def test_the_skip_reason_names_the_entry_path(self):
-        i = self.BULK.index("if row.role in EARNED_ROLES and not onboarding:")
-        assert "reason=EARNED_ROLES[row.role]" in self.BULK[i : i + 400]
+        i = self.BULK.index(self.CHECK)
+        assert "reason=refusal[1]" in self.BULK[i : i + 400]
 
     def test_the_check_precedes_the_insert(self):
-        assert self.BULK.index("if row.role in EARNED_ROLES and not onboarding:") < self.BULK.index("db_employee = Employee(")
+        assert self.BULK.index(self.CHECK) < self.BULK.index("db_employee = Employee(")
 
 
 class TestEveryEarnedRoleStaysReachable:

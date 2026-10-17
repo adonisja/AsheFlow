@@ -12,6 +12,7 @@ import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import CompanyZoneMap from '../components/OperatingZoneMap';
 import { useConfirm } from '../hooks/useConfirm';
+import { roleLabel } from '../utils/roleLabels';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,10 +91,17 @@ type Tab = 'people' | 'fleet' | 'system';
 
 // ADR-256/264 added captain, field_supervisor and driver_trainee.
 const ROLES = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain', 'field_supervisor', 'driver_trainee'];
-// Roles that can be directly assigned at creation time — walker and trainer are earned, not assigned
-const CREATABLE_ROLES = ['driver', 'trainee', 'dispatch', 'management', 'admin'];
-// Management callers are further restricted to field-entry roles only
-const MANAGEMENT_CREATABLE_ROLES = ['driver', 'trainee'];
+// ADR-532. Who may INVITE which role -- mirrors ROLE_GRANTS in
+// backend/app/routers/employees.py (test_adr532_role_grants.py holds them
+// equal). Walker, trainer, driver and captain are earned (ADR-264/256), not
+// hired. This list used to offer 'driver' -- as the default -- which the server
+// refuses once a company is past onboarding, and it never offered
+// driver_trainee or field_supervisor.
+const CREATABLE_ROLES = ['trainee', 'driver_trainee', 'field_supervisor', 'dispatch', 'management', 'admin'];
+const MANAGEMENT_CREATABLE_ROLES = ['trainee', 'driver_trainee', 'dispatch'];
+// ADR-532 D3. Edit corrects an existing employee's role, so it is wider than
+// invite -- but a manager may never grant a role at or above their own.
+const MANAGEMENT_NEVER_GRANTS = ['management', 'admin', 'field_supervisor'];
 const PROTECTED_ROLES = ['management', 'admin'];
 
 const ROLE_CREATION_NOTICES: Partial<Record<string, string>> = {
@@ -174,7 +182,7 @@ type EmployeeFormProps = {
 };
 
 function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles = ROLES }: EmployeeFormProps) {
-  const defaultRole = allowedRoles.includes('driver') ? 'driver' : allowedRoles[0] ?? 'driver';
+  const defaultRole = allowedRoles[0] ?? 'trainee';
   const [form, setForm] = useState({
     name:         initial.name         ?? '',
     email:        initial.email        ?? '',
@@ -235,7 +243,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
   };
 
   const roleNotice = isCreate ? ROLE_CREATION_NOTICES[form.role] : undefined;
-  const roleLabel  = form.role.charAt(0).toUpperCase() + form.role.slice(1);
+  const roleName   = roleLabel(form.role);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -338,9 +346,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                       never able to fire. */}
                   <SelectMenu
                     value={form.role}
-                    options={allowedRoles.map(r => ({
-                      value: r, label: r.charAt(0).toUpperCase() + r.slice(1),
-                    }))}
+                    options={allowedRoles.map(r => ({ value: r, label: roleLabel(r) }))}
                     placeholder="Select a role"
                     ariaLabel="Role"
                     /* portal: the rounded field wrapper above is
@@ -407,7 +413,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                 {[
                   { label: 'Name',  value: form.name },
                   { label: 'Email', value: form.email },
-                  { label: 'Role',  value: roleLabel },
+                  { label: 'Role',  value: roleName },
                   ...(form.phone_number ? [{ label: 'Phone', value: `+1 ${form.phone_number}` }] : []),
                 ].map(({ label, value }) => (
                   <div key={label} className="flex items-center justify-between px-4 py-3">
@@ -597,6 +603,9 @@ function PeopleTab() {
   const isManagement                  = groups.includes('management') && !isAdmin;
   const canImport                     = groups.includes('management') || isAdmin;
   const allowedRoles                  = isManagement ? MANAGEMENT_CREATABLE_ROLES : CREATABLE_ROLES;
+  const editableRoles                 = isManagement
+    ? ROLES.filter(r => !MANAGEMENT_NEVER_GRANTS.includes(r))
+    : ROLES;
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
   const [employees, setEmployees]     = useState<Employee[]>([]);
@@ -1631,7 +1640,7 @@ function PeopleTab() {
           initial={editTarget}
           onSave={handleEdit}
           onClose={() => setEditTarget(null)}
-          allowedRoles={allowedRoles}
+          allowedRoles={editableRoles}
         />
       )}
       {showImport && (

@@ -29,7 +29,7 @@ from app.schemas.employee import (
 from app.services.audit import write_audit
 from app.api.ratelimit import limiter
 from app.services import mfa_containment
-from app.services.company_onboarding import is_onboarding, onboarding_note
+from app.services.company_onboarding import is_onboarding
 from app.services.email import send_invite_email
 from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
@@ -202,21 +202,12 @@ def create_employee(
     # While a company has no active field staff, real roles are accepted. The
     # first import is what closes the window.
     onboarding = is_onboarding(db, caller.company_id)
-    if employee.role in EARNED_ROLES and not onboarding:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=EARNED_ROLES[employee.role],
-        )
-
-    # Management callers may only create field-ENTRY roles: the two starting
-    # points of the two parallel tracks (ADR-264 D2). `driver` is no longer one
-    # of them — it is now earned, so driver_trainee takes its place rather than
-    # being added beside it.
-    if caller.role == "management" and not onboarding and employee.role not in ("driver_trainee", "trainee"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Management users can only create driver trainee or trainee accounts.",
-        )
+    # ADR-532: the one rule for who may grant which role. It used to be two
+    # checks here, and the manager one ended `and not onboarding` -- so during
+    # a new company's onboarding window a manager could create an admin.
+    refusal = _grant_refusal(caller.role, employee.role, onboarding)
+    if refusal:
+        raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
     if employee.email and db.query(Employee).filter(
         Employee.company_id == caller.company_id,
@@ -369,10 +360,14 @@ def bulk_import_employees(
         # Skipped rather than failing the whole import: one bad row in a
         # hundred-row CSV should not discard the ninety-nine good ones, and the
         # result row names the reason.
-        if row.role in EARNED_ROLES and not onboarding:
+        # ADR-532. This only checked earned roles, with no limit on WHO was
+        # granting -- a manager's CSV row with role=admin was created, and that
+        # person was an admin the moment they registered.
+        refusal = _grant_refusal(caller.role, row.role, onboarding)
+        if refusal:
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
-                reason=EARNED_ROLES[row.role],
+                reason=refusal[1],
             ))
             continue
 
@@ -479,6 +474,62 @@ PROTECTED_ROLES   = {"management", "admin"}
 # ADR-458 D2. Who appears on the escalation list. field_supervisor is in
 # OVERSIGHT_ROLES but not here: it oversees the road, not the company.
 ESCALATION_ROLES  = ("admin", "management")
+
+
+# ADR-532. Who may GRANT which role, on every path that sets one (create, bulk
+# import, edit). Owner's rule, 2026-10-17: admins hire any hiring role; managers
+# hire trainees, driver trainees and dispatchers; nobody else hires at all
+# (RoleChecker on each route). Earned roles (EARNED_ROLES) are not in either
+# list: they are reached by training or promotion, and only the onboarding
+# window (ADR-285) admits them directly.
+#
+# Mirrored by CREATABLE_ROLES / MANAGEMENT_CREATABLE_ROLES in
+# frontend/src/pages/Assets.tsx; tests/routers/test_adr532_role_grants.py holds
+# the two equal.
+ROLE_GRANTS: dict[str, frozenset[str]] = {
+    "admin": frozenset({"trainee", "driver_trainee", "field_supervisor",
+                        "dispatch", "management", "admin"}),
+    "management": frozenset({"trainee", "driver_trainee", "dispatch"}),
+}
+
+# What management may never grant, on any path, onboarding or not.
+_MANAGEMENT_NEVER_GRANTS = frozenset({"management", "admin", "field_supervisor"})
+
+
+def _grant_refusal(caller_role: str, role: str, onboarding: bool):
+    """(status, detail) if `caller_role` may not CREATE someone as `role`, else None.
+
+    Returned rather than raised so bulk import can skip one row with the reason
+    instead of failing the batch (the ADR-285 shape).
+    """
+    if caller_role == "management" and role in _MANAGEMENT_NEVER_GRANTS:
+        return (status.HTTP_403_FORBIDDEN,
+                "Managers can invite trainees, driver trainees and dispatchers.")
+    if role in EARNED_ROLES:
+        if onboarding:
+            return None  # ADR-285: migrating existing staff is not hiring
+        return (status.HTTP_400_BAD_REQUEST, EARNED_ROLES[role])
+    if role not in ROLE_GRANTS.get(caller_role, frozenset()):
+        return (status.HTTP_403_FORBIDDEN,
+                "Managers can invite trainees, driver trainees and dispatchers."
+                if caller_role == "management"
+                else "You cannot invite someone with that role.")
+    return None
+
+
+def _edit_grant_refusal(caller_role: str, new_role: str):
+    """(status, detail) if `caller_role` may not CHANGE someone to `new_role`.
+
+    Wider than create on purpose (ADR-532 D3): edit is where an existing
+    employee's role is corrected, so earned roles stay settable here. What it
+    must never allow is a manager granting a role at or above their own.
+    """
+    if caller_role == "admin":
+        return None
+    if caller_role == "management" and new_role not in _MANAGEMENT_NEVER_GRANTS:
+        return None
+    return (status.HTTP_403_FORBIDDEN,
+            "Only admins can give someone a management, admin or field supervisor role.")
 
 
 def _assert_not_protected(caller_groups: set, target_role: str) -> None:
@@ -1019,6 +1070,14 @@ def update_employee(
     new_email = updates.get("email")
     old_role  = db_employee.role
     old_email = db_employee.email
+
+    # ADR-532. The check above is on the CURRENT role only. Nothing checked the
+    # role being granted, so a manager could edit any driver to role=admin and
+    # the Cognito group sync below made it real.
+    if new_role and new_role != old_role:
+        refusal = _edit_grant_refusal(caller.role, new_role)
+        if refusal:
+            raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
     for key, value in updates.items():
         setattr(db_employee, key, value)
