@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { signOut } from 'aws-amplify/auth';
 import { ShieldAlert, LogOut } from 'lucide-react';
 
@@ -19,6 +20,17 @@ import { useAuth } from '../contexts/AuthContext';
 export default function MfaRequired() {
   const { mfaStatus } = useAuth();
   const [signingOut, setSigningOut] = useState(false);
+
+  /* ADR-527. The router sends a blocked account HERE, but nothing sent it back:
+     after enrolling, SecurityPanel re-fetches mfaStatus (ADR-393) and blocked
+     turns false, yet this route kept rendering the wall, so a user who had just
+     finished was stuck with signing out as the only way off the page (seen on
+     prod, 2026-10-16). Leaving is the reward for enrolling, not a bypass:
+     blocked is still recomputed from Cognito on every load. Waits for a KNOWN
+     status (non-null) so a page load never flashes past the wall. */
+  if (mfaStatus && !mfaStatus.blocked) {
+    return <Navigate to="/" replace />;
+  }
 
   const handleSignOut = async () => {
     setSigningOut(true);

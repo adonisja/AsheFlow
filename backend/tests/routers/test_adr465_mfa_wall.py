@@ -126,3 +126,13 @@ def test_a_blocked_user_is_not_signed_out_by_the_interceptor():
     src = AXIOS.read_text()
     block = src.split("mfa_enrolment_required")[1].split("}")[0]
     assert "signOut" not in block
+
+
+def test_enrolling_releases_the_wall():
+    """ADR-527. The router redirects a blocked account TO the wall; the wall
+    must send an unblocked one AWAY, or a user who just enrolled is stuck with
+    only 'Sign out instead' (seen on prod). It must wait for a known status, so
+    a null mfaStatus during load never skips the wall."""
+    src = WALL.read_text()
+    assert "<Navigate" in src, "the wall never lets an enrolled user leave"
+    assert "mfaStatus && !mfaStatus.blocked" in src, "release must require a KNOWN, unblocked status"
