@@ -1,5 +1,8 @@
 """PreAuthentication: refuse a privileged sign-in with no MFA factor (ADR-362 D4).
 
+Also attached as PostAuthentication (ADR-530), where it does one thing: spend
+the one-time enrolment pass. The handler branches on event["triggerSource"].
+
 Cognito has no native "require MFA for this group". `MfaConfiguration: ON` is
 all-or-nothing and would lock out every un-enrolled user the moment it is set;
 OPTIONAL enforces nothing. This trigger is the middle: the pool stays OPTIONAL,
@@ -50,7 +53,10 @@ ENROL_HINT = (
 
 # ADR-459 D3. Stamped on the one sign-in this trigger lets through unenrolled.
 # Its ONLY job is to record that the one-time exemption has been spent, so the
-# window cannot be replayed. Never read for authorisation: a forged value can
+# window cannot be replayed. ADR-530: written by the PostAuthentication run,
+# i.e. only once a sign-in has COMPLETED. PreAuthentication fires before the
+# password is even checked, so stamping there let a typo, a Back button, a
+# closed tab -- or anyone who knew the username -- spend a new owner's pass. Never read for authorisation: a forged value can
 # only make an account MORE restricted (immediate refusal), never less.
 FIRST_SEEN_ATTR = "custom:mfa_first_seen"
 
@@ -98,6 +104,73 @@ def _groups(event) -> set:
     return set()
 
 
+def _unenrolled_privileged(event, pool_id: str, username: str):
+    """The user's attributes if they are privileged with no MFA factor, else None.
+
+    The one place the "who is gated" decision lives, so the pre and post
+    branches cannot drift apart (ADR-530, rejected: a separate function).
+    """
+    groups = _groups(event)
+    if not groups:
+        resp = _cognito().admin_list_groups_for_user(
+            UserPoolId=pool_id, Username=username, Limit=60
+        )
+        groups = {g["GroupName"] for g in resp.get("Groups", [])}
+
+    if not (groups & PRIVILEGED_GROUPS):
+        return None  # field role: a factor is encouraged, not gated
+
+    user = _cognito().admin_get_user(UserPoolId=pool_id, Username=username)
+
+    # UserMFASettingList, and ONLY that -- but the reason is subtler than it
+    # looks, and worth writing down because the obvious reading is wrong.
+    #
+    # ADR-377 D1 measured that this field is a false negative UNDER
+    # MfaConfiguration: ON -- a user who clears their preference reads None
+    # here while Cognito still challenges them, because the associated token
+    # is what ON enforces. That suggests this check could lock out a
+    # protected account.
+    #
+    # It cannot, because of which pool mode the trigger matters in.
+    # Measured on a scratch pool, same user, preference cleared:
+    #
+    #     sign-in under OPTIONAL -> TOKENS (no challenge)
+    #     sign-in under ON       -> SOFTWARE_TOKEN_MFA
+    #
+    # Under OPTIONAL the preference DOES gate, so None means genuinely
+    # unprotected and refusing is correct -- this trigger is the only thing
+    # standing there. Under ON every sign-in is challenged anyway, so the
+    # trigger is redundant and a false refusal is the only harm it can do.
+    #
+    # Checked for a replacement signal that survives a cleared preference:
+    # MFAOptions and PreferredMfaSetting both go None too. There is no such
+    # field. So this is the best available signal, and it is correct where
+    # it is load-bearing.
+    if user.get("UserMFASettingList"):
+        return None
+    return {a["Name"]: a.get("Value") for a in user.get("UserAttributes", [])}
+
+
+def _post_authentication(event, pool_id: str, username: str):
+    """Spend the pass, now that a sign-in has actually completed (ADR-530 D1).
+
+    NEVER raises (D2): an exception in PostAuthentication fails the sign-in
+    that just succeeded -- a lockout caused by bookkeeping, which is the harm
+    _stamp_first_seen's fail-soft already exists to prevent.
+    """
+    try:
+        attrs = _unenrolled_privileged(event, pool_id, username)
+        if attrs is not None and not attrs.get(FIRST_SEEN_ATTR):
+            _stamp_first_seen(pool_id, username)
+            logger.info(
+                "post-auth: %s completed its one unenrolled sign-in; pass spent "
+                "(ADR-459/530)", username,
+            )
+    except Exception:
+        logger.exception("post-auth: could not evaluate %s; pass not spent", username)
+    return event
+
+
 def handler(event, context):
     # The invoking pool, never an env var: this function is attached to BOTH
     # pools, and a hardcoded id checks the wrong one (ADR-362).
@@ -108,48 +181,18 @@ def handler(event, context):
         logger.warning("pre-auth: no pool or user in event; allowing")
         return event
 
+    # ADR-530. Anything that is not PostAuthentication takes the PreAuth path,
+    # which is the historical behaviour for an event with no triggerSource.
+    if event.get("triggerSource", "").startswith("PostAuthentication"):
+        return _post_authentication(event, pool_id, username)
+
     try:
-        groups = _groups(event)
-        if not groups:
-            resp = _cognito().admin_list_groups_for_user(
-                UserPoolId=pool_id, Username=username, Limit=60
-            )
-            groups = {g["GroupName"] for g in resp.get("Groups", [])}
-
-        if not (groups & PRIVILEGED_GROUPS):
-            return event  # field role: a factor is encouraged, not gated
-
-        user = _cognito().admin_get_user(UserPoolId=pool_id, Username=username)
-
-        # UserMFASettingList, and ONLY that -- but the reason is subtler than it
-        # looks, and worth writing down because the obvious reading is wrong.
-        #
-        # ADR-377 D1 measured that this field is a false negative UNDER
-        # MfaConfiguration: ON -- a user who clears their preference reads None
-        # here while Cognito still challenges them, because the associated token
-        # is what ON enforces. That suggests this check could lock out a
-        # protected account.
-        #
-        # It cannot, because of which pool mode the trigger matters in.
-        # Measured on a scratch pool, same user, preference cleared:
-        #
-        #     sign-in under OPTIONAL -> TOKENS (no challenge)
-        #     sign-in under ON       -> SOFTWARE_TOKEN_MFA
-        #
-        # Under OPTIONAL the preference DOES gate, so None means genuinely
-        # unprotected and refusing is correct -- this trigger is the only thing
-        # standing there. Under ON every sign-in is challenged anyway, so the
-        # trigger is redundant and a false refusal is the only harm it can do.
-        #
-        # Checked for a replacement signal that survives a cleared preference:
-        # MFAOptions and PreferredMfaSetting both go None too. There is no such
-        # field. So this is the best available signal, and it is correct where
-        # it is load-bearing.
-        if user.get("UserMFASettingList"):
+        attrs = _unenrolled_privileged(event, pool_id, username)
+        if attrs is None:
             return event
 
-        # ADR-459 D1. A privileged account with no factor AND no prior sign-in
-        # is let through exactly once.
+        # ADR-459 D1. A privileged account with no factor AND no completed
+        # sign-in is let through, so it can reach enrolment.
         #
         # The refusal below is a dead end for them: it says "go to Account >
         # Security", which is INSIDE the app they are being kept out of.
@@ -164,12 +207,15 @@ def handler(event, context):
         # had 1, both enrolled users had 0). The lambda has no database, by
         # design -- it runs in the auth path and must not need the app to be up
         # -- so it records the fact itself.
-        attrs = {a["Name"]: a.get("Value") for a in user.get("UserAttributes", [])}
+        #
+        # ADR-530: allowed, NOT stamped. This attempt may yet fail its password
+        # or be abandoned on a challenge; only PostAuthentication knows it
+        # completed. Allowing an unfinished attempt grants nothing -- there are
+        # no tokens until it finishes.
         if not attrs.get(FIRST_SEEN_ATTR):
-            _stamp_first_seen(pool_id, username)
             logger.info(
-                "pre-auth: allowing %s once to enrol — privileged, no factor, "
-                "no prior sign-in (ADR-459)", username,
+                "pre-auth: allowing %s to enrol -- privileged, no factor, "
+                "no completed sign-in (ADR-459/530)", username,
             )
             return event
 

@@ -113,6 +113,7 @@ class TestItRaisesOneAlertForSuperAdmins:
              patch.object(h, "_check_rule_and_lambda", return_value=[]), \
              patch.object(h, "_check_topic", return_value=[]), \
              patch.object(h, "_check_containment_permissions", return_value=[]), \
+             patch.object(h, "_check_pool_triggers", return_value=[]), \
              patch.object(h, "raise_platform_alert") as alert:
             r = h.check_security_infra()
         assert r["healthy"] is True
@@ -125,6 +126,7 @@ class TestItRaisesOneAlertForSuperAdmins:
              patch.object(h, "_check_rule_and_lambda", return_value=["rule gone"]), \
              patch.object(h, "_check_topic", return_value=[]), \
              patch.object(h, "_check_containment_permissions", return_value=[]), \
+             patch.object(h, "_check_pool_triggers", return_value=[]), \
              patch.object(h, "SessionLocal"), \
              patch.object(h, "raise_platform_alert") as alert:
             r = h.check_security_infra()

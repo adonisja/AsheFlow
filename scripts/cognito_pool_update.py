@@ -1,6 +1,9 @@
 """Update a Cognito user pool WITHOUT dropping anything else (ADR-525).
 
-Usage: python scripts/cognito_pool_update.py <pool-id> [--apply]
+Usage: python scripts/cognito_pool_update.py <pool-id> [--lambda-trigger NAME=ARN ...] [--apply]
+
+--lambda-trigger (ADR-530 D5) MERGES one trigger into the live LambdaConfig;
+every other trigger is carried over untouched. Repeatable.
 
 As written it (re)asserts ADR-385's DeviceConfiguration; to change something
 else, edit TARGET/request(). Never hand-build an update-user-pool call: it is
@@ -42,6 +45,8 @@ def request(cfg):
     # describe returns read-only bits inside some structures; strip them
     req.get("AdminCreateUserConfig", {}).pop("UnusedAccountValidityDays", None)
     req["DeviceConfiguration"] = TARGET
+    if TRIGGERS:   # ADR-530 D5: merge, never replace -- LambdaConfig is a full replace too
+        req["LambdaConfig"] = {**req.get("LambdaConfig", {}), **TRIGGERS}
     return req
 
 def flat(d, p=""):
@@ -52,6 +57,13 @@ def flat(d, p=""):
     return {p: json.dumps(d, sort_keys=True)}
 
 pool, apply = sys.argv[1], "--apply" in sys.argv
+TRIGGERS = {}
+for i, arg in enumerate(sys.argv):
+    if arg == "--lambda-trigger":
+        name, _, arn = sys.argv[i + 1].partition("=")
+        if not name or not arn.startswith("arn:aws:lambda:"):
+            sys.exit(f"--lambda-trigger wants NAME=arn:aws:lambda:..., got {sys.argv[i + 1]!r}")
+        TRIGGERS[name] = arn
 before = live(pool)
 req = request(before)
 # what the request would CHANGE, among the fields it carries
