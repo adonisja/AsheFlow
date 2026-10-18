@@ -31,9 +31,18 @@ ASSETS = ROOT / "frontend" / "src" / "pages" / "Assets.tsx"
 
 @pytest.fixture
 def stubs():
+    """Every outbound side effect of a role change, by its REAL name.
+
+    The first version patched `send_role_change_dm` with create=True. No such
+    name exists, so create=True silently made a new attribute, the real
+    `_fire_discord_dm` ran, queued a Celery task, and in CI (no Redis) each
+    successful promotion test failed with `Error 111 connecting to
+    localhost:6379` after ~20 s of retries. Locally Redis was up, so it passed.
+    No create=True: a wrong name must fail loudly."""
     with patch.object(E, "_cognito_client", return_value=MagicMock()), \
-         patch.object(E, "write_notification", MagicMock(), create=True), \
-         patch.object(E, "send_role_change_dm", MagicMock(), create=True):
+         patch.object(E, "write_notification"), \
+         patch.object(E, "_fire_discord_dm"), \
+         patch.object(E, "_fire_role_sync"):
         yield
 
 
