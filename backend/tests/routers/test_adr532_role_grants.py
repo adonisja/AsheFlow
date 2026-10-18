@@ -24,16 +24,23 @@ from tests.conftest import make_employee
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 ASSETS = ROOT / "frontend" / "src" / "pages" / "Assets.tsx"
 
-ADMIN_GRANTS = {"trainee", "driver_trainee", "field_supervisor", "dispatch", "management", "admin"}
+# ADR-538 D2: field_supervisor moved to the earned roles (promoted from driver).
+ADMIN_GRANTS = {"trainee", "driver_trainee", "dispatch", "management", "admin"}
 MANAGER_GRANTS = {"trainee", "driver_trainee", "dispatch"}
 
 
 def _established(db):
-    """Past the ADR-285 onboarding window: active field staff exist."""
-    for i in range(2):
-        w = make_employee(db, role="walker", name=f"Walker {i}")
-        w.is_active = True
+    """Past the setup window (ADR-538): the company is 40 days old.
+
+    Was "active field staff exist" (ADR-285) -- which no longer closes the
+    window: it now counts sign-in accounts and days since creation."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.company import Company
+    from tests.conftest import SEED_COMPANY_ID
+    c = db.get(Company, SEED_COMPANY_ID)
+    c.created_at = datetime.now(timezone.utc) - timedelta(days=40)
     db.commit()
+    assert not E.is_onboarding(db, SEED_COMPANY_ID)
 
 
 def _caller(db, role):
@@ -70,7 +77,7 @@ def test_manager_creates_their_roles(db, stubs, role):
     assert _create(db, _caller(db, "management"), role).role == role
 
 
-@pytest.mark.parametrize("role", ["management", "admin", "field_supervisor"])
+@pytest.mark.parametrize("role", ["management", "admin"])
 def test_manager_cannot_create_above_their_level(db, stubs, role):
     _established(db)
     with pytest.raises(HTTPException) as exc:
@@ -94,7 +101,7 @@ def test_admin_creates_every_hiring_role(db, stubs, role):
     assert _create(db, _caller(db, "admin"), role).role == role
 
 
-@pytest.mark.parametrize("role", ["walker", "trainer", "driver", "captain"])
+@pytest.mark.parametrize("role", ["walker", "trainer", "driver", "captain", "field_supervisor"])
 def test_earned_roles_are_refused_to_admins_too(db, stubs, role):
     """Owner kept the earned-role rule for everyone (ADR-264/256)."""
     _established(db)
@@ -125,7 +132,7 @@ def test_manager_bulk_row_for_an_admin_is_skipped_with_a_reason(db, stubs):
          BulkImportRow(name="Tia Trainee", email="tia@example.com", role="trainee")],
         caller=_caller(db, "management"), _={}, db=db)
     assert [r.status for r in out] == ["skipped", "created"], "one bad row must not sink the rest"
-    assert "trainees, driver trainees and dispatchers" in out[0].reason
+    assert "Managers cannot invite managers or admins." in out[0].reason
 
 
 # ── edit ───────────────────────────────────────────────────────────────────
@@ -137,7 +144,7 @@ def _edit(db, caller, target, new_role):
                              current_user={"cognito_groups": [caller.role]}, db=db)
 
 
-@pytest.mark.parametrize("new_role", ["admin", "management", "field_supervisor"])
+@pytest.mark.parametrize("new_role", ["admin", "management"])
 def test_manager_cannot_edit_someone_into_a_protected_role(db, stubs, new_role):
     """THE edit escalation: driver -> admin was accepted and synced to Cognito."""
     mgr, drv = _caller(db, "management"), make_employee(db, role="driver", name="Dan Driver")

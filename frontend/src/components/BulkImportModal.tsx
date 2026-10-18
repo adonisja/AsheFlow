@@ -10,6 +10,7 @@
 
 import { errorText } from '../utils/errorText';
 import SelectMenu from './ui/SelectMenu';
+import { RoleReviewDisclaimer, RoleSignOff } from './SetupWindowNotice';
 import React, { useRef, useState, useCallback } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -46,7 +47,7 @@ type ImportResult = {
   reason?: string;
 };
 
-type Step = 'upload' | 'preview' | 'results';
+type Step = 'upload' | 'signoff' | 'preview' | 'results';
 
 // ---------------------------------------------------------------------------
 // Column alias normalization
@@ -580,17 +581,21 @@ function ResultsStep({ results, onClose, onImportMore }: {
 type Props = {
   onClose: () => void;
   onComplete: () => void; // called after a successful import so PeopleTab can reload
+  /** ADR-538: the company setup window is open — sign off on roles before the preview. */
+  setupWindowOpen?: boolean;
 };
 
-export default function BulkImportModal({ onClose, onComplete }: Props) {
+export default function BulkImportModal({ onClose, onComplete, setupWindowOpen = false }: Props) {
   const [step,       setStep]       = useState<Step>('upload');
+  const [signedOff,  setSignedOff]  = useState(false);
   const [rows,       setRows]       = useState<ImportRow[]>([]);
   const [results,    setResults]    = useState<ImportResult[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   const handleParsed = (parsed: ImportRow[]) => {
     setRows(parsed);
-    setStep('preview');
+    // ADR-538: inside the setup window, sign off BEFORE the preview step.
+    setStep(setupWindowOpen && !signedOff ? 'signoff' : 'preview');
   };
 
   const handleSubmit = async () => {
@@ -604,7 +609,10 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
         phone_number:     r.phone_number || null,
         hr_system_id_adp: r.hr_system_id_adp.trim() || null,
       }));
-      const res = await axiosClient.post<ImportResult[]>('/employees/bulk', payload);
+      // ADR-538 D4: the server skips window-only rows without the sign-off.
+      const res = await axiosClient.post<ImportResult[]>(
+        '/employees/bulk', payload,
+        { params: signedOff ? { roles_reviewed: true } : {} });
       setResults(res.data);
       setStep('results');
       const anyCreated = res.data.some(r => r.status === 'created');
@@ -625,6 +633,7 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
 
   const STEP_LABELS: Record<Step, string> = {
     upload:  'Upload File',
+    signoff: 'Sign Off',
     preview: 'Preview & Verify',
     results: 'Import Results',
   };
@@ -639,7 +648,7 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
             <h2 className="font-semibold text-foreground">Bulk Import Employees</h2>
             {/* Step indicator */}
             <div className="hidden sm:flex items-center gap-2 text-xs">
-              {(['upload', 'preview', 'results'] as Step[]).map((s, i) => (
+              {((setupWindowOpen ? ['upload', 'signoff', 'preview', 'results'] : ['upload', 'preview', 'results']) as Step[]).map((s, i) => (
                 <React.Fragment key={s}>
                   {i > 0 && <span className="text-muted-foreground">›</span>}
                   <span className={step === s ? 'text-primary font-medium' : 'text-muted-foreground'}>
@@ -658,6 +667,13 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
           {step === 'upload' && (
             <UploadStep onParsed={handleParsed} onClose={onClose} />
+          )}
+          {step === 'signoff' && (
+            <RoleSignOff what="import" onBack={() => setStep('upload')}
+                         onConfirm={() => { setSignedOff(true); setStep('preview'); }} />
+          )}
+          {step === 'preview' && setupWindowOpen && (
+            <div className="px-6 pt-4 shrink-0"><RoleReviewDisclaimer /></div>
           )}
           {step === 'preview' && (
             <PreviewStep

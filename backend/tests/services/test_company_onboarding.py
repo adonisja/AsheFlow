@@ -31,40 +31,14 @@ class _Q:
 
 
 class TestTheWindowIsAState:
-    def test_open_when_no_active_field_staff(self):
-        assert co.is_onboarding(_Q(None), "c1") is True
+    """ADR-538 replaced ADR-285's rule ("no active field staff") with the setup
+    window: 10 or fewer sign-in accounts AND within 30 days of company creation.
+    The behavioural tests for it live in test_adr538_setup_window.py; this keeps
+    the one structural fact that matters here."""
 
-    def test_closed_once_anyone_is_working(self):
-        assert co.is_onboarding(_Q(("emp-1",)), "c1") is False
-
-    def test_it_keys_on_is_active_not_row_existence(self):
-        """Employees are created is_active=False and pending_verification, so a
-        company mid-import — rows written, nobody registered — is STILL
-        onboarding. Otherwise the first imported row closes the window on the
-        second, and a 40-person migration imports one person."""
+    def test_it_is_the_setup_window(self):
         src = inspect.getsource(co.is_onboarding)
-        assert "Employee.is_active == True" in src
-
-    def test_trainees_count_as_operating(self):
-        """A company that has started training someone is operating; its next
-        hire is a hire, not a migration."""
-        assert "trainee" in co.OPERATING_ROLES
-        assert "driver_trainee" in co.OPERATING_ROLES
-
-    def test_it_does_not_depend_on_the_shadowed_field_roles_constant(self):
-        """constants.FIELD_ROLES has no importers and is shadowed by a
-        different set in employees.py. Depending on it would tie this rule to a
-        constant nobody maintains."""
-        # The module NAMES FIELD_ROLES in the comment explaining why it does
-        # not use it, so strip comments first — a raw substring check fails on
-        # the documentation. (Fifth time this trap has fired here.)
-        src = inspect.getsource(co)
-        code = "\n".join(
-            ln.split("#")[0] for ln in src.splitlines()
-            if not ln.lstrip().startswith("#")
-        )
-        assert "FIELD_ROLES" not in code
-        assert "OPERATING_ROLES" in code
+        assert "setup_window(db, company_id)" in src
 
 
 class TestBothCreationPathsHonourIt:

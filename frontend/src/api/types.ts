@@ -3712,7 +3712,7 @@ export interface SurveyContributorInvited {
  *  Literal for two months while the server's transition table allowed it, so no
  *  client could promote a driver; typing the body here keeps the two in step. */
 export interface RoleTransitionRequest {
-  new_role: 'walker' | 'trainer' | 'captain' | 'driver';
+  new_role: 'walker' | 'trainer' | 'captain' | 'driver' | 'field_supervisor';
   /** ADR-537 D3: promote a driver trainee whose phases are not all complete. */
   confirm_incomplete?: boolean;
   reason?: string;

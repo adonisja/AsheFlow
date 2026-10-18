@@ -43,10 +43,12 @@ class TestEarnedRolesCannotBeAssignedAtHire:
     def test_walker_and_trainer_are_still_earned(self):
         assert {"walker", "trainer"} <= set(employees.EARNED_ROLES)
 
-    def test_field_supervisor_is_NOT_earned(self):
-        """Nothing promotes into it, so making it earned leaves it unreachable.
-        The reachability test below is what would catch that."""
-        assert "field_supervisor" not in employees.EARNED_ROLES
+    def test_field_supervisor_is_earned_and_reached_from_driver(self):
+        """Was: NOT earned, because nothing promoted into it. ADR-538 D2 adds
+        driver -> field_supervisor, so it is earned like the others and the
+        reachability test below proves it is not stranded."""
+        assert "field_supervisor" in employees.EARNED_ROLES
+        assert "field_supervisor" in employees.ROLE_TRANSITIONS["driver"]
 
     def test_the_check_is_one_membership_test(self):
         """ADR-532: now one shared rule (_grant_refusal) for create, bulk and
@@ -86,7 +88,9 @@ class TestManagementMayCreateBothEntryRoles:
 
     def test_the_error_names_what_they_can_create(self):
         _, detail = employees._grant_refusal("management", "admin", onboarding=False)
-        assert "trainees, driver trainees and dispatchers" in detail
+        assert "Managers cannot invite managers or admins." in detail   # ADR-538 wording
+        _, detail = employees._grant_refusal("management", "walker", onboarding=False)
+        assert "Create them as a trainee" in detail or "trainees" in detail   # names the entry path
 
 
 class TestBothTracksHaveAnEntryPoint:
@@ -133,15 +137,16 @@ class TestBulkImportEnforcesTheSameRule:
     def test_a_bad_row_is_skipped_not_fatal(self):
         """One bad row in a hundred-row CSV must not discard the ninety-nine
         good ones."""
+        # Sliced to the actual `continue`, not a fixed width: ADR-538's sign-off
+        # lines pushed `continue` past the old 400-character window.
         i = self.BULK.index(self.CHECK)
-        block = self.BULK[i : i + 400]
+        block = self.BULK[i : self.BULK.index("continue", i) + len("continue")]
         assert 'status="skipped"' in block
-        assert "continue" in block
         assert "raise" not in block
 
     def test_the_skip_reason_names_the_entry_path(self):
         i = self.BULK.index(self.CHECK)
-        assert "reason=refusal[1]" in self.BULK[i : i + 400]
+        assert "reason=refusal[1]" in self.BULK[i : self.BULK.index("continue", i)]
 
     def test_the_check_precedes_the_insert(self):
         assert self.BULK.index(self.CHECK) < self.BULK.index("db_employee = Employee(")

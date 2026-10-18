@@ -47,6 +47,10 @@ class EmployeeCreate(BaseModel):
     @classmethod
     def validate_discord_id(cls, v):
         return _validate_discord_id(v)
+    # ADR-538 D4: the manager/admin's sign-off that every role was reviewed, required
+    # when this grant is allowed only because the company's setup window is open.
+    # Not an Employee column -- create_employee excludes it from the row.
+    roles_reviewed: bool = False
 
 
 class EmployeeUpdate(BaseModel):
@@ -270,7 +274,7 @@ class RoleTransitionRequest(BaseModel):
     # since 2026-08-22 (ADR-264 D10 revised), but this Literal predated it, so every
     # driver promotion failed validation and the only way to make a driver was the
     # Edit dropdown -- which skipped training.
-    new_role: Literal["walker", "trainer", "captain", "driver"] = Field(
+    new_role: Literal["walker", "trainer", "captain", "driver", "field_supervisor"] = Field(
         ..., description="Target field role. Legal transitions are enforced server-side."
     )
     confirm_incomplete: bool = Field(

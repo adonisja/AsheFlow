@@ -78,10 +78,15 @@ class TestIllegalTransitions:
     def test_admin_is_not_reachable_from_any_field_role(self):
         """The escalation that would matter most, asserted against the table itself."""
         for old, targets in ROLE_TRANSITIONS.items():
-            for privileged in ("admin", "management", "dispatch", "field_supervisor"):
+            for privileged in ("admin", "management", "dispatch"):
                 assert privileged not in targets, (
                     f"{old} -> {privileged} would be a privilege escalation"
                 )
+        # ADR-538 D2: field_supervisor is a FIELD role one notch above driver
+        # (owner, 2026-10-18), so it was taken off the privileged list -- but the
+        # only way in is a driver's promotion.
+        into_fs = [old for old, t in ROLE_TRANSITIONS.items() if "field_supervisor" in t]
+        assert into_fs == ["driver"], f"field_supervisor reachable from {into_fs}"
 
 
 class TestCaptainPinsAreReleased:

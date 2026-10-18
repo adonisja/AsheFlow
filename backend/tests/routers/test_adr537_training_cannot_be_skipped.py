@@ -55,8 +55,19 @@ def _edit(db, caller, target, new_role):
 
 # ── D1: Edit ───────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("earned", ["walker", "trainer", "driver", "captain"])
+def _close_window(db):
+    """Outside the setup window (ADR-538): the company is 40 days old."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.company import Company
+    from tests.conftest import SEED_COMPANY_ID
+    db.get(Company, SEED_COMPANY_ID).created_at = datetime.now(timezone.utc) - timedelta(days=40)
+    db.commit()
+
+
+@pytest.mark.parametrize("earned", ["walker", "trainer", "driver", "captain", "field_supervisor"])
 def test_a_manager_cannot_edit_a_trainee_into_an_earned_role(db, stubs, earned):
+    """Outside the setup window. Inside it, ADR-538 D3 lets a manager set them."""
+    _close_window(db)
     mgr, t = make_employee(db, role="management", name="Mia Manager"), make_employee(db, role="trainee", name="Tia")
     with pytest.raises(HTTPException) as exc:
         _edit(db, mgr, t, earned)

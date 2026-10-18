@@ -9,7 +9,7 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (RoleChecker, Pagination, get_caller_employee,
@@ -29,7 +29,7 @@ from app.schemas.employee import (
 from app.services.audit import write_audit
 from app.api.ratelimit import limiter
 from app.services import mfa_containment
-from app.services.company_onboarding import is_onboarding
+from app.services.company_onboarding import is_onboarding, setup_window
 from app.services.email import send_invite_email
 from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
@@ -208,6 +208,10 @@ def create_employee(
     refusal = _grant_refusal(caller.role, employee.role, onboarding)
     if refusal:
         raise HTTPException(status_code=refusal[0], detail=refusal[1])
+    # ADR-538 D4: a role allowed only because the setup window is open needs the
+    # caller's sign-off that every role was reviewed.
+    if onboarding and employee.role in EARNED_ROLES and not employee.roles_reviewed:
+        raise HTTPException(status_code=400, detail=WINDOW_SIGNOFF_REQUIRED)
 
     if employee.email and db.query(Employee).filter(
         Employee.company_id == caller.company_id,
@@ -217,7 +221,7 @@ def create_employee(
 
     now = datetime.now(timezone.utc)
     db_employee = Employee(
-        **employee.model_dump(),
+        **employee.model_dump(exclude={"roles_reviewed"}),
         company_id=caller.company_id,
         is_active=False,
         account_status="pending_verification",
@@ -247,7 +251,7 @@ def create_employee(
                 "email": db_employee.email,
                 # ADR-285: without this, a later reader sees a captain who never
                 # earned it and no record of why they were allowed.
-                **({"onboarding_window": True}
+                **({"onboarding_window": True, "window_signoff": True}
                    if onboarding and db_employee.role in EARNED_ROLES else {}),
             },
         )
@@ -303,6 +307,7 @@ def create_employee(
 @router.post("/bulk", response_model=List[BulkImportResult], status_code=status.HTTP_200_OK)
 def bulk_import_employees(
     rows: List[BulkImportRow],
+    roles_reviewed: bool = Query(False, description="ADR-538 D4: the caller's sign-off that every role was reviewed"),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
     db: Session = Depends(get_db),
@@ -342,7 +347,12 @@ def bulk_import_employees(
             ))
             continue
 
-        if db.query(Employee).filter(
+        # ADR-538 D7: only when the row HAS one. `Employee.discord_id == None`
+        # compiles to `IS NULL`, so a row without a Discord ID "matched" every
+        # employee without one -- the first such row imported and every later one
+        # was skipped as "Discord ID already exists", while the invite form calls
+        # the field optional.
+        if row.discord_id and db.query(Employee).filter(
             Employee.company_id == caller.company_id,
             Employee.discord_id == row.discord_id,
         ).first():
@@ -364,6 +374,8 @@ def bulk_import_employees(
         # granting -- a manager's CSV row with role=admin was created, and that
         # person was an admin the moment they registered.
         refusal = _grant_refusal(caller.role, row.role, onboarding)
+        if not refusal and onboarding and row.role in EARNED_ROLES and not roles_reviewed:
+            refusal = (400, WINDOW_SIGNOFF_REQUIRED)   # ADR-538 D4
         if refusal:
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
@@ -421,7 +433,8 @@ def bulk_import_employees(
                 "name": row.name, "role": row.role, "email": str(row.email), "row": i,
                 # ADR-285 — same trace as the single-create path. A migrated
                 # captain and a wrongly-created one look identical without it.
-                **({"onboarding_window": True} if onboarding and row.role in EARNED_ROLES else {}),
+                **({"onboarding_window": True, "window_signoff": True}
+                   if onboarding and row.role in EARNED_ROLES else {}),
             },
         )
 
@@ -476,6 +489,13 @@ PROTECTED_ROLES   = {"management", "admin"}
 ESCALATION_ROLES  = ("admin", "management")
 
 
+# ADR-538 D4. The refusal when a setup-window grant arrives without the sign-off.
+WINDOW_SIGNOFF_REQUIRED = (
+    "This company is in its setup window, so this role can be granted directly -- but "
+    "only after you review and sign off on every role: new hires start as Trainee or "
+    "Driver Trainee; experienced staff keep their current role."
+)
+
 # ADR-532. Who may GRANT which role, on every path that sets one (create, bulk
 # import, edit). Owner's rule, 2026-10-17: admins hire any hiring role; managers
 # hire trainees, driver trainees and dispatchers; nobody else hires at all
@@ -487,13 +507,15 @@ ESCALATION_ROLES  = ("admin", "management")
 # frontend/src/pages/Assets.tsx; tests/routers/test_adr532_role_grants.py holds
 # the two equal.
 ROLE_GRANTS: dict[str, frozenset[str]] = {
-    "admin": frozenset({"trainee", "driver_trainee", "field_supervisor",
-                        "dispatch", "management", "admin"}),
+    # ADR-538 D2: field_supervisor moved to EARNED_ROLES (promoted from driver).
+    "admin": frozenset({"trainee", "driver_trainee", "dispatch", "management", "admin"}),
     "management": frozenset({"trainee", "driver_trainee", "dispatch"}),
 }
 
 # What management may never grant, on any path, onboarding or not.
-_MANAGEMENT_NEVER_GRANTS = frozenset({"management", "admin", "field_supervisor"})
+# ADR-538 D2: field_supervisor is a field role now (one notch below manager),
+# granted by a manager inside the setup window, by promotion outside it.
+_MANAGEMENT_NEVER_GRANTS = frozenset({"management", "admin"})
 
 
 def _grant_refusal(caller_role: str, role: str, onboarding: bool):
@@ -504,7 +526,7 @@ def _grant_refusal(caller_role: str, role: str, onboarding: bool):
     """
     if caller_role == "management" and role in _MANAGEMENT_NEVER_GRANTS:
         return (status.HTTP_403_FORBIDDEN,
-                "Managers can invite trainees, driver trainees and dispatchers.")
+                "Managers cannot invite managers or admins.")
     if role in EARNED_ROLES:
         if onboarding:
             return None  # ADR-285: migrating existing staff is not hiring
@@ -517,7 +539,7 @@ def _grant_refusal(caller_role: str, role: str, onboarding: bool):
     return None
 
 
-def _edit_grant_refusal(caller_role: str, new_role: str):
+def _edit_grant_refusal(caller_role: str, new_role: str, onboarding: bool = False):
     """(status, detail) if `caller_role` may not CHANGE someone to `new_role`.
 
     Wider than create on purpose (ADR-532 D3): edit is where an existing
@@ -530,14 +552,15 @@ def _edit_grant_refusal(caller_role: str, new_role: str):
     # straight into an earned role (walker/trainer/driver/captain); those are
     # reached by the graduation quiz, the driver promotion, or the promote buttons.
     # Admins keep it for genuine corrections (owner, 2026-10-18).
-    if caller_role == "management" and new_role in EARNED_ROLES:
+    # ADR-538 D3: inside the setup window a manager may set them (existing staff).
+    if caller_role == "management" and new_role in EARNED_ROLES and not onboarding:
         return (status.HTTP_403_FORBIDDEN,
-                "Only admins can set walker, trainer, driver or captain directly. Use the "
-                "promote buttons, or let training and the graduation quiz do it.")
+                "Only admins can set walker, trainer, driver, captain or field supervisor "
+                "directly. Use the promote buttons, or let training and the graduation quiz do it.")
     if caller_role == "management" and new_role not in _MANAGEMENT_NEVER_GRANTS:
         return None
     return (status.HTTP_403_FORBIDDEN,
-            "Only admins can give someone a management, admin or field supervisor role.")
+            "Only admins can give someone a management or admin role.")
 
 
 def _assert_not_protected(caller_groups: set, target_role: str) -> None:
@@ -547,6 +570,20 @@ def _assert_not_protected(caller_groups: set, target_role: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can modify management or admin accounts.",
         )
+
+
+@router.get("/setup-window")
+def get_setup_window(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """The company's setup window (ADR-538): open while 10 or fewer people have a
+    sign-in account and the company is within 30 days of creation. Feeds the
+    People page banner, the widened role lists and the sign-off dialog. The
+    server re-checks on every grant; this only decides what to show."""
+    w = setup_window(db, caller.company_id)
+    return {**w, "closes_at": w["closes_at"].isoformat() if w["closes_at"] else None}
 
 
 @router.get(
@@ -1083,7 +1120,8 @@ def update_employee(
     # role being granted, so a manager could edit any driver to role=admin and
     # the Cognito group sync below made it real.
     if new_role and new_role != old_role:
-        refusal = _edit_grant_refusal(caller.role, new_role)
+        refusal = _edit_grant_refusal(caller.role, new_role,
+                                      onboarding=is_onboarding(db, caller.company_id))
         if refusal:
             raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
@@ -1683,12 +1721,18 @@ EARNED_ROLES: dict[str, str] = {
     # creatable at hire was an omission, not a decision: it let a new hire
     # hold a truck's route lead with no record of having run one.
     #
-    # field_supervisor is deliberately NOT here. Nothing promotes into it,
-    # so making it earned would leave it unreachable.
+    # field_supervisor WAS deliberately not here ("nothing promotes into it").
+    # ADR-538 D2: drivers are now promoted to it (ROLE_TRANSITIONS below), so it
+    # is earned like the others -- reachable, and not hireable outside the
+    # setup window.
     "captain": (
         "Captains are promoted from walkers or trainers once they have run a "
         "truck (ADR-256). Create them as a trainee, or promote an existing "
         "walker or trainer."
+    ),
+    "field_supervisor": (
+        "Field supervisors are promoted from drivers (ADR-538). Create them as a "
+        "driver trainee, or promote an existing driver."
     ),
 }
 
@@ -1706,6 +1750,9 @@ ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
     # supervising driver assigned to observe again, which is a dispatch action,
     # not a role change.
     "driver_trainee": ("driver",),
+    # ADR-538 D2: field supervisor sits one notch above driver.
+    "driver": ("field_supervisor",),
+    "field_supervisor": ("driver",),
 }
 
 # Which direction the change is, for the audit trail and the wording of the notice.
@@ -1714,7 +1761,7 @@ ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
 # walker ladder (ADR-264 D2), so the ranks do not interleave with it.
 _ROLE_RANK: dict[str, int] = {
     "walker": 0, "trainer": 1, "captain": 2,
-    "driver_trainee": 0, "driver": 1,
+    "driver_trainee": 0, "driver": 1, "field_supervisor": 2,
 }
 
 
