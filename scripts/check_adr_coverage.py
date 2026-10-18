@@ -40,6 +40,19 @@ PART_HEADING = re.compile(r"^## Part (\d)\b", re.MULTILINE)
 
 ADR_IN_SUBJECT = re.compile(r"\bADR-(\d{3})\b")
 
+# ADR-536: depth, not just headings. ADR-528..534's docs passed the structural
+# check above while being summaries (547-1,504-word deep dives against a
+# 12,232-word calibration). These are FLOORS that catch the summary shape --
+# they cannot certify a good doc. Applied from ADR-535 on: the older corpus
+# predates the standard, and failing it would make ALLOW_UNDOCUMENTED routine.
+DEPTH_FROM = 535   # ADR-535 was written under the new standard; gate it too
+DEEP_DIVE_MIN_WORDS = 1200
+LESSON_MIN_WORDS = 500
+CASE_FRAME = ("symptom", "why it stayed invisible", "diagnosis", "lesson")
+WIKILINK = re.compile(r"\[\[(ADR-[^\]|]+)")
+CALIBRATION = ("docs/deep-dives/ADR-487-D5-Push-Notifications.md (deep dive); "
+               "'## Lesson — Partition a shared model by who may see it (ADR-483)' (lesson)")
+
 
 def commits_being_pushed(argv: list[str]) -> list[str]:
     """Subjects of the commits this push would publish.
@@ -128,6 +141,110 @@ def deep_dive_gap(number: str) -> str | None:
             + " (a part may be one line saying why it is empty, but its heading must be there)")
 
 
+def _covering_deep_dives(number: str) -> list[tuple[Path, str]]:
+    token = re.compile(rf"\bADR-{number}\b")
+    out = []
+    if DEEP_DIVES.is_dir():
+        for path in sorted(DEEP_DIVES.glob("*.md")):
+            text = path.read_text(errors="ignore")
+            if path.name.startswith(f"ADR-{number}-") or token.search(_frontmatter_feature(text)):
+                out.append((path, text))
+    return out
+
+
+def _part(text: str, n: int) -> str:
+    """The body of '## Part n', up to the next '## Part'."""
+    m = re.search(rf"^## Part {n}\b.*$", text, re.MULTILINE)
+    if not m:
+        return ""
+    nxt = re.search(r"^## Part \d\b", text[m.end():], re.MULTILINE)
+    return text[m.end(): m.end() + nxt.start()] if nxt else text[m.end():]
+
+
+def _has_wrong_right(text: str) -> bool:
+    return bool(re.search(r"\bWRONG\b", text)) and bool(re.search(r"\bRIGHT\b", text))
+
+
+def _deep_dive_depth_problems(text: str) -> list[str]:
+    problems = []
+    words = len(text.split())
+    if words < DEEP_DIVE_MIN_WORDS:
+        problems.append(f"{words} words (floor {DEEP_DIVE_MIN_WORDS}; a floor, not the standard)")
+    casebook = _part(text, 5)
+    first_case = casebook.find("### Case")
+    if first_case == -1:
+        problems.append("Part 5 has no '### Case' entries")
+    else:
+        if not re.search(r"^\s*\|.*\|", casebook[:first_case], re.MULTILINE):
+            problems.append("Part 5 does not open with a summary table (# | where | one line | found by)")
+        cases = re.split(r"(?=^### Case)", casebook[first_case:], flags=re.MULTILINE)
+        for case in (c for c in cases if c.startswith("### Case")):
+            title = case.splitlines()[0][4:60]
+            lower = case.lower()
+            absent = [f for f in CASE_FRAME if f not in lower]
+            if absent:
+                problems.append(f"case '{title}' lacks: " + ", ".join(absent))
+        if not _has_wrong_right(casebook):
+            problems.append("Part 5 has no WRONG/RIGHT pair")
+        if "```" not in casebook:
+            problems.append("Part 5 has no fenced block of real output or code")
+    if "as climbed" not in _part(text, 6).lower():
+        problems.append("Part 6 does not record the ladder 'as climbed'")
+    broken = sorted({n for n in WIKILINK.findall(text) if not (DECISIONS / f"{n}.md").exists()})
+    if broken:
+        problems.append("broken wikilinks: " + ", ".join(broken))
+    return problems
+
+
+def _lesson_text(number: str) -> str:
+    guide = GUIDE.read_text(errors="ignore") if GUIDE.exists() else ""
+    sections = re.split(r"\n(?=## )", guide)
+    return "\n".join(s for s in sections
+                     if s.startswith("## Lesson") and re.search(rf"ADR-{number}\)", s.splitlines()[0]))
+
+
+def _lesson_depth_problems(text: str) -> list[str]:
+    problems = []
+    words = len(text.split())
+    if words < LESSON_MIN_WORDS:
+        problems.append(f"{words} words (floor {LESSON_MIN_WORDS})")
+    lower = text.lower()
+    if not re.search(r"^###.*recognition", text, re.MULTILINE | re.IGNORECASE):
+        problems.append("no recognition-cue section")
+    if not _has_wrong_right(text):
+        problems.append("no WRONG/RIGHT pair")
+    if not re.search(r"^\*[^*\n].*[^*\n]\*\s*$|\*Principle", text, re.MULTILINE):
+        problems.append("no italic principle sentence")
+    # In BODY text, not headings: a "### How it was verified" heading with
+    # nothing under it is the hollow-section shape this gate exists to stop
+    # (the first draft of this check accepted exactly that; its test caught it).
+    body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#")).lower()
+    if not re.search(r"\bprobe|\b\d+ (failed|passed)\b|\bfails? \d+\b|\b\d+ tests? fail|\bverified\b", body):
+        problems.append("no verification evidence in the text (probe results, N failed/passed)")
+    if "failure mode" not in lower:
+        problems.append("no failure-modes section")
+    return problems
+
+
+def depth_gaps(number: str) -> list[str]:
+    """ADR-536: what makes ADR-<number>'s deep dive or lesson too thin, or []."""
+    if int(number) < DEPTH_FROM:
+        return []
+    out = []
+    dives = _covering_deep_dives(number)
+    if dives:
+        results = [(path, _deep_dive_depth_problems(text)) for path, text in dives]
+        if all(problems for _, problems in results):
+            path, problems = min(results, key=lambda r: len(r[1]))
+            out.append(f"{path.relative_to(ROOT)} is too thin: " + "; ".join(problems))
+    lesson = _lesson_text(number)
+    if lesson:
+        problems = _lesson_depth_problems(lesson)
+        if problems:
+            out.append(f"the ADR-{number} lesson is too thin: " + "; ".join(problems))
+    return out
+
+
 def missing_artifacts(number: str) -> list[str]:
     """Which of the four artifacts are absent for ADR-<number>."""
     missing = []
@@ -148,6 +265,7 @@ def missing_artifacts(number: str) -> list[str]:
     gap = deep_dive_gap(number)
     if gap:
         missing.append(gap)
+    missing.extend(depth_gaps(number))
     return missing
 
 
@@ -179,6 +297,8 @@ def main() -> int:
         "never the depth: a small fix may be short, but all nine parts are there.\n"
         "A new bug in an existing feature adds a casebook case to its deep dive;\n"
         "this check cannot see that, so it is on you (ADR-501 D2).\n"
+        "\nDepth (ADR-536; ADR-535 onward): the checks above are FLOORS. Passing them is\n"
+        f"not the standard; compare against {CALIBRATION}.\n"
         "\n"
         "Write the missing artifacts, then push again. To push anyway (a WIP\n"
         "branch, say), set ALLOW_UNDOCUMENTED=1.",
