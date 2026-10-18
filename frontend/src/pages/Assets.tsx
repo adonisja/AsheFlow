@@ -13,6 +13,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import CompanyZoneMap from '../components/OperatingZoneMap';
 import { useConfirm } from '../hooks/useConfirm';
 import { roleLabel } from '../utils/roleLabels';
+import type { RoleTransitionRequest } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,6 +103,10 @@ const MANAGEMENT_CREATABLE_ROLES = ['trainee', 'driver_trainee', 'dispatch'];
 // ADR-532 D3. Edit corrects an existing employee's role, so it is wider than
 // invite -- but a manager may never grant a role at or above their own.
 const MANAGEMENT_NEVER_GRANTS = ['management', 'admin', 'field_supervisor'];
+// ADR-537 D1: training is an Amazon requirement, so a manager cannot edit someone
+// straight into an earned role. Admins can (genuine corrections). Mirrors
+// EARNED_ROLES on the server; test_adr537 holds them equal.
+const EARNED_ROLES = ['walker', 'trainer', 'driver', 'captain'];
 const PROTECTED_ROLES = ['management', 'admin'];
 
 const ROLE_CREATION_NOTICES: Partial<Record<string, string>> = {
@@ -346,7 +351,12 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                       never able to fire. */}
                   <SelectMenu
                     value={form.role}
-                    options={allowedRoles.map(r => ({ value: r, label: roleLabel(r) }))}
+                    /* ADR-537: always show the employee's CURRENT role, even when
+                       this caller can't assign it (a manager editing a walker's
+                       phone) -- otherwise the dropdown renders blank. Leaving it
+                       unchanged is not a grant, so the server allows the save. */
+                    options={[...new Set([...(form.role && !allowedRoles.includes(form.role) ? [form.role] : []), ...allowedRoles])]
+                      .map(r => ({ value: r, label: roleLabel(r) }))}
                     placeholder="Select a role"
                     ariaLabel="Role"
                     /* portal: the rounded field wrapper above is
@@ -604,7 +614,7 @@ function PeopleTab() {
   const canImport                     = groups.includes('management') || isAdmin;
   const allowedRoles                  = isManagement ? MANAGEMENT_CREATABLE_ROLES : CREATABLE_ROLES;
   const editableRoles                 = isManagement
-    ? ROLES.filter(r => !MANAGEMENT_NEVER_GRANTS.includes(r))
+    ? ROLES.filter(r => !MANAGEMENT_NEVER_GRANTS.includes(r) && !EARNED_ROLES.includes(r))
     : ROLES;
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
@@ -893,21 +903,24 @@ function PeopleTab() {
     walker:  ['trainer', 'captain'],
     trainer: ['captain', 'walker'],
     captain: ['trainer', 'walker'],
+    // ADR-537 D2: the driver promotion the server has allowed since 2026-08-22 but
+    // no client could reach (the request schema rejected "driver").
+    driver_trainee: ['driver'],
   };
-  const ROLE_RANK: Record<string, number> = { walker: 0, trainer: 1, captain: 2 };
+  const ROLE_RANK: Record<string, number> = { walker: 0, trainer: 1, captain: 2, driver_trainee: 0, driver: 1 };
 
   const handleTransition = async (emp: Employee, newRole: string) => {
     const isPromotion = (ROLE_RANK[newRole] ?? 0) > (ROLE_RANK[emp.role] ?? 0);
-    const label = newRole.charAt(0).toUpperCase() + newRole.slice(1);
+    const label = roleLabel(newRole);
 
     const ok = await confirm({
       title: isPromotion ? `Promote to ${label}` : `Change to ${label}`,
       message: isPromotion
-        ? `Promote ${emp.name} from ${emp.role} to ${newRole}?` +
+        ? `Promote ${emp.name} from ${roleLabel(emp.role)} to ${roleLabel(newRole)}?` +
           (newRole === 'captain'
             ? ' They will start truck familiarisation on their next dispatch.'
             : '')
-        : `Change ${emp.name} from ${emp.role} to ${newRole}? ` +
+        : `Change ${emp.name} from ${roleLabel(emp.role)} to ${roleLabel(newRole)}? ` +
           `They will lose ${emp.role} permissions on their next login.` +
           (emp.role === 'captain' ? ' Any truck pin they hold will be cleared.' : ''),
       confirmLabel: isPromotion ? 'Promote' : 'Change Role',
@@ -918,9 +931,30 @@ function PeopleTab() {
     setPromotingId(emp.id);
     setPromoteMsg(null);
     try {
-      const res = await axiosClient.post(`/employees/${emp.id}/transition`, {
-        new_role: newRole,
-      });
+      let res;
+      try {
+        res = await axiosClient.post(`/employees/${emp.id}/transition`,
+          { new_role: newRole } as RoleTransitionRequest);
+      } catch (err: unknown) {
+        // ADR-537 D3: a driver trainee with phases left. The server names them;
+        // management/admin may promote anyway, but only after seeing which.
+        const detail = (err as { response?: { status?: number; data?: { detail?: { code?: string; remaining_phases?: number[] } } } })
+          ?.response;
+        const phases = detail?.status === 409 && detail.data?.detail?.code === 'phases_incomplete'
+          ? detail.data.detail.remaining_phases ?? [] : null;
+        if (!phases) throw err;
+        const override = await confirm({
+          title: 'Driver training not complete',
+          message: `${emp.name} has not completed phase${phases.length === 1 ? '' : 's'} ` +
+            `${phases.join(', ')} of driver training. Training is an Amazon requirement. ` +
+            'Promote to driver anyway? This is recorded in the audit log.',
+          confirmLabel: 'Promote anyway',
+          variant: 'danger',
+        });
+        if (!override) return;
+        res = await axiosClient.post(`/employees/${emp.id}/transition`,
+          { new_role: newRole, confirm_incomplete: true } as RoleTransitionRequest);
+      }
       setEmployees(prev => prev.map(e => (e.id === emp.id ? res.data : e)));
       setPromoteMsg({
         id: emp.id,

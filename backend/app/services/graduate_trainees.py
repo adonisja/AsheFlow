@@ -44,8 +44,9 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
     ).all()
 
     # ADR-264 D10 (revised 2026-08-22) — driver trainees are NOT promoted here.
-    # There is no driver quiz, and promotion is an explicit dispatch/management
-    # approval rather than an automatic consequence of a score. This surfaces
+    # There is no driver quiz, and promotion is an explicit management/admin
+    # approval (ADR-537: "not a dispatcher concern") rather than an automatic
+    # consequence of a score. This surfaces
     # who is waiting on that decision; the role change happens on the employee
     # page.
     #

@@ -161,8 +161,18 @@ def test_admin_can_edit_anyone_into_any_role(db, stubs):
 
 
 def test_an_edit_that_keeps_the_role_is_not_a_grant(db, stubs):
-    """Editing a phone number must not trip the grant check."""
-    assert E._edit_grant_refusal("management", "walker") is None
+    """Editing other fields must not trip the grant check.
+
+    ADR-537: this first called `_edit_grant_refusal("management", "walker")`
+    directly -- which is not "keeping the role" at all (the handler only calls the
+    rule when the role CHANGES), and it began failing correctly once managers lost
+    earned roles on edit. It now exercises what it always claimed to: the real
+    handler, role unchanged."""
+    mgr, w = make_employee(db, role="management", name="Mo Mgr"), make_employee(db, role="walker", name="Wes")
+    w.email, w.username = "wes@example.com", "wes.w"; db.commit()
+    out = E.update_employee(w.id, EmployeeUpdate(role="walker"), caller=mgr,
+                            current_user={"cognito_groups": ["management"]}, db=db)
+    assert out.role == "walker"
 
 
 # ── the web mirrors the table ──────────────────────────────────────────────

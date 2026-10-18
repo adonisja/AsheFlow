@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, field_validator, EmailStr, Field
-from typing import Optional, Literal, List
+from typing import Optional, Literal
 from uuid import UUID
 from datetime import datetime
 import re
@@ -266,8 +266,17 @@ class RoleTransitionRequest(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    new_role: Literal["walker", "trainer", "captain"] = Field(
+    # ADR-537: "driver" added. ROLE_TRANSITIONS has allowed driver_trainee -> driver
+    # since 2026-08-22 (ADR-264 D10 revised), but this Literal predated it, so every
+    # driver promotion failed validation and the only way to make a driver was the
+    # Edit dropdown -- which skipped training.
+    new_role: Literal["walker", "trainer", "captain", "driver"] = Field(
         ..., description="Target field role. Legal transitions are enforced server-side."
+    )
+    confirm_incomplete: bool = Field(
+        False,
+        description=("ADR-537 D3: promote a driver trainee whose training phases are not all "
+                     "complete. Without it the server answers 409 listing the remaining phases."),
     )
     reason: Optional[str] = Field(
         None, max_length=280,

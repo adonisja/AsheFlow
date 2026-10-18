@@ -526,6 +526,14 @@ def _edit_grant_refusal(caller_role: str, new_role: str):
     """
     if caller_role == "admin":
         return None
+    # ADR-537 D1: training is an Amazon requirement. A manager cannot edit someone
+    # straight into an earned role (walker/trainer/driver/captain); those are
+    # reached by the graduation quiz, the driver promotion, or the promote buttons.
+    # Admins keep it for genuine corrections (owner, 2026-10-18).
+    if caller_role == "management" and new_role in EARNED_ROLES:
+        return (status.HTTP_403_FORBIDDEN,
+                "Only admins can set walker, trainer, driver or captain directly. Use the "
+                "promote buttons, or let training and the graduation quiz do it.")
     if caller_role == "management" and new_role not in _MANAGEMENT_NEVER_GRANTS:
         return None
     return (status.HTTP_403_FORBIDDEN,
@@ -1735,6 +1743,7 @@ def _apply_role_transition(
     db_employee: Employee,
     new_role: str,
     caller: Employee,
+    confirm_incomplete: bool = False,
 ) -> Employee:
     """Move an employee between field roles, with every side effect that implies.
 
@@ -1758,6 +1767,25 @@ def _apply_role_transition(
                 f"Allowed: {', '.join(allowed)}."
             ),
         )
+
+    # ADR-537 D3: a driver promotion with training phases left warns -- 409 with the
+    # phases -- and goes ahead only when the caller confirms. Server-side, so no
+    # client can skip the warning by omission.
+    remaining_phases: list[int] = []
+    if old_role == "driver_trainee" and new_role == "driver":
+        from app.services.driver_promotion import driver_phases_remaining
+        remaining_phases = driver_phases_remaining(db, db_employee)
+        if remaining_phases and not confirm_incomplete:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "phases_incomplete",
+                    "remaining_phases": remaining_phases,
+                    "message": ("Driver training is not complete: phase(s) "
+                                + ", ".join(str(p) for p in remaining_phases)
+                                + " remain. Confirm to promote anyway."),
+                },
+            )
 
     is_promotion = _ROLE_RANK.get(new_role, 0) > _ROLE_RANK.get(old_role, 0)
 
@@ -1841,7 +1869,10 @@ def _apply_role_transition(
         target_table="employees",
         target_id=str(db_employee.id),
         before={"role": old_role},
-        after={"role": new_role, "captain_pins_cleared": pins_cleared},
+        after={"role": new_role, "captain_pins_cleared": pins_cleared,
+               # ADR-537 D4: an override is on the record, with what it skipped.
+               **({"incomplete_override": True, "remaining_phases": remaining_phases}
+                  if remaining_phases else {})},
     )
     db.commit()
     db.refresh(db_employee)
@@ -1899,7 +1930,8 @@ def transition_employee_role(
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    return _apply_role_transition(db, db_employee, payload.new_role, caller)
+    return _apply_role_transition(db, db_employee, payload.new_role, caller,
+                                  confirm_incomplete=payload.confirm_incomplete)
 
 
 @router.post("/{employee_id}/promote", response_model=EmployeeResponse)

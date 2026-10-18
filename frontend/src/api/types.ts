@@ -3706,3 +3706,14 @@ export interface SurveyContributorInvited {
   /** Only when the credentials email failed; shown once, never stored. */
   temp_password: string | null;
 }
+
+/** POST /employees/{id}/transition (ADR-256, ADR-537). Mirrors
+ *  schemas/employee.py RoleTransitionRequest. `driver` was missing from the server
+ *  Literal for two months while the server's transition table allowed it, so no
+ *  client could promote a driver; typing the body here keeps the two in step. */
+export interface RoleTransitionRequest {
+  new_role: 'walker' | 'trainer' | 'captain' | 'driver';
+  /** ADR-537 D3: promote a driver trainee whose phases are not all complete. */
+  confirm_incomplete?: boolean;
+  reason?: string;
+}
