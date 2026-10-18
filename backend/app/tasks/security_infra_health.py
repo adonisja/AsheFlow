@@ -45,11 +45,19 @@ from datetime import datetime, timedelta, timezone
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.database import SessionLocal
-from app.services.integration_alerts import raise_platform_alert
+from app.services.integration_alerts import clear_integration_alert, raise_platform_alert
 
 logger = logging.getLogger(__name__)
 
+# ADR-535 D5. The single alert type every check used to share -- retired. A
+# new failure in one check merged into another's open alert and only bumped a
+# counter (the message stayed the first one), and nothing ever cleared it:
+# staging's sat open from 2026-09-07, the day this task shipped. Still named
+# here so the task can close any row left open under it.
 SECURITY_INFRA_DEGRADED = "security_infra_degraded"
+
+# ADR-535 D2. One alert type per check, so a new failure is a new alert.
+ALERT_PREFIX = "security_infra."
 
 TRAIL_NAME = "AsheFlow-Trail"
 RULE_NAME = "AsheFlow-MfaUnenrol"
@@ -286,42 +294,67 @@ def _check_containment_permissions(region: str, pool_id: str) -> list[str]:
     return problems
 
 
+def _checks(region: str, pool_id: str) -> dict:
+    """name -> (callable, what it protects). The order is the order of the chain."""
+    return {
+        "trail": (lambda: _check_trail(region),
+                  "MFA unenrolment containment (ADR-387): CloudTrail is not recording Cognito events"),
+        "responder": (lambda: _check_rule_and_lambda(region),
+                      "MFA unenrolment containment (ADR-387): the EventBridge rule or responder Lambda is broken"),
+        "topic": (lambda: _check_topic(region),
+                  "MFA unenrolment containment (ADR-387): the security alert topic reaches nobody"),
+        "containment": (lambda: _check_containment_permissions(region, pool_id),
+                        "MFA containment cannot run: the app lacks a Cognito permission (ADR-389)"),
+        "pool_triggers": (lambda: _check_pool_triggers(region, pool_id),
+                          "MFA enforcement on sign-in is not wired: a Cognito trigger is detached (ADR-530)"),
+    }
+
+
 @celery_app.task(name="app.tasks.security_infra_health.check_security_infra")
 def check_security_infra() -> dict:
-    """Verify the ADR-387 containment chain, and alert super admins if it is broken.
+    """Verify every hop the MFA containment and enforcement depend on.
 
-    Returns a summary so a run that found nothing is distinguishable from one that
-    never ran — the same reason the device sweep returns counts.
+    ADR-535: each check owns its own platform alert (`security_infra.<name>`).
+    A failing check raises -- or, if already open, refreshes the message to the
+    CURRENT problem -- and a passing check clears its alert, so the board shows
+    what is broken now, not what broke first.
+
+    Returns per-check results so a run that found nothing is distinguishable
+    from one that never ran, and the verification can name the failing check.
     """
     region = settings.aws_region
-    problems: list[str] = []
-    problems += _check_trail(region)
-    problems += _check_rule_and_lambda(region)
-    problems += _check_topic(region)
-    problems += _check_containment_permissions(
-        region, settings.aws_cognito_user_pool_id)
-    problems += _check_pool_triggers(region, settings.aws_cognito_user_pool_id)
-
-    if not problems:
-        logger.info("security infra health: all checks passed")
-        return {"healthy": True, "problems": []}
+    results: dict[str, list[str]] = {}
+    for name, (run, what) in _checks(region, settings.aws_cognito_user_pool_id).items():
+        try:
+            results[name] = run()
+        except Exception as exc:  # one broken check must not stop the others
+            logger.exception("security infra health: check %s crashed", name)
+            results[name] = [f"check crashed: {type(exc).__name__}"]
 
     db = SessionLocal()
     try:
-        raise_platform_alert(
-            db,
-            alert_type=SECURITY_INFRA_DEGRADED,
-            company_id=None,  # platform-wide: this is not one tenant's problem
-            message=(
-                "MFA unenrolment containment is degraded (ADR-387). "
-                + "; ".join(problems)
-            ),
-            severity="critical",
-        )
+        for name, (_, what) in _checks(region, settings.aws_cognito_user_pool_id).items():
+            problems = results[name]
+            if problems:
+                raise_platform_alert(
+                    db,
+                    alert_type=ALERT_PREFIX + name,
+                    company_id=None,  # platform-wide: not one tenant's problem
+                    message=f"{what}. " + "; ".join(problems),
+                    severity="critical",
+                    refresh_message=True,
+                )
+            else:
+                clear_integration_alert(db, alert_type=ALERT_PREFIX + name, company_id=None)
+        # ADR-535 D5: the shared legacy alert is replaced by the per-check ones.
+        clear_integration_alert(db, alert_type=SECURITY_INFRA_DEGRADED, company_id=None)
         db.commit()
     finally:
         db.close()
 
-    logger.error("security infra health: %d problem(s): %s",
-                 len(problems), "; ".join(problems))
-    return {"healthy": False, "problems": problems}
+    problems = [f"{n}: {p}" for n, ps in results.items() for p in ps]
+    if problems:
+        logger.error("security infra health: %d problem(s): %s", len(problems), "; ".join(problems))
+    else:
+        logger.info("security infra health: all checks passed")
+    return {"healthy": not problems, "problems": problems, "checks": results}

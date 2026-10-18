@@ -29,6 +29,14 @@ const TYPE_LABELS: Record<string, string> = {
   email_delivery_failed: 'Email (SES)',
   identity_revocation_failed: 'Identity revocation (Cognito)',
   backup_failed: 'Database backup',
+  // ADR-535: one alert per security check (was one shared type). Without
+  // these the fallback renders "Security Infra.pool Triggers".
+  'security_infra.trail': 'Security: CloudTrail recording',
+  'security_infra.responder': 'Security: MFA containment responder',
+  'security_infra.topic': 'Security: alert topic subscribers',
+  'security_infra.containment': 'Security: containment permissions',
+  'security_infra.pool_triggers': 'Security: sign-in triggers',
+  security_infra_degraded: 'Security (legacy, retired)',
 };
 
 function typeLabel(t: string): string {
