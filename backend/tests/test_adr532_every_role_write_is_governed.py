@@ -11,7 +11,7 @@ for anything that writes a role -- `x.role = ...`, `Employee(role=...)`,
 `Employee(**...)`, `admin_add_user_to_group(...)` -- and fails unless that
 function calls the shared rule or is exempted below WITH A REASON. A new
 endpoint that grants a role fails CI until someone decides which it is.
-(Lesson: completeness tests walk the world, not the list -- ADR-464.)
+(Lesson: completeness tests walk the world, not the list -- ADR-499.)
 """
 import ast
 import pathlib

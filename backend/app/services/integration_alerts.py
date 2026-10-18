@@ -84,6 +84,7 @@ def raise_platform_alert(
     company_id: UUID | None = None,
     message: str = DISCORD_DOWN_MESSAGE,
     severity: str = "warning",
+    refresh_message: bool = False,
 ) -> None:
     """Record an infrastructure condition only a super admin can fix (ADR-335).
 
@@ -102,6 +103,13 @@ def raise_platform_alert(
     occurrences, still failing" is a materially different operational picture
     from "an alert exists", and the two are indistinguishable without them.
 
+    `refresh_message` (ADR-535 D4): on a repeat, replace the open alert's
+    message with the current one instead of keeping the first. For a check
+    whose problem can CHANGE while it stays failing (the Pre trigger fixed but
+    Post now missing), a frozen first message describes a problem that no
+    longer exists. Opt-in: Discord/email callers re-raise the same condition
+    and keep today's behaviour.
+
     Never raises — this runs on paths that are ALREADY handling a failure.
     """
     try:
@@ -119,6 +127,8 @@ def raise_platform_alert(
         if existing is not None:
             existing.occurrence_count += 1
             existing.last_seen_at = now
+            if refresh_message and existing.message != message:
+                existing.message = message
             return
 
         db.add(PlatformAlert(

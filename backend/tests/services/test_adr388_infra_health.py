@@ -119,24 +119,29 @@ class TestItRaisesOneAlertForSuperAdmins:
         assert r["healthy"] is True
         alert.assert_not_called()
 
-    def test_problems_become_one_platform_wide_critical_alert(self):
-        """company_id=None: a broken trail is not one tenant's problem, and
-        raise_platform_alert dedups platform-wide alerts against each other."""
+    def test_problems_become_platform_wide_critical_alerts(self):
+        """company_id=None: a broken trail is not one tenant's problem.
+
+        ADR-535: one alert PER CHECK, not one combined alert. The combined one
+        hid every later failure behind the first (dedup keeps the first message)."""
         with patch.object(h, "_check_trail", return_value=["trail broken"]), \
              patch.object(h, "_check_rule_and_lambda", return_value=["rule gone"]), \
              patch.object(h, "_check_topic", return_value=[]), \
              patch.object(h, "_check_containment_permissions", return_value=[]), \
              patch.object(h, "_check_pool_triggers", return_value=[]), \
              patch.object(h, "SessionLocal"), \
+             patch.object(h, "clear_integration_alert"), \
              patch.object(h, "raise_platform_alert") as alert:
             r = h.check_security_infra()
         assert r["healthy"] is False
         assert len(r["problems"]) == 2
-        kwargs = alert.call_args.kwargs
-        assert kwargs["severity"] == "critical"
-        assert kwargs["company_id"] is None
-        assert "trail broken" in kwargs["message"]
-        assert "rule gone" in kwargs["message"]
+        calls = {c.kwargs["alert_type"]: c.kwargs for c in alert.call_args_list}
+        assert set(calls) == {"security_infra.trail", "security_infra.responder"}
+        for kwargs in calls.values():
+            assert kwargs["severity"] == "critical"
+            assert kwargs["company_id"] is None
+        assert "trail broken" in calls["security_infra.trail"]["message"]
+        assert "rule gone" in calls["security_infra.responder"]["message"]
 
     def test_an_aws_failure_is_a_problem_not_a_crash(self):
         """The check runs unattended. An exception here means no alert AND no
