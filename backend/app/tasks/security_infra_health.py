@@ -57,7 +57,10 @@ FUNCTION_NAME = "AsheFlow-MfaUnenrolResponder"
 TOPIC_NAME = "AsheFlow-SecurityAlerts"
 # ADR-530 D4. One function serves both triggers on both pools.
 AUTH_TRIGGER_FUNCTION = "AsheFlow-CognitoPreAuth"
-AUTH_TRIGGERS = ("PreAuthentication", "PostAuthentication")
+# Named for what they are -- Cognito trigger kinds. As AUTH_TRIGGERS this tuple
+# tripped GitGuardian's generic "Authentication Tuple" detector (incident
+# 38324679, a false positive: these are event names, not credentials).
+COGNITO_TRIGGER_KINDS = ("PreAuthentication", "PostAuthentication")
 
 # A trail delivers in batches, typically within ~15 minutes. Six hours is well
 # past "slow" and comfortably short of "broken for a year", which is the failure
@@ -153,7 +156,7 @@ def _check_pool_triggers(region: str, pool_id: str) -> list[str]:
         return [f"pool triggers: {type(exc).__name__}"]
 
     problems: list[str] = []
-    for trigger in AUTH_TRIGGERS:
+    for trigger in COGNITO_TRIGGER_KINDS:
         arn = cfg.get(trigger) or ""
         # arn:aws:lambda:<region>:<acct>:function:<name>[:<qualifier>]
         parts = arn.split(":")
