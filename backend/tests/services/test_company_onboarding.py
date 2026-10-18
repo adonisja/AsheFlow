@@ -71,17 +71,25 @@ class TestBothCreationPathsHonourIt:
     def test_create_employee_checks_the_window(self):
         src = inspect.getsource(employees.create_employee)
         assert "onboarding = is_onboarding(db, caller.company_id)" in src
-        assert "if employee.role in EARNED_ROLES and not onboarding:" in src
+        # ADR-532: the window is honoured inside the one shared grant rule.
+        assert "_grant_refusal(caller.role, employee.role, onboarding)" in src
 
     def test_management_restriction_relaxes_too(self):
         """Management does the hiring at most DSPs. If only admins could use
-        the window, the feature would not reach the person who needs it."""
-        src = inspect.getsource(employees.create_employee)
-        assert 'caller.role == "management" and not onboarding' in src
+        the window, the feature would not reach the person who needs it.
+
+        ADR-532 narrows WHAT relaxes, not WHO: during onboarding a manager may
+        import every earned field role (the migration this window exists for),
+        but never a manager or admin -- that relaxation was an escalation."""
+        for earned in employees.EARNED_ROLES:
+            assert employees._grant_refusal("management", earned, onboarding=True) is None
+            assert employees._grant_refusal("management", earned, onboarding=False) is not None
+        for protected in ("management", "admin"):
+            assert employees._grant_refusal("management", protected, onboarding=True) is not None
 
     def test_bulk_import_checks_the_window(self):
         src = inspect.getsource(employees.bulk_import_employees)
-        assert "if row.role in EARNED_ROLES and not onboarding:" in src
+        assert "_grant_refusal(caller.role, row.role, onboarding)" in src
 
     def test_bulk_evaluates_the_window_once_before_the_loop(self):
         """THE bug this ordering prevents: evaluated per row, the window closes

@@ -24,8 +24,14 @@ def _load():
     return mod
 
 
-def _event(username="nicoy.hunt"):
-    return {"userPoolId": "us-east-2_TEST", "userName": username, "request": {}}
+def _event(username="nicoy.hunt", trigger="PreAuthentication_Authentication"):
+    return {"userPoolId": "us-east-2_TEST", "userName": username,
+            "triggerSource": trigger, "request": {}}
+
+
+def _post(username="nicoy.hunt"):
+    """ADR-530: the pass is spent here, once the sign-in has completed."""
+    return _event(username, "PostAuthentication_Authentication")
 
 
 def _stub(mod, *, groups, mfa_list=None, attrs=None):
@@ -49,14 +55,16 @@ def test_a_new_owner_is_allowed_through_to_enrol():
     client = _stub(mod, groups=["admin"], mfa_list=None, attrs={})
     out = mod.handler(_event(), None)
     assert out is not None, "a brand-new Owner is still locked out"
-    client.admin_update_user_attributes.assert_called_once()
+    # ADR-530: allowed but NOT stamped -- this attempt has not completed yet.
+    client.admin_update_user_attributes.assert_not_called()
 
 
 def test_the_exemption_is_spent_on_use():
-    """One sign-in wide. The stamp is what stops it being replayed."""
+    """One sign-in wide. The stamp is what stops it being replayed.
+    ADR-530: spent by the COMPLETED sign-in (PostAuthentication)."""
     mod = _load()
     client = _stub(mod, groups=["admin"], mfa_list=None, attrs={})
-    mod.handler(_event(), None)
+    mod.handler(_post(), None)
     kwargs = client.admin_update_user_attributes.call_args.kwargs
     assert kwargs["Username"] == "nicoy.hunt"
     names = [a["Name"] for a in kwargs["UserAttributes"]]
@@ -109,7 +117,7 @@ def test_a_failed_stamp_still_lets_the_user_in():
     mod = _load()
     client = _stub(mod, groups=["admin"], mfa_list=None, attrs={})
     client.admin_update_user_attributes.side_effect = RuntimeError("throttled")
-    assert mod.handler(_event(), None) is not None
+    assert mod.handler(_post(), None) is not None
 
 
 def test_it_still_fails_open_on_an_unexpected_error():

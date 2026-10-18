@@ -160,6 +160,25 @@ export default function Login() {
     }
   };
 
+  /* ADR-529. Leave a challenge and return to the username/password form.
+     There is no session to end: a challenge comes before any tokens exist.
+     Amplify's half-finished attempt (CognitoSignInState.* in sessionStorage)
+     is not cleared by signOut() and has no public reset; the next signIn
+     replaces it and it expires on its own in 3 minutes. So this is a reset of
+     what is on screen, not a sign-out. The username stays so a retry, or a
+     typo fix, is one field away -- same as mobile's Start over. */
+  const backToSignIn = () => {
+    setChallengeStep(null);
+    setNewPassword('');
+    setPassword('');
+    setMfaOptions([]);
+    setTotpSetupUri(null);
+    setTotpSecret('');
+    setTotpQr('');
+    setError('');
+    setSuccessMsg('');
+  };
+
   const isNewPassword = challengeStep === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED';
   const COPY: Record<string, { heading: string; sub: string; label: string; submit: string }> = {
     CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED: {
@@ -229,7 +248,10 @@ export default function Login() {
           {/* ADR-463. A session that vanishes with no explanation reads as a
               crash, and the user's next move is to report a bug. Styled as an
               error, not a success: the user lost work-in-progress. */}
-          {sessionEnded && (
+          {/* ADR-529 D3: hidden once a challenge is up -- it explains the LAST
+              session, and in red over a code field it reads as this attempt
+              failing. */}
+          {sessionEnded && !challengeStep && (
             <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">
               {sessionEnded === 'idle'
                 ? 'You were signed out after a period of inactivity. Sign in to continue.'
@@ -376,6 +398,20 @@ export default function Login() {
                     : 'Signing you in...')
                 : copy ? copy.submit : 'Sign in'}
             </button>
+
+            {/* ADR-529. The way out of every challenge step. Disabled in flight
+                (D2): backing out mid-confirm would show the logged-out form
+                while a sign-in that is about to succeed navigates away. */}
+            {challengeStep && (
+              <button
+                type="button"
+                onClick={backToSignIn}
+                disabled={submitting}
+                className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Back to sign in
+              </button>
+            )}
           </form>
 
           {/* Federation — for employees whose Cognito account is linked to Discord/Google */}

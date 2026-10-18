@@ -3,7 +3,7 @@ import axiosClient from '../api/axiosClient';
 import SelectMenu from './ui/SelectMenu';
 import { errorText } from '../utils/errorText';
 import type { Scorecard } from '../api/types';
-import { Award, ChevronDown } from 'lucide-react';
+import { Award } from 'lucide-react';
 
 /** Official Amazon (NYCD) weekly scorecard (ADR-204), surfaced to the employee on
  *  My Account. Read-only view of what the manager ingested; latest week shown,
@@ -41,7 +41,6 @@ export default function ScorecardCard() {
                 onChange={v => setIdx(Number(v))}
               />
             </div>
-            <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           </div>
         ) : (
           <span className="ml-auto text-xs text-muted-foreground">{sc.week}</span>

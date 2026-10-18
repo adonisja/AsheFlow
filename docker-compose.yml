@@ -5,6 +5,9 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: asheflow_postgres
+    # ADR-528: without a policy, a host reboot or an instance resize left the
+    # API and its database stopped until someone started them by hand.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-asheflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
@@ -22,6 +25,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: asheflow_redis
+    # ADR-528: without a policy, a host reboot or an instance resize left the
+    # API and its database stopped until someone started them by hand.
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -37,6 +43,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: asheflow_backend
+    # ADR-528: without a policy, a host reboot or an instance resize left the
+    # API and its database stopped until someone started them by hand.
+    restart: unless-stopped
     env_file:
       - ./backend/.env
     environment:

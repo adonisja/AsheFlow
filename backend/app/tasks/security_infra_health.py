@@ -27,6 +27,11 @@ looks at the EFFECT, not the status field:
   topic has a subscriber  a topic with none publishes into the void
   we can CALL the containment APIs  a permission can be revoked, and the
                      application would not find out until a human clicks Reset
+  sign-in triggers attached  ADR-530: PreAuthentication decides and
+                     PostAuthentication spends the enrolment pass. A pool update
+                     is a full replace and has dropped a trigger before; with
+                     PostAuthentication gone nothing stamps, and unenrolled
+                     admins keep their pass forever -- with no error anywhere.
 
 That last one matters more than it looks. The SNS topic was created and confirmed,
 but an unconfirmed or deleted subscription leaves publishing "successful" and
@@ -50,6 +55,12 @@ TRAIL_NAME = "AsheFlow-Trail"
 RULE_NAME = "AsheFlow-MfaUnenrol"
 FUNCTION_NAME = "AsheFlow-MfaUnenrolResponder"
 TOPIC_NAME = "AsheFlow-SecurityAlerts"
+# ADR-530 D4. One function serves both triggers on both pools.
+AUTH_TRIGGER_FUNCTION = "AsheFlow-CognitoPreAuth"
+# Named for what they are -- Cognito trigger kinds. As AUTH_TRIGGERS this tuple
+# tripped GitGuardian's generic "Authentication Tuple" detector (incident
+# 38324679, a false positive: these are event names, not credentials).
+COGNITO_TRIGGER_KINDS = ("PreAuthentication", "PostAuthentication")
 
 # A trail delivers in batches, typically within ~15 minutes. Six hours is well
 # past "slow" and comfortably short of "broken for a year", which is the failure
@@ -120,6 +131,40 @@ def _check_rule_and_lambda(region: str) -> list[str]:
         )
     except (ClientError, BotoCoreError) as exc:
         problems.append(f"function {FUNCTION_NAME}: {type(exc).__name__}")
+    return problems
+
+
+def _check_pool_triggers(region: str, pool_id: str) -> list[str]:
+    """Both sign-in triggers are attached to THIS environment's pool (ADR-530 D4).
+
+    Compared by function name, not full ARN: an alias or version suffix is
+    still the right function, and the account id is not what can go wrong.
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    if not pool_id:
+        return ["no Cognito pool configured; cannot check sign-in triggers"]
+    try:
+        cfg = boto3.client("cognito-idp", region_name=region).describe_user_pool(
+            UserPoolId=pool_id)["UserPool"].get("LambdaConfig") or {}
+    except ClientError as exc:
+        # The code, not the class: "ClientError" cannot tell a revoked
+        # permission from a deleted pool, and those are different fixes.
+        return [f"pool triggers: {exc.response.get('Error', {}).get('Code', 'ClientError')}"]
+    except BotoCoreError as exc:
+        return [f"pool triggers: {type(exc).__name__}"]
+
+    problems: list[str] = []
+    for trigger in COGNITO_TRIGGER_KINDS:
+        arn = cfg.get(trigger) or ""
+        # arn:aws:lambda:<region>:<acct>:function:<name>[:<qualifier>]
+        parts = arn.split(":")
+        name = parts[6] if len(parts) > 6 else ""
+        if name != AUTH_TRIGGER_FUNCTION:
+            problems.append(
+                f"{trigger} trigger is {'missing' if not arn else 'not ' + AUTH_TRIGGER_FUNCTION}"
+                " -- the MFA enrolment pass is not enforced (ADR-530)")
     return problems
 
 
@@ -255,6 +300,7 @@ def check_security_infra() -> dict:
     problems += _check_topic(region)
     problems += _check_containment_permissions(
         region, settings.aws_cognito_user_pool_id)
+    problems += _check_pool_triggers(region, settings.aws_cognito_user_pool_id)
 
     if not problems:
         logger.info("security infra health: all checks passed")
