@@ -126,9 +126,10 @@ _NO_AUDIT = {
     "continuation_requests.py::set_request_priority",
     "continuation_requests.py::submit_continuation_request",
     "employee_off_days.py::create_employee_off_day",
-    "employees.py::confirm_email_change",
     "employees.py::request_discord_link",
     "employees.py::request_email_change",
+    # ADR-541: emails a code and changes nothing; /me/password/confirm audits the change.
+    "employees.py::request_password_code",
     "feedback.py::create_feedback",
     "feedback.py::update_feedback_status",
     "field_ops.py::acknowledge_manifest",

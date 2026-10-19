@@ -6,7 +6,7 @@ from typing import List, Union
 from uuid import UUID
 from botocore.exceptions import ClientError
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -18,6 +18,8 @@ from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
+from app.models.employee import VALID_ROLES as Employee_VALID_ROLES
+from app.services import account_security
 from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
 from app.schemas.employee import (
@@ -2074,9 +2076,123 @@ def set_injury_status(
     return employee
 
 
+# ── Credential changes (ADR-541) ─────────────────────────────────────────────
+#
+# Password and email changes are confirmed OUT OF BAND (a code to the verified
+# inbox) and END EVERY SESSION. Neither flow calls Cognito's USER-level APIs
+# (ChangePassword, UpdateUserAttributes, VerifyUserAttribute): ADR-541 D4 reads
+# those, seen in CloudTrail, as someone going around the app. The password code
+# is Cognito's own ForgotPassword code; the email codes are held by
+# services/account_security.py. Every role changes its own credentials, so the
+# gate is the full role list.
+
+_allow_self = RoleChecker(list(Employee_VALID_ROLES))
+
+_NO_EMAIL = (
+    "Your account has no email address yet. Ask your manager or an admin to add "
+    "it from the People page, then try again."
+)
+
+
+def _username_or_409(caller) -> str:
+    username = cognito_username_for(caller)
+    if not username:
+        raise HTTPException(status_code=409, detail="Your account isn't set up to sign in yet.")
+    return username
+
+
+class _PasswordConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(..., min_length=4, max_length=10)
+    new_password: str = Field(..., min_length=8, max_length=256)
+
+
+@router.post("/me/password/request-code", status_code=status.HTTP_200_OK)
+def request_password_code(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_self),
+):
+    """Step 1 of a password change: email a code to the verified address.
+
+    Cognito's ForgotPassword sends it (branded by CustomMessage_ForgotPassword).
+    No current-password check -- ADR-541 R1: it would cost a real sign-in, and
+    the inbox is the barrier either way.
+    """
+    if not (caller.email or "").strip():
+        raise HTTPException(status_code=409, detail=_NO_EMAIL)
+    username = _username_or_409(caller)
+    if not account_security.allow_request(caller.id, "password"):
+        raise HTTPException(status_code=429, detail="Too many code requests. Try again in an hour.")
+    try:
+        _cognito_client().forgot_password(
+            ClientId=settings.aws_cognito_app_client_id, Username=username,
+        )
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "InvalidParameterException":
+            # Cognito's "no registered/verified email" -- an address in our DB
+            # that Cognito never verified.
+            raise HTTPException(status_code=409, detail=_NO_EMAIL)
+        if code in ("LimitExceededException", "TooManyRequestsException"):
+            raise HTTPException(status_code=429, detail="Too many code requests. Try again later.")
+        logger.error("forgot_password failed for %s: %s", caller.id, code)
+        raise HTTPException(status_code=500, detail="Couldn't send the code. Try again.")
+    return {"detail": "Code sent.", "sent_to": account_security.mask_email(caller.email)}
+
+
+@router.post("/me/password/confirm", status_code=status.HTTP_200_OK)
+def confirm_password_change(
+    payload: _PasswordConfirmRequest,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
+):
+    """Step 2: the code and the new password. Then every session ends (D2)."""
+    username = _username_or_409(caller)
+    try:
+        _cognito_client().confirm_forgot_password(
+            ClientId=settings.aws_cognito_app_client_id,
+            Username=username,
+            ConfirmationCode=payload.code.strip(),
+            Password=payload.new_password,
+        )
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "CodeMismatchException":
+            raise HTTPException(status_code=400, detail="That code isn't right. Check the email and try again.")
+        if code == "ExpiredCodeException":
+            raise HTTPException(status_code=400, detail="That code has expired. Send a new one.")
+        if code == "InvalidPasswordException":
+            raise HTTPException(
+                status_code=400,
+                detail="That password doesn't meet the rules: at least 8 characters, with upper and lower case letters, a number and a symbol.",
+            )
+        if code in ("LimitExceededException", "TooManyFailedAttemptsException", "TooManyRequestsException"):
+            raise HTTPException(status_code=429, detail="Too many attempts. Wait a few minutes and try again.")
+        logger.error("confirm_forgot_password failed for %s: %s", caller.id, code)
+        raise HTTPException(status_code=500, detail="Couldn't change your password. Try again.")
+
+    signed_out = account_security.end_all_sessions(caller, username)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="account.password_changed",
+        target_table="employees",
+        target_id=str(caller.id),
+        detail={"confirmed_by": "email_code", "signed_out_everywhere": signed_out},
+    )
+    db.commit()
+    return {"detail": "Password changed. Sign in with your new password.", "signed_out": True}
+
+
 class _EmailChangeRequest(BaseModel):
-    access_token: str
+    model_config = ConfigDict(extra="forbid")
     new_email: EmailStr
+
+
+_PENDING_EMAIL_KEY = "acctsec:pending_email:{}"
 
 
 @router.post("/me/email/request-change", status_code=status.HTTP_200_OK)
@@ -2084,44 +2200,59 @@ def request_email_change(
     payload: _EmailChangeRequest,
     caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
-    _: dict = Depends(RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])),
+    _: dict = Depends(_allow_self),
 ):
-    """Step 1: Request an email address change.
+    """Step 1 of an email change: a code to the CURRENT address and one to the NEW.
 
-    Calls Cognito UpdateUserAttributes with the user's own access token.
-    Cognito sends a verification code to the new email address.
+    ADR-541 R2. The current-address code proves the account owner (OWASP's
+    confirm-through-the-current-address step); the new-address code proves the
+    new inbox. A first email for an account with none is set by an admin (R3):
+    with no current address there is nothing to confirm against.
     """
+    current = (caller.email or "").strip().lower()
+    if not current:
+        raise HTTPException(status_code=409, detail=_NO_EMAIL)
     new_email = payload.new_email.strip().lower()
+    if new_email == current:
+        raise HTTPException(status_code=400, detail="That's already your email address.")
 
     existing = db.query(Employee).filter(
         Employee.email == new_email,
         Employee.company_id == caller.company_id,
         Employee.id != caller.id,
     ).first()
-
     if existing:
         raise HTTPException(status_code=409, detail="That email is already in use by another account.")
 
-    cognito = _cognito_client()
-    try:
-        cognito.update_user_attributes(
-            AccessToken=payload.access_token,
-            UserAttributes=[{"Name": "email", "Value": new_email}],
-        )
-    except ClientError as e:
-        code = e.response["Error"]["Code"]
-        if code == "NotAuthorizedException":
-            raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
-        logger.error("update_user_attributes failed for %s: %s", caller.id, e.response["Error"]["Code"])
-        raise HTTPException(status_code=500, detail="Failed to update email. Please try again.")
+    if not account_security.allow_request(caller.id, "email"):
+        raise HTTPException(status_code=429, detail="Too many code requests. Try again in an hour.")
 
-    return {"detail": "Verification code sent to the new email address."}
+    current_code = account_security.issue_code(caller.id, "email_current")
+    new_code = account_security.issue_code(caller.id, "email_new")
+    _get_redis().setex(_PENDING_EMAIL_KEY.format(caller.id), account_security.CODE_TTL_SECONDS, new_email)
+
+    from app.services.email import send_email_change_code
+    masked_new = account_security.mask_email(new_email)
+    try:
+        send_email_change_code(to_email=current, employee_name=caller.name, code=current_code,
+                               which="current", new_email_masked=masked_new, account_ref=str(caller.id))
+        send_email_change_code(to_email=new_email, employee_name=caller.name, code=new_code,
+                               which="new", new_email_masked=masked_new, account_ref=str(caller.id))
+    except ClientError:
+        account_security.discard_codes(caller.id, "email_current", "email_new")
+        raise HTTPException(status_code=502, detail="Couldn't send the codes. Try again.")
+
+    return {
+        "detail": "Codes sent.",
+        "current_masked": account_security.mask_email(current),
+        "new_masked": masked_new,
+    }
 
 
 class _EmailConfirmRequest(BaseModel):
-    access_token: str
-    code: str = Field(..., min_length=4, max_length=10)
-    new_email: EmailStr
+    model_config = ConfigDict(extra="forbid")
+    current_code: str = Field(..., min_length=4, max_length=10)
+    new_code: str = Field(..., min_length=4, max_length=10)
 
 
 @router.post("/me/email/confirm-change", status_code=status.HTTP_200_OK)
@@ -2129,40 +2260,75 @@ def confirm_email_change(
     payload: _EmailConfirmRequest,
     caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
 ):
-    """Step 2: Confirm the email change with the verification code.
+    """Step 2: both codes. Then the address changes, the old one is told, and
+    every session ends (D2/D3)."""
+    raw = _get_redis().get(_PENDING_EMAIL_KEY.format(caller.id))
+    if raw is None:
+        raise HTTPException(status_code=400, detail="Those codes have expired. Start the change again.")
+    new_email = raw.decode() if isinstance(raw, bytes) else raw
 
-    Calls Cognito VerifyUserAttribute, then updates the employee DB record.
-    """
-    new_email = payload.new_email.strip().lower()
-    code      = payload.code.strip()
+    for purpose, given, where in (("email_current", payload.current_code, "your current email"),
+                                  ("email_new", payload.new_code, "your new email")):
+        verdict = account_security.check_code(caller.id, purpose, given)
+        if verdict == "expired":
+            account_security.discard_codes(caller.id, "email_current", "email_new")
+            raise HTTPException(status_code=400, detail="Those codes have expired. Start the change again.")
+        if verdict == "wrong":
+            raise HTTPException(status_code=400, detail=f"The code sent to {where} isn't right.")
 
-    cognito = _cognito_client()
+    username = _username_or_409(caller)
     try:
-        cognito.verify_user_attribute(
-            AccessToken=payload.access_token,
-            AttributeName="email",
-            Code=code,
+        _cognito_client().admin_update_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=username,
+            UserAttributes=[
+                {"Name": "email", "Value": new_email},
+                {"Name": "email_verified", "Value": "true"},
+            ],
         )
     except ClientError as e:
-        code_name = e.response["Error"]["Code"]
-        if code_name == "CodeMismatchException":
-            raise HTTPException(status_code=400, detail="Incorrect verification code.")
-        if code_name == "ExpiredCodeException":
-            raise HTTPException(status_code=400, detail="Verification code has expired. Request a new one.")
-        if code_name == "NotAuthorizedException":
-            raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
-        logger.error("verify_user_attribute failed for %s: %s", caller.id, e.response["Error"]["Code"])
-        raise HTTPException(status_code=500, detail="Failed to verify email. Please try again.")
+        logger.error("admin_update_user_attributes failed for %s: %s", caller.id, e.response["Error"]["Code"])
+        raise HTTPException(status_code=500, detail="Couldn't update your email. Try again.")
 
-    # Cognito confirmed — sync to our DB
+    old_email = caller.email
     caller.email = new_email
     # ADR-445 D4 — a new address has not bounced.
     caller.email_bounced_at = None
     caller.email_bounce_type = None
+    signed_out = account_security.end_all_sessions(caller, username)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="account.email_changed",
+        target_table="employees",
+        target_id=str(caller.id),
+        detail={
+            "from": account_security.mask_email(old_email),
+            "to": account_security.mask_email(new_email),
+            "confirmed_by": "codes_to_both_addresses",
+            "signed_out_everywhere": signed_out,
+        },
+    )
     db.commit()
+    _get_redis().delete(_PENDING_EMAIL_KEY.format(caller.id))
 
-    return {"detail": "Email updated successfully.", "email": new_email}
+    # After the commit: the change stands even if the notice cannot be sent.
+    from app.services.email import send_email_changed_notice
+    try:
+        send_email_changed_notice(
+            to_email=old_email, employee_name=caller.name,
+            new_email_masked=account_security.mask_email(new_email),
+            when=datetime.now(timezone.utc).strftime("%d %B %Y at %H:%M UTC"),
+            account_ref=str(caller.id),
+        )
+    except ClientError:
+        pass  # logged by the sender with the account id
+
+    return {"detail": "Email updated. Sign in again.", "email": new_email, "signed_out": True}
 
 
 # ── Discord account linking (ADR-270) ────────────────────────────────────────

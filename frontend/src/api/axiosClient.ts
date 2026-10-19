@@ -42,7 +42,11 @@ axiosClient.interceptors.response.use(
       } catch {
         // signOut itself failed (e.g. already signed out) — still redirect
       }
-      window.location.href = '/login';
+      /* ADR-541 D2: another device changed this account's password or email,
+         so this session was ended on purpose. Routed on the code. */
+      const ended = error.response?.data?.detail?.code === 'credentials_changed'
+        ? '?ended=credentials' : '';
+      window.location.href = `/login${ended}`;
     }
 
     /* ADR-465 D3. The API refuses a blocked caller with this code, and the

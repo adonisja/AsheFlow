@@ -15,8 +15,7 @@
  * that disagreement.
  */
 import React, { useEffect, useState } from 'react';
-import { updatePassword } from 'aws-amplify/auth';
-import { fetchAuthSession } from 'aws-amplify/auth';
+import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
@@ -79,8 +78,11 @@ export default function Account() {
     if (!showFieldTabs && tab !== 'settings') setTab('settings');
   }, [showFieldTabs, tab]);
 
-  // ── password ──
-  const [current,  setCurrent]  = useState('');
+  // ── password (ADR-541: confirmed by a code to the verified email, then every
+  //    session ends -- including this one, so the person signs in with it) ──
+  const [pStep,    setPStep]    = useState<'idle' | 'code'>('idle');
+  const [pSentTo,  setPSentTo]  = useState('');
+  const [pCode,    setPCode]    = useState('');
   const [next,     setNext]     = useState('');
   const [confirm,  setConfirm]  = useState('');
   const [error,    setError]    = useState('');
@@ -91,7 +93,9 @@ export default function Account() {
   //    existed and mobile has used it since it shipped) ──
   const [eStep, setEStep] = useState<Step>('idle');
   const [newEmail, setNewEmail] = useState('');
-  const [eCode, setECode] = useState('');
+  const [eCurrentCode, setECurrentCode] = useState('');
+  const [eNewCode, setENewCode] = useState('');
+  const [eMasked, setEMasked] = useState<{ current: string; new: string } | null>(null);
   const [eBusy, setEBusy] = useState(false);
   const [eMsg, setEMsg] = useState('');
   const [currentEmail, setCurrentEmail] = useState('');
@@ -117,67 +121,71 @@ export default function Account() {
       .catch(() => {/* silent: the rows fall back to placeholders */});
   }, []);
 
+  /** After a credential change the server has ended every session, this one
+   *  included (ADR-541 D2). Sign out locally and say why on the sign-in screen. */
+  const leaveAfterChange = (which: 'password' | 'email') => {
+    signOut().catch(() => {}).finally(() => {
+      window.location.assign(`/login?ended=${which}`);
+    });
+  };
+
+  const requestPasswordCode = async () => {
+    setError(''); setLoading(true);
+    try {
+      const { data } = await axiosClient.post<{ sent_to: string }>('/employees/me/password/request-code');
+      setPSentTo(data.sent_to);
+      setPStep('code');
+    } catch (err) {
+      setError(errorText(err, 'Could not send the code. Try again.'));
+    } finally { setLoading(false); }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setSuccess(false);
+    if (pCode.trim().length < 6) { setError('Enter the 6-digit code from the email.'); return; }
     if (next !== confirm) { setError('New passwords do not match.'); return; }
     if (next.length < 8)  { setError('Password must be at least 8 characters.'); return; }
     setLoading(true);
     try {
-      await updatePassword({ oldPassword: current, newPassword: next });
+      await axiosClient.post('/employees/me/password/confirm', { code: pCode.trim(), new_password: next });
       setSuccess(true);
-      setCurrent(''); setNext(''); setConfirm('');
-    } catch (err: any) {
-      const msg = err?.message ?? '';
-      if (msg.includes('NotAuthorizedException') || msg.includes('Incorrect')) {
-        setError('Current password is incorrect.');
-      } else if (msg.includes('LimitExceededException')) {
-        setError('Too many attempts. Please wait a few minutes and try again.');
-      } else {
-        setError(msg || 'Failed to update password. Please try again.');
-      }
-    } finally {
+      leaveAfterChange('password');
+    } catch (err) {
+      setError(errorText(err, 'Could not change your password. Try again.'));
       setLoading(false);
     }
-  };
-
-  /** Cognito needs the caller's own access token to change their email — the
-   *  backend cannot mint one, which is why both steps take it in the body. */
-  const accessToken = async () => {
-    const s = await fetchAuthSession();
-    return s.tokens?.accessToken?.toString() ?? '';
   };
 
   const requestEmail = async () => {
     if (!newEmail.includes('@')) { setEMsg('Enter a valid email address.'); return; }
     setEBusy(true); setEMsg('');
     try {
-      await axiosClient.post('/employees/me/email/request-change', {
-        access_token: await accessToken(),
-        new_email: newEmail.trim().toLowerCase(),
-      });
+      const { data } = await axiosClient.post<{ current_masked: string; new_masked: string }>(
+        '/employees/me/email/request-change', { new_email: newEmail.trim().toLowerCase() },
+      );
+      setEMasked({ current: data.current_masked, new: data.new_masked });
       setEStep('verifying');
     } catch (e) {
-      setEMsg(errorText(e, 'Could not send the code.'));
+      setEMsg(errorText(e, 'Could not send the codes.'));
     } finally { setEBusy(false); }
   };
 
   const confirmEmail = async () => {
-    if (eCode.trim().length < 6) { setEMsg('Enter the 6-digit code.'); return; }
+    if (eCurrentCode.trim().length < 6 || eNewCode.trim().length < 6) {
+      setEMsg('Enter both 6-digit codes.'); return;
+    }
     setEBusy(true); setEMsg('');
     try {
       await axiosClient.post('/employees/me/email/confirm-change', {
-        access_token: await accessToken(),
-        code: eCode.trim(),
-        new_email: newEmail.trim().toLowerCase(),
+        current_code: eCurrentCode.trim(),
+        new_code: eNewCode.trim(),
       });
-      setCurrentEmail(newEmail.trim().toLowerCase());
-      setEStep('idle'); setNewEmail(''); setECode('');
-      setEMsg('Email updated. Sign in again to refresh your session.');
+      leaveAfterChange('email');
     } catch (e) {
-      setEMsg(errorText(e, 'Could not verify the code.'));
-    } finally { setEBusy(false); }
+      setEMsg(errorText(e, 'Could not verify the codes.'));
+      setEBusy(false);
+    }
   };
 
   const requestDiscord = async () => {
@@ -260,12 +268,16 @@ export default function Account() {
                   <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email</span>
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-sm text-foreground truncate">{currentEmail || '—'}</span>
-                    <button
-                      onClick={() => { setNewEmail(currentEmail); setEStep('entering'); setEMsg(''); }}
-                      className="text-sm text-primary hover:underline shrink-0"
-                    >
-                      Edit
-                    </button>
+                    {/* ADR-541 R3: a first email is added by an admin -- with no
+                        current address there is nothing to confirm against. */}
+                    {currentEmail && (
+                      <button
+                        onClick={() => { setNewEmail(''); setEStep('entering'); setEMsg(''); }}
+                        className="text-sm text-primary hover:underline shrink-0"
+                      >
+                        Change
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : eStep === 'entering' ? (
@@ -276,7 +288,8 @@ export default function Account() {
                   <input value={newEmail} onChange={e => setNewEmail(e.target.value)}
                          type="email" autoComplete="email" className={field} />
                   <p className="text-xs text-muted-foreground">
-                    A verification code will be sent to the new address.
+                    We'll email a code to your current address and one to the new
+                    address. After the change you'll be signed out everywhere.
                   </p>
                   <div className="flex gap-2">
                     <button onClick={() => { setEStep('idle'); setEMsg(''); }}
@@ -289,17 +302,23 @@ export default function Account() {
                 </div>
               ) : (
                 <div className="space-y-2 max-w-sm">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    Verification code
+                  <label htmlFor="email-code-current" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Code sent to {eMasked?.current ?? 'your current email'}
                   </label>
-                  <p className="text-xs text-muted-foreground">Sent to {newEmail}</p>
-                  <input value={eCode} onChange={e => setECode(e.target.value)}
+                  <input id="email-code-current" value={eCurrentCode} onChange={e => setECurrentCode(e.target.value)}
+                         inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000"
+                         className={`${field} font-mono tracking-widest`} />
+                  <label htmlFor="email-code-new" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Code sent to {eMasked?.new ?? 'the new email'}
+                  </label>
+                  <input id="email-code-new" value={eNewCode} onChange={e => setENewCode(e.target.value)}
                          inputMode="numeric" maxLength={6} placeholder="000000"
                          className={`${field} font-mono tracking-widest`} />
+                  <p className="text-xs text-muted-foreground">Codes expire in 10 minutes.</p>
                   <div className="flex gap-2">
-                    <button onClick={() => { setEStep('idle'); setEMsg(''); }}
+                    <button onClick={() => { setEStep('idle'); setEMsg(''); setECurrentCode(''); setENewCode(''); }}
                             className="btn-ghost text-sm px-3 py-1.5">Cancel</button>
-                    <button onClick={confirmEmail} disabled={eBusy || eCode.length < 6}
+                    <button onClick={confirmEmail} disabled={eBusy || eCurrentCode.length < 6 || eNewCode.length < 6}
                             className="btn-primary text-sm px-3 py-1.5 disabled:opacity-50">
                       {eBusy ? 'Verifying…' : 'Confirm'}
                     </button>
@@ -403,36 +422,67 @@ export default function Account() {
             {success ? (
               <div className="flex items-center gap-2 text-success text-sm font-medium py-2">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
-                Password updated successfully.
+                Password changed. Signing you out…
+              </div>
+            ) : !currentEmail ? (
+              <p className="text-sm text-muted-foreground max-w-prose">
+                Changing your password needs an email address to send a code to.
+                Ask your manager or an admin to add your email from the People page.
+              </p>
+            ) : pStep === 'idle' ? (
+              <div className="space-y-3 max-w-sm">
+                <p className="text-sm text-muted-foreground">
+                  We'll email a code to your address on file. After the change
+                  you'll be signed out everywhere, including here.
+                </p>
+                {error && <p className="text-xs text-danger">{error}</p>}
+                <button type="button" onClick={requestPasswordCode} disabled={loading}
+                        className="btn-primary text-sm px-4 py-2 disabled:opacity-50">
+                  {loading ? 'Sending…' : 'Email me a code'}
+                </button>
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4 max-w-sm">
+                <p className="text-xs text-muted-foreground">Code sent to {pSentTo}. It works once.</p>
+                <div className="space-y-1">
+                  <label htmlFor="pw-code" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Code from the email</label>
+                  <input id="pw-code" value={pCode} onChange={e => { setPCode(e.target.value); setError(''); }}
+                         inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" required
+                         className={`${field} font-mono tracking-widest`} />
+                </div>
                 {[
-                  { label: 'Current password', value: current, setter: setCurrent, auto: 'current-password' },
-                  { label: 'New password',     value: next,    setter: setNext,    auto: 'new-password' },
-                  { label: 'Confirm new password', value: confirm, setter: setConfirm, auto: 'new-password' },
-                ].map(({ label, value, setter, auto }) => (
-                  <div key={label} className="space-y-1">
-                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{label}</label>
+                  { id: 'pw-new', label: 'New password', value: next, setter: setNext },
+                  { id: 'pw-confirm', label: 'Confirm new password', value: confirm, setter: setConfirm },
+                ].map(({ id, label, value, setter }) => (
+                  <div key={id} className="space-y-1">
+                    <label htmlFor={id} className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{label}</label>
                     <input
+                      id={id}
                       type="password"
                       value={value}
-                      onChange={e => { setter(e.target.value); setError(''); setSuccess(false); }}
+                      onChange={e => { setter(e.target.value); setError(''); }}
                       required
-                      autoComplete={auto}
+                      autoComplete="new-password"
                       className={field}
                     />
                   </div>
                 ))}
+                <p className="text-xs text-muted-foreground">
+                  At least 8 characters, with upper and lower case letters, a number and a symbol.
+                </p>
                 {error && <p className="text-xs text-danger">{error}</p>}
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
-                >
-                  {loading && <span className="w-3.5 h-3.5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
-                  {loading ? 'Updating…' : 'Update Password'}
-                </button>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setPStep('idle'); setPCode(''); setError(''); }}
+                          className="btn-ghost text-sm px-3 py-2">Cancel</button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {loading && <span className="w-3.5 h-3.5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
+                    {loading ? 'Changing…' : 'Change password'}
+                  </button>
+                </div>
               </form>
             )}
           </div>

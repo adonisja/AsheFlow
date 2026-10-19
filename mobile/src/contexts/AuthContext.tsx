@@ -8,7 +8,8 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { unregisterFromPush } from '@api/pushRegistration';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
-import { Linking } from 'react-native';
+import { Alert, Linking } from 'react-native';
+import { onCredentialsChanged } from '@api/client';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
 import {
@@ -136,6 +137,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
 
   useEffect(() => { restoreSession(); }, []);
+
+  // ADR-541 D2 — the server ended this session because the password or email
+  // was changed (here or on another device). Drop to sign-in and say why.
+  useEffect(() => onCredentialsChanged(() => {
+    setUser(null);
+    setCapabilities(null);
+    Alert.alert(
+      'Signed out',
+      "This account's password or email was changed, so you were signed out everywhere. "
+        + "Sign in again. If you didn't make the change, tell your manager straight away.",
+    );
+  }), []);
 
   const restoreSession = async () => {
     try {

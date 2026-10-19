@@ -3717,3 +3717,27 @@ export interface RoleTransitionRequest {
   confirm_incomplete?: boolean;
   reason?: string;
 }
+
+/* ── ADR-541: credential changes, confirmed by email ─────────────────────── */
+
+/** POST /employees/me/password/confirm. Server: extra="forbid", code 4–10, password 8–256. */
+export interface PasswordConfirmRequest {
+  code: string;
+  new_password: string;
+}
+
+/** POST /employees/me/email/request-change. Codes go to BOTH the current and the new inbox. */
+export interface EmailChangeRequest {
+  new_email: string;
+}
+export interface EmailChangeCodesSent {
+  detail: string;
+  current_masked: string;
+  new_masked: string;
+}
+
+/** POST /employees/me/email/confirm-change. One code from each inbox. */
+export interface EmailConfirmRequest {
+  current_code: string;
+  new_code: string;
+}

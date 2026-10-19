@@ -41,7 +41,7 @@ def _configuration_set_kwargs() -> dict:
     return {"ConfigurationSetName": name} if name else {}
 
 
-def _log_ses_failure(to_email: str, exc) -> None:
+def _log_ses_failure(to_email: str, exc, account_ref: str | None = None) -> None:
     """Log a send failure, naming the sandbox when that is what it is.
 
     ADR-442 D3. "email delivery failed" sent an operator to the IAM policies
@@ -52,6 +52,12 @@ def _log_ses_failure(to_email: str, exc) -> None:
 
     Naming it here means the log answers the question instead of starting a
     search.
+
+    ADR-541 (Dimension 7): the address is used to RECOGNISE the sandbox
+    signature, never written to the log. It was logged twice before -- as the
+    "for %s" argument and inside the exception text, where the sandbox error's
+    resource ARN carries it. The line now names the account (when the caller
+    knows it) and redacts the address out of the error text.
     """
     err = getattr(exc, "response", {}).get("Error", {})
     code = err.get("Code", "Unknown")
@@ -62,7 +68,9 @@ def _log_ses_failure(to_email: str, exc) -> None:
             "an IAM policy problem. Verify the address, or request SES "
             "production access."
         )
-    logger.error("SES send_email failed for %s (%s): %s%s", to_email, code, exc, hint)
+    detail = str(exc).replace(to_email, "<recipient>") if to_email else str(exc)
+    logger.error("SES send_email failed for %s (%s): %s%s",
+                 f"account {account_ref}" if account_ref else "a recipient", code, detail, hint)
 
 
 def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: str) -> None:
@@ -133,7 +141,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
                 },
             },
         )
-        logger.info("Discord invite email sent to %s", to_email)
+        logger.info("Discord invite email sent")  # no address in logs (D7, ADR-541)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -267,7 +275,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
                 },
             },
         )
-        logger.info("Credentials email sent to %s", to_email)
+        logger.info("Credentials email sent")  # no address in logs (D7, ADR-541)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -347,7 +355,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
                 },
             },
         )
-        logger.info("Invite email sent to %s", to_email)
+        logger.info("Invite email sent")  # no address in logs (D7, ADR-541)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -505,7 +513,7 @@ def send_owner_invite_email(
                 },
             },
         )
-        logger.info("Owner invite email sent to %s", to_email)
+        logger.info("Owner invite email sent")  # no address in logs (D7, ADR-541)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -709,3 +717,137 @@ def send_owner_email_change_email(*, to_email: str, owner_name: str, token: str,
     except ClientError as exc:
         _log_ses_failure(to_email, exc)
         raise
+
+
+# ── Account security emails (ADR-541) ─────────────────────────────────────────
+#
+# One layout for every security email, matching the ADR-540 new-device design
+# the owner reviewed: the real logo (logo-full-light as a 2x PNG -- Gmail and
+# Outlook do not render SVG), the brandSurface navy header, a SECURITY label,
+# and a footer that says what AsheFlow never asks for. Addresses are never
+# logged here (Dimension 7): failures log the account id the caller passes.
+
+def _security_layout(*, heading: str, body_html: str) -> str:
+    base = settings.app_base_url.rstrip("/")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F9F9FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F9F9FB;padding:32px 12px;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+        <tr><td style="background:#16235A;border-radius:14px 14px 0 0;padding:20px 28px;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td><img src="{base}/email/logo-light@2x.png" width="150" height="29" alt="AsheFlow" style="display:block;border:0;outline:none;width:150px;height:29px;"></td>
+            <td align="right"><span style="color:#C9CFEF;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;">Security</span></td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="background:#ffffff;padding:28px;border-left:1px solid #DCDFE5;border-right:1px solid #DCDFE5;">
+          <h1 style="margin:0 0 12px;font-size:22px;line-height:1.25;font-weight:700;color:#111522;">{heading}</h1>
+          {body_html}
+        </td></tr>
+        <tr><td style="background:#F8F7FF;border:1px solid #E8E8F0;border-top:none;border-radius:0 0 14px 14px;padding:16px 28px;">
+          <p style="margin:0 0 8px;font-size:12px;line-height:1.6;color:#4B5563;"><strong>AsheFlow will never ask for your password, sign-in code or personal details by email.</strong> Links in our emails only go to an address starting with {html.escape(base)}/.</p>
+          <p style="margin:0;font-size:12px;line-height:1.6;color:#9CA3AF;">You're getting this because it's a security notice for your account, so it can't be turned off. &copy; AsheFlow &middot; Field operations, simplified</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+_SECURITY_FOOTER_TEXT = (
+    "AsheFlow will never ask for your password, sign-in code or personal details by email.\n"
+    "You're getting this because it's a security notice for your account."
+)
+
+
+def _send_security_email(*, to_email: str, subject: str, text: str, html_body: str, account_ref: str) -> None:
+    client = boto3.client("ses", region_name=settings.aws_region)
+    try:
+        client.send_email(
+            **_configuration_set_kwargs(),
+            Source=settings.ses_from_email,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": text, "Charset": "UTF-8"},
+                    "Html": {"Data": html_body, "Charset": "UTF-8"},
+                },
+            },
+        )
+    except ClientError as e:
+        # The shared handler keeps the ADR-442 sandbox hint; it logs the
+        # account id, never the address (D7).
+        _log_ses_failure(to_email, e, account_ref=account_ref)
+        raise
+
+
+def _code_block(code: str) -> str:
+    return (
+        '<table cellpadding="0" cellspacing="0" style="margin:6px 0 18px;"><tr>'
+        '<td style="background:#FBFAFD;border:1px solid #E6E2F0;border-radius:10px;padding:14px 22px;">'
+        f'<span style="font-family:\'Courier New\',monospace;font-size:28px;font-weight:700;letter-spacing:.3em;color:#111522;">{html.escape(code)}</span>'
+        '</td></tr></table>'
+    )
+
+
+def send_email_change_code(*, to_email: str, employee_name: str, code: str,
+                           which: str, new_email_masked: str, account_ref: str) -> None:
+    """One of the two codes an email change needs (ADR-541 R2).
+
+    which="current": sent to the address on file -- proves the account owner.
+    which="new":     sent to the requested address -- proves that inbox.
+    """
+    first, first_html = _greeting_name(employee_name)
+    if which == "current":
+        subject = "Confirm your AsheFlow email change"
+        lead = (f"Someone asked to change the email on your AsheFlow account to "
+                f"<strong>{html.escape(new_email_masked)}</strong>. Enter this code to confirm it was you.")
+        lead_text = (f"Someone asked to change the email on your AsheFlow account to {new_email_masked}. "
+                     f"Enter this code to confirm it was you.")
+        warn = ("<p style=\"margin:0;font-size:14px;line-height:1.55;color:#8E1F1F;\"><strong>If this wasn't you,</strong> "
+                "don't share this code. Change your password from your Account page, and tell your manager.</p>")
+        warn_text = "If this wasn't you, don't share this code. Change your password from your Account page, and tell your manager."
+    else:
+        subject = "Verify your new AsheFlow email"
+        lead = "Enter this code in AsheFlow to make this your account's email address."
+        lead_text = lead
+        warn = ("<p style=\"margin:0;font-size:14px;line-height:1.55;color:#374151;\">If you didn't ask for this, "
+                "you can ignore this email. Nothing changes without the code.</p>")
+        warn_text = "If you didn't ask for this, you can ignore this email. Nothing changes without the code."
+    body = (f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, {lead}</p>'
+            f"{_code_block(code)}"
+            '<p style="margin:0 0 16px;font-size:13px;color:#6B7280;">The code works once and expires in 10 minutes.</p>'
+            f"{warn}")
+    text = (f"Hi {first},\n\n{lead_text}\n\n    {code}\n\n"
+            f"The code works once and expires in 10 minutes.\n\n{warn_text}\n\n{_SECURITY_FOOTER_TEXT}")
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading=subject, body_html=body),
+                         account_ref=account_ref)
+
+
+def send_email_changed_notice(*, to_email: str, employee_name: str,
+                              new_email_masked: str, when: str, account_ref: str) -> None:
+    """To the OLD address once an email change completes (ADR-541 D3)."""
+    first, first_html = _greeting_name(employee_name)
+    subject = "Your AsheFlow email was changed"
+    body = (f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, the email on your '
+            f'AsheFlow account was changed to <strong>{html.escape(new_email_masked)}</strong> on {html.escape(when)}. '
+            "You've been signed out everywhere.</p>"
+            '<table width="100%" cellpadding="0" cellspacing="0" style="background:#ECF7F1;border:1px solid #BFE3CF;border-radius:10px;margin-bottom:14px;"><tr><td style="padding:12px 16px;">'
+            '<p style="margin:0;font-size:14px;line-height:1.5;color:#0F5E3D;"><strong>If this was you,</strong> there\'s nothing to do.</p></td></tr></table>'
+            '<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #F1C7C7;border-radius:10px;"><tr><td style="padding:14px 16px;">'
+            '<p style="margin:0 0 8px;font-size:14px;color:#8E1F1F;font-weight:700;">If this wasn\'t you</p>'
+            '<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;">Contact your manager or an admin at your company straight away. '
+            "They can restore your email and reset your access. Replies to this address aren't read.</p>"
+            "</td></tr></table>")
+    text = (f"Hi {first},\n\nThe email on your AsheFlow account was changed to {new_email_masked} on {when}. "
+            "You've been signed out everywhere.\n\nIf this was you, there's nothing to do.\n\n"
+            "If this wasn't you: contact your manager or an admin at your company straight away. "
+            "They can restore your email and reset your access.\n\n" + _SECURITY_FOOTER_TEXT)
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading=subject, body_html=body),
+                         account_ref=account_ref)

@@ -125,6 +125,12 @@ class Employee(Base):
     # date from 2026-05-07), which is a day-one mass lockout. Stamped once and
     # never moved: a later sign-in must not silently extend the window.
     mfa_grace_started_at = Column(DateTime(timezone=True), nullable=True)
+    # ADR-541 D2 — any token issued before this instant is refused by
+    # get_caller_employee. Stamped when the password or email changes, alongside
+    # Cognito's AdminUserGlobalSignOut: that revokes REFRESH tokens, but this API
+    # verifies access tokens locally against JWKS, so without this stamp a
+    # signed-out access token keeps working here until it expires (15 min).
+    tokens_valid_after   = Column(DateTime(timezone=True), nullable=True)
     # ADR-221: stamped on deactivation. The tombstone survives so the 6-month
     # name-redaction clock has a departure time to measure against.
     deactivated_at       = Column(DateTime(timezone=True), nullable=True)
