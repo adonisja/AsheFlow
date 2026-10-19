@@ -33,11 +33,12 @@ const MINUTE = 60 * 1000;
    sort cannot survive into the next day. */
 const PRIVILEGED: SessionLimits = { absoluteMs: 12 * HOUR, idleMs: 30 * MINUTE, tier: 'privileged' };
 
-/* No idle clock for field roles, for the reason ADR-385 gave them a 7-day
-   device TTL against the privileged 24h: their app backgrounds constantly on
+/* No idle clock for field roles: their app backgrounds constantly on
    unreliable mobile networks, and a 30-minute idle timer would sign a walker
-   out between two buildings. The absolute cap still bounds them to one day. */
-const FIELD: SessionLimits = { absoluteMs: 24 * HOUR, idleMs: null, tier: 'field' };
+   out between two buildings (ADR-385, ADR-463 D3; reaffirmed by the owner,
+   ADR-542). The absolute cap bounds them instead: 12h from sign-in since
+   ADR-542 (was 24h) -- an 8-hour shift plus a buffer, matching mobile. */
+const FIELD: SessionLimits = { absoluteMs: 12 * HOUR, idleMs: null, tier: 'field' };
 
 export function limitsForGroups(groups: readonly string[]): SessionLimits {
   const privileged = groups.some(g => (PRIVILEGED_GROUPS as readonly string[]).includes(g));

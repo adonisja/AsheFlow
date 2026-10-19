@@ -23,12 +23,13 @@ def test_privileged_is_twelve_hours_and_thirty_minutes():
     assert "30 * MINUTE" in m.group(1), "privileged idle cap is not 30min"
 
 
-def test_field_is_a_day_with_no_idle_clock():
-    """A 30-minute idle timer would sign a walker out between two buildings."""
+def test_field_is_twelve_hours_with_no_idle_clock():
+    """A 30-minute idle timer would sign a walker out between two buildings.
+    The absolute cap is 12h since ADR-542 (was 24h): a shift plus a buffer."""
     src = POLICY.read_text()
     m = re.search(r"const FIELD: SessionLimits = \{([^}]+)\}", src)
     assert m, "FIELD limits not found"
-    assert "24 * HOUR" in m.group(1), "field absolute cap is not 24h"
+    assert "12 * HOUR" in m.group(1), "field absolute cap is not 12h (ADR-542)"
     assert "idleMs: null" in m.group(1), "field tier has an idle clock"
 
 
@@ -127,7 +128,7 @@ def test_mobile_has_an_absolute_session_cap():
     src = MOBILE_TOKENS.read_text()
     m = re.search(r"ABSOLUTE_SESSION_LIMIT_MS = ([^;]+);", src)
     assert m, "mobile has no absolute session cap"
-    assert "24 * 60 * 60 * 1000" in m.group(1), f"cap is {m.group(1).strip()}, not 24h"
+    assert "12 * 60 * 60 * 1000" in m.group(1), f"cap is {m.group(1).strip()}, not 12h (ADR-542)"
 
 
 def test_mobile_checks_the_cap_before_the_freshness_shortcut():

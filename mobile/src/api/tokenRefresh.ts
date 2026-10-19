@@ -24,12 +24,13 @@ export const INACTIVITY_LIMIT_MS = 12 * 60 * 60 * 1000;
  *  refresh token. SP 800-63-4 makes establishing an overall timeout a SHALL,
  *  and there was none here.
  *
- *  24h, matching the web FIELD tier -- this app is walkers, drivers, captains
+ *  12h since ADR-542 (was 24h), matching the web FIELD tier: a shift is 8
+ *  hours, so one sign-in covers it. This app is walkers, drivers, captains
  *  and field supervisors. It deliberately does NOT carry the web's 12h/30min
  *  privileged rule: nobody privileged is expected here, and importing that
  *  tier would sign a walker out mid-shift for a threat this app does not run.
  */
-export const ABSOLUTE_SESSION_LIMIT_MS = 24 * 60 * 60 * 1000;
+export const ABSOLUTE_SESSION_LIMIT_MS = 12 * 60 * 60 * 1000;
 
 /** Refresh when the ID token has less than this long left. */
 const EXPIRY_MARGIN_MS = 5 * 60 * 1000;
