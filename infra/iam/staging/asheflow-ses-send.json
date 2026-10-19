@@ -9,7 +9,10 @@
         "ses:SendRawEmail",
         "ses:SendTemplatedEmail"
       ],
-      "Resource": "arn:aws:ses:us-east-2:586794453404:identity/asheflow.com"
+      "Resource": [
+        "arn:aws:ses:us-east-2:586794453404:identity/asheflow.com",
+        "arn:aws:ses:us-east-2:586794453404:configuration-set/asheflow-delivery-staging"
+      ]
     },
     {
       "Sid": "SesQuotaReadForHealthProbe",
