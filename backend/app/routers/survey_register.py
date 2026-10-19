@@ -1285,6 +1285,12 @@ class ActivityClaimOut(BaseModel):
     walk_open: bool
 
 
+class StaffReleaseOut(ActivityClaimOut):
+    # ADR-546 D4: whether the holder's notice was actually sent, so the page
+    # never claims "emailed" for a send that failed or had no address.
+    holder_emailed: bool
+
+
 class ActivityWalkOut(BaseModel):
     id: UUID
     holder: str
@@ -1498,7 +1504,7 @@ class StaffReleaseIn(BaseModel):
     reason: str = Field(min_length=10, max_length=200)
 
 
-@router.post("/claims/{claim_id}/staff-release", response_model=ActivityClaimOut)
+@router.post("/claims/{claim_id}/staff-release", response_model=StaffReleaseOut)
 def staff_release_claim(claim_id: UUID, body: StaffReleaseIn, staff: dict = Depends(get_platform_staff),
                         db: Session = Depends(get_db)):
     """D4 — free a block someone is holding. The walk and its observations are
@@ -1527,14 +1533,17 @@ def staff_release_claim(claim_id: UUID, body: StaffReleaseIn, staff: dict = Depe
     block = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.id == c.area_block_id).one()
     area = db.query(SurveyArea).filter(SurveyArea.id == c.area_id).one()
     holder = db.query(SurveyContributor).filter(SurveyContributor.cognito_sub == c.writer_sub).first()
+    emailed = False
     if holder is not None and holder.email:
         try:
             send_claim_released_notice(to_email=holder.email, name=holder.display_name,
-                                       block=f"{block.street} ({block.description})", area=area.name,
+                                       block=block.description, area=area.name,
                                        reason=reason, account_ref=str(holder.id))
+            emailed = True
         except Exception as exc:
             logger.warning("survey staff release: notice failed: %s", type(exc).__name__)
     walk = db.query(SurveyWalk).filter(SurveyWalk.id == c.walk_id).first() if c.walk_id else None
-    return ActivityClaimOut(id=c.id, area_name=area.name, street=block.street, description=block.description,
-                            holder=holder.display_name if holder else "Owner", claimed_at=c.claimed_at,
-                            expires_at=c.expires_at, walk_open=walk is not None and walk.closed_at is None)
+    return StaffReleaseOut(id=c.id, area_name=area.name, street=block.street, description=block.description,
+                           holder=holder.display_name if holder else "Owner", claimed_at=c.claimed_at,
+                           expires_at=c.expires_at, walk_open=walk is not None and walk.closed_at is None,
+                           holder_emailed=emailed)

@@ -3814,3 +3814,8 @@ export interface SurveyReadmitRequest {
 export interface SurveyStaffReleaseRequest {
   reason: string;
 }
+
+/** ADR-546 D4: whether the holder's notice was actually sent. */
+export interface SurveyStaffReleaseResult extends SurveyActivityClaim {
+  holder_emailed: boolean;
+}

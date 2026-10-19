@@ -41,6 +41,17 @@ def _configuration_set_kwargs() -> dict:
     return {"ConfigurationSetName": name} if name else {}
 
 
+def _log_ses_sent(kind: str, resp: dict, account_ref: str | None = None) -> None:
+    """ADR-546 D2 — one log line per send, carrying SES's MessageId.
+
+    The handler logs the matching Delivery / DeliveryDelay / Bounce event with
+    the same id, so "did this email arrive?" is one grep across two lines. The
+    address is never logged (Dimension 7); the account reference is.
+    """
+    logger.info("%s sent: SES MessageId=%s%s", kind, (resp or {}).get("MessageId", "?"),
+                f" account={account_ref}" if account_ref else "")
+
+
 def _log_ses_failure(to_email: str, exc, account_ref: str | None = None) -> None:
     """Log a send failure, naming the sandbox when that is what it is.
 
@@ -129,7 +140,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -141,7 +152,7 @@ def send_discord_invite_email(*, to_email: str, employee_name: str, invite_url: 
                 },
             },
         )
-        logger.info("Discord invite email sent")  # no address in logs (D7, ADR-541)
+        _log_ses_sent("Discord invite email", resp)  # no address (D7); MessageId (ADR-546)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -263,7 +274,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -275,7 +286,7 @@ def send_credentials_email(*, to_email: str, employee_name: str, username: str, 
                 },
             },
         )
-        logger.info("Credentials email sent")  # no address in logs (D7, ADR-541)
+        _log_ses_sent("Credentials email", resp)  # no address (D7); MessageId (ADR-546)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -343,7 +354,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -355,7 +366,7 @@ def send_invite_email(*, to_email: str, employee_name: str, token: str) -> None:
                 },
             },
         )
-        logger.info("Invite email sent")  # no address in logs (D7, ADR-541)
+        _log_ses_sent("Invite email", resp)  # no address (D7); MessageId (ADR-546)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -501,7 +512,7 @@ def send_owner_invite_email(
 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -513,7 +524,7 @@ def send_owner_invite_email(
                 },
             },
         )
-        logger.info("Owner invite email sent")  # no address in logs (D7, ADR-541)
+        _log_ses_sent("Owner invite email", resp)  # no address (D7); MessageId (ADR-546)
     except ClientError as e:
         _log_ses_failure(to_email, e)
         raise
@@ -604,7 +615,7 @@ def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -616,6 +627,7 @@ def send_bot_setup_email(*, to_email: str, admin_name: str, invite_url: str,
                 },
             },
         )
+        _log_ses_sent("Bot setup email", resp)  # ADR-546
     except ClientError as exc:
         _log_ses_failure(to_email, exc)
         raise
@@ -702,7 +714,7 @@ def send_owner_email_change_email(*, to_email: str, owner_name: str, token: str,
 
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -714,6 +726,7 @@ def send_owner_email_change_email(*, to_email: str, owner_name: str, token: str,
                 },
             },
         )
+        _log_ses_sent("Owner email-change email", resp)  # ADR-546
     except ClientError as exc:
         _log_ses_failure(to_email, exc)
         raise
@@ -766,7 +779,7 @@ _SECURITY_FOOTER_TEXT = (
 def _send_security_email(*, to_email: str, subject: str, text: str, html_body: str, account_ref: str) -> None:
     client = boto3.client("ses", region_name=settings.aws_region)
     try:
-        client.send_email(
+        resp = client.send_email(
             **_configuration_set_kwargs(),
             Source=settings.ses_from_email,
             Destination={"ToAddresses": [to_email]},
@@ -778,6 +791,7 @@ def _send_security_email(*, to_email: str, subject: str, text: str, html_body: s
                 },
             },
         )
+        _log_ses_sent(f"Security email {subject!r}", resp, account_ref=account_ref)  # ADR-546
     except ClientError as e:
         # The shared handler keeps the ADR-442 sandbox hint; it logs the
         # account id, never the address (D7).

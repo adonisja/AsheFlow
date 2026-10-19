@@ -64,6 +64,34 @@ def _confirm_subscription(msg: dict) -> None:
         logger.error("SNS subscription confirmation failed for %s", msg.get("TopicArn"))
 
 
+def _log_delivery(payload: dict) -> bool:
+    """ADR-546 D2 — log Delivery / DeliveryDelay / Reject against its MessageId.
+
+    Returns True if the event was one of these (so the caller can stop). The
+    recipient's DOMAIN is logged, never the address (Dimension 7): enough to
+    see "Gmail accepted it" without putting personal data in the log.
+    """
+    kind = payload.get("eventType") or payload.get("notificationType")
+    if kind not in ("Delivery", "DeliveryDelay", "Reject"):
+        return False
+    mail = payload.get("mail", {}) or {}
+    mid = mail.get("messageId", "?")
+    domains = sorted({a.rsplit("@", 1)[-1].lower() for a in (mail.get("destination") or []) if "@" in a})
+    if kind == "Delivery":
+        d = payload.get("delivery", {}) or {}
+        logger.info("SES Delivery: MessageId=%s domains=%s at=%s took_ms=%s smtp=%r",
+                    mid, domains, d.get("timestamp"), d.get("processingTimeMillis"),
+                    (d.get("smtpResponse") or "")[:160])
+    elif kind == "DeliveryDelay":
+        d = payload.get("deliveryDelay", {}) or {}
+        logger.warning("SES DeliveryDelay: MessageId=%s domains=%s type=%s expires=%s",
+                       mid, domains, d.get("delayType"), d.get("expirationTime"))
+    else:
+        r = payload.get("reject", {}) or {}
+        logger.error("SES Reject: MessageId=%s domains=%s reason=%s", mid, domains, r.get("reason"))
+    return True
+
+
 def _recipients(payload: dict) -> tuple[list[str], str | None]:
     """The addresses that failed, and how.
 
@@ -172,7 +200,10 @@ def _flag(db: Session, address: str, bounce_type: str, when: datetime) -> int:
 # 120/minute is far above real SES volume (a few events per day) and far below
 # what would hurt. A genuine burst -- a bulk import bouncing at once -- arrives
 # from SNS batched, not as 120 separate posts.
-@limiter.limit("120/minute")
+# ADR-546 D3: 600, was 120. Delivery events now arrive for EVERY email, so a
+# 200-invite bulk import is 200 events in a minute; at 120 SNS's few retries
+# could give up and drop a BOUNCE in the same burst.
+@limiter.limit("600/minute")
 async def ses_events(request: Request, db: Session = Depends(get_db)) -> dict:
     """Receive a verified SES bounce or complaint.
 
@@ -225,6 +256,9 @@ async def ses_events(request: Request, db: Session = Depends(get_db)) -> dict:
     except json.JSONDecodeError:
         logger.error("Verified SNS message carried a malformed SES payload.")
         return {"status": "ignored"}
+
+    if _log_delivery(payload):
+        return {"status": "logged"}
 
     addresses, bounce_type = _recipients(payload)
     if not addresses or not bounce_type:

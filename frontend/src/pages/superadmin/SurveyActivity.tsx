@@ -15,7 +15,7 @@ import { errorText } from '../../utils/errorText';
 import { formatDate, formatDateTime, getLocalYMD } from '../../utils/date';
 import type {
   SurveyAccountStatus, SurveyActivity, SurveyActivityClaim, SurveyContributorHealth,
-  SurveyContributorInvited,
+  SurveyContributorInvited, SurveyStaffReleaseResult,
 } from '../../api/types';
 
 const STATUS: Record<SurveyAccountStatus, { label: string; tone: string }> = {
@@ -105,10 +105,16 @@ export default function SurveyActivityPage() {
   });
 
   const submitRelease = () => releasing && run(`release-${releasing.id}`, async () => {
-    await axiosClient.post(`/survey/claims/${releasing.id}/staff-release`, { reason: reason.trim() });
-    const what = `${releasing.street} (${releasing.description})`;
+    const { data } = await axiosClient.post<SurveyStaffReleaseResult>(
+      `/survey/claims/${releasing.id}/staff-release`, { reason: reason.trim() });
+    const what = releasing.description;
+    const holder = releasing.holder;
     setReleasing(null); setReason('');
-    return `${what} is free. ${releasing.holder === 'Owner' ? '' : `${releasing.holder} was emailed the reason.`}`;
+    // ADR-546 D4: say what happened, not what was attempted.
+    if (holder === 'Owner') return `${what} is free.`;
+    return data.holder_emailed
+      ? `${what} is free. ${holder} was emailed the reason.`
+      : `${what} is free, but ${holder} couldn't be emailed. Let them know another way.`;
   });
 
   const copyPw = async () => {
@@ -260,7 +266,7 @@ export default function SurveyActivityPage() {
                   <li key={cl.id} className="rounded-lg border border-border p-3 space-y-2">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="font-medium">{cl.street} <span className="text-muted-foreground">({cl.description})</span></div>
+                        <div className="font-medium">{cl.description}</div>
                         <div className="text-xs text-muted-foreground">
                           {cl.area_name} · {cl.holder} · held {ago(cl.claimed_at)} · ends {until(cl.expires_at)}
                           {cl.walk_open && ' · walk open'}
