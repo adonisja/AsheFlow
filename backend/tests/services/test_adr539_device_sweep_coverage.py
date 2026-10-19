@@ -16,9 +16,9 @@ from app.services import device_fleet
 from app.tasks import device_sweep
 from tests.conftest import make_employee
 
-# ADR-540: privileged = 12h since the last MFA; field = 7 days idle.
-PRIV = (device_fleet.PRIVILEGED_CHALLENGE_TTL, "created")
-FIELD = (device_fleet.FIELD_DEVICE_TTL, "last_auth")
+# ADR-540: privileged 12h, field 7 days, both since the last MFA.
+PRIV = device_fleet.PRIVILEGED_CHALLENGE_TTL
+FIELD = device_fleet.FIELD_DEVICE_TTL
 
 
 class _Cognito:
@@ -31,9 +31,9 @@ class _Cognito:
         self.swept = {}
         self.alerts = []
 
-    def forget_stale(self, username, pool_id, region, ttl, now=None, since="last_auth"):
+    def forget_stale(self, username, pool_id, region, ttl, now=None):
         assert username not in self.swept, f"{username} swept twice"
-        self.swept[username] = (ttl, since)
+        self.swept[username] = ttl
         return 1
 
     def run(self, db, **kwargs):

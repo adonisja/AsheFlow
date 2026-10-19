@@ -56,12 +56,17 @@ MAX_REMEMBERED_DEVICES = 3
 # AAL2 figure is from the withdrawn 800-63-3 -- see the ADR-463 lesson, which
 # ADR-540 nearly repeated.
 #
-# 7d for field (idle) is deliberately below Duo's 30-day default -- the trend is
-# downward against MFA-targeting attacks -- while staying far from the
-# per-session challenge a field user cannot tolerate: their app backgrounds and
-# drops sessions constantly on unreliable mobile networks.
+# Field: 7 days since the last MFA too (owner, 2026-10-18). It was 7 days IDLE,
+# which gave a phone in daily use no overall bound at all -- and 800-63B-4's one
+# SHALL at every level is that an overall reauthentication timeout exists (AAL1
+# SHOULD be <= 30 days). 7 days stays far from the per-session challenge a field
+# user cannot tolerate: their app backgrounds and drops sessions constantly.
+#
+# Both tiers now measure from the last MFA, so the idle device rule (ADR-385's
+# select_stale) is gone. "Last use" survives only in the COUNT rule below,
+# where it correctly picks which device to evict first.
 PRIVILEGED_CHALLENGE_TTL = timedelta(hours=12)   # since DeviceCreateDate
-FIELD_DEVICE_TTL = timedelta(days=7)             # since DeviceLastAuthenticatedDate
+FIELD_DEVICE_TTL = timedelta(days=7)             # since DeviceCreateDate
 
 # Cognito's own ceiling for one AdminListDevices page. A user at the cap has
 # ~3 devices, so one page is always enough -- but ask for the max so a user who
@@ -135,34 +140,17 @@ def select_for_eviction(devices: list[Device], cap: int = MAX_REMEMBERED_DEVICES
     return remembered[: len(remembered) - cap]
 
 
-def select_stale(devices: list[Device], ttl: timedelta,
-                 now: Optional[datetime] = None) -> list[Device]:
-    """Which remembered devices have not been used within `ttl`.
-
-    Distinct from select_for_eviction, which sorts by COUNT to a cap. This is
-    the AGE rule (ADR-385) and the two are not interchangeable.
-
-    Only remembered devices are returned: a device already marked
-    `not_remembered` is inert -- it is challenged on every sign-in already, and
-    forgetting it would be a wasted API call.
-
-    A device with no DeviceLastAuthenticatedDate is treated as INFINITELY OLD,
-    matching Device.sort_key. It has never completed an auth, so it has no claim
-    to be trusted; the alternative -- treating a missing timestamp as "now" --
-    would make an unproven device permanently un-forgettable.
-    """
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - ttl
-    return [d for d in devices if d.remembered and d.sort_key < cutoff]
-
-
 def select_unchallenged(devices: list[Device], max_age: timedelta,
                         now: Optional[datetime] = None) -> list[Device]:
     """Which remembered devices last passed MFA more than `max_age` ago (ADR-540).
 
-    The privileged rule. Unlike select_stale, USE does not extend it: a device
-    signed in on every hour is still forgotten `max_age` after its challenge.
-    Same boundary (strictly past) and same remembered-only filter.
+    The age rule for both tiers. USE does not extend it: a device signed in on
+    every hour is still forgotten `max_age` after its challenge -- ADR-385's
+    idle rule never re-challenged a device in daily use (ADR-540).
+
+    Only remembered devices are returned: a `not_remembered` device is already
+    challenged on every sign-in. Strictly past: a device challenged exactly
+    `max_age` ago survives that tick.
     """
     now = now or datetime.now(timezone.utc)
     cutoff = now - max_age
@@ -170,11 +158,10 @@ def select_unchallenged(devices: list[Device], max_age: timedelta,
 
 
 def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
-                 now: Optional[datetime] = None, since: str = "last_auth") -> int:
-    """Forget this user's remembered devices past `ttl`. Returns count.
+                 now: Optional[datetime] = None) -> int:
+    """Forget this user's remembered devices that passed MFA more than `ttl` ago.
 
-    since="last_auth": unused within `ttl` (field, idle). since="created":
-    passed MFA more than `ttl` ago (privileged, ADR-540).
+    Returns the count (ADR-385; age measured from the last MFA since ADR-540).
 
     Never raises, for the same reason enforce_cap does not: this runs unattended
     on a schedule, and one user's AWS hiccup must not abort the sweep for
@@ -192,10 +179,7 @@ def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
         logger.warning("device_fleet: could not list devices: %s", type(exc).__name__)
         return 0
 
-    if since not in ("last_auth", "created"):
-        raise ValueError(f"unknown device age basis: {since!r}")
-    select = select_unchallenged if since == "created" else select_stale
-    doomed = select(parse_devices(resp.get("Devices", [])), ttl, now)
+    doomed = select_unchallenged(parse_devices(resp.get("Devices", [])), ttl, now)
     forgotten = 0
     for d in doomed:
         try:

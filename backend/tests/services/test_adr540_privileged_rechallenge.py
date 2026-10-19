@@ -9,8 +9,6 @@ sign-in creates a fresh one, and its creation time IS the last MFA.
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import pytest
-
 from app.services import device_fleet as df
 
 NOW = datetime(2026, 10, 18, 21, 0, tzinfo=timezone.utc)
@@ -27,7 +25,7 @@ class TestTheDailyDriverIsRechallenged:
         """The incident: in daily use, so the idle rule never fired."""
         devs = [_dev("laptop", created_h=13, used_h=0.1)]
         assert [d.key for d in df.select_unchallenged(devs, df.PRIVILEGED_CHALLENGE_TTL, now=NOW)] == ["laptop"]
-        assert df.select_stale(devs, df.PRIVILEGED_CHALLENGE_TTL, now=NOW) == []   # the old rule kept it
+        assert devs[0].last_auth > NOW - df.PRIVILEGED_CHALLENGE_TTL   # the old idle rule kept it
 
     def test_inside_12h_it_survives(self):
         devs = [_dev("laptop", created_h=11.9, used_h=11.9)]
@@ -60,8 +58,10 @@ class TestParseReadsTheCreationDate:
         assert d.created == created
 
 
-class TestForgetStaleChoosesTheRule:
-    def _run(self, since):
+class TestForgetStaleUsesTheLastMfa:
+    """forget_stale lists the user's devices and forgets by DeviceCreateDate."""
+
+    def _run(self, ttl):
         forgotten = []
 
         class _Client:
@@ -71,22 +71,23 @@ class TestForgetStaleChoosesTheRule:
                     "DeviceCreateDate": NOW - timedelta(hours=13),
                     "DeviceLastAuthenticatedDate": NOW - timedelta(minutes=5),
                     "DeviceAttributes": [{"Name": "dev:device_remembered_status", "Value": "remembered"}],
+                }, {
+                    "DeviceKey": "phone",
+                    "DeviceCreateDate": NOW - timedelta(days=8),
+                    "DeviceLastAuthenticatedDate": NOW - timedelta(minutes=1),
+                    "DeviceAttributes": [{"Name": "dev:device_remembered_status", "Value": "remembered"}],
                 }]}
 
             def admin_forget_device(self, **kw):
                 forgotten.append(kw["DeviceKey"])
 
         with patch("boto3.client", return_value=_Client()):
-            n = df.forget_stale("adon", "pool", "us-east-2", df.PRIVILEGED_CHALLENGE_TTL,
-                                now=NOW, since=since)
+            n = df.forget_stale("u", "pool", "us-east-2", ttl, now=NOW)
         return n, forgotten
 
-    def test_created_forgets_the_daily_driver(self):
-        assert self._run("created") == (1, ["laptop"])
+    def test_privileged_forgets_both_daily_drivers(self):
+        assert self._run(df.PRIVILEGED_CHALLENGE_TTL) == (2, ["laptop", "phone"])
 
-    def test_last_auth_keeps_it(self):
-        assert self._run("last_auth") == (0, [])
-
-    def test_an_unknown_basis_is_refused(self):
-        with pytest.raises(ValueError):
-            self._run("whenever")
+    def test_field_forgets_the_phone_challenged_8_days_ago_though_used_a_minute_ago(self):
+        """Owner, 2026-10-18: field is 7 days since the last MFA, not 7 days idle."""
+        assert self._run(df.FIELD_DEVICE_TTL) == (1, ["phone"])

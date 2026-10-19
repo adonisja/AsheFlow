@@ -3,8 +3,8 @@
 Registered in celery_app.py beat_schedule — runs 01:37 Eastern for every tier,
 and hourly for the privileged tier only (ADR-539 D2), so "24 hours since last
 use" holds within an hour rather than up to ~48. ADR-540 then changed the
-privileged rule to 12h since the device last passed MFA (DeviceCreateDate),
-so a device in daily use is re-challenged too.
+rule to "since the device last passed MFA" (DeviceCreateDate) for both tiers
+-- 12h privileged, 7 days field -- so a device in daily use is re-challenged.
 
 WHO IS SWEPT (ADR-539 D1)
 Employee rows, AND the members of the platform groups (super_admin,
@@ -133,7 +133,7 @@ def _platform_usernames() -> set[str] | None:
 def sweep_stale_devices(privileged_only: bool = False) -> dict:
     """Forget remembered devices past their tier's TTL.
 
-    Privileged: 12h since the last MFA (ADR-540). Field: 7 days idle. `privileged_only` is the hourly run
+    Privileged: 12h, field: 7 days, both since the last MFA (ADR-540). `privileged_only` is the hourly run
     (ADR-539 D2): same code, field accounts skipped, so the two schedules
     cannot drift apart. Returns a summary for the task result so a run that
     forgot nothing is distinguishable from one that never ran.
@@ -214,7 +214,7 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
                     severity="critical",
                 )
 
-            # ADR-540: privileged by time since the last MFA, field by idle time.
+            # ADR-540: both tiers measured from the last MFA (DeviceCreateDate).
             privileged = tier == "privileged"
             ttl = (device_fleet.PRIVILEGED_CHALLENGE_TTL if privileged
                    else device_fleet.FIELD_DEVICE_TTL)
@@ -225,7 +225,6 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
                 pool_id=settings.aws_cognito_user_pool_id,
                 region=settings.aws_region,
                 ttl=ttl,
-                since="created" if privileged else "last_auth",
             )
 
         # ADR-539 D1 — platform accounts with no Employee row. Privileged by
@@ -251,7 +250,6 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
                 pool_id=settings.aws_cognito_user_pool_id,
                 region=settings.aws_region,
                 ttl=device_fleet.PRIVILEGED_CHALLENGE_TTL,
-                since="created",
             )
 
         if unprotected:
