@@ -727,7 +727,7 @@ def send_owner_email_change_email(*, to_email: str, owner_name: str, token: str,
 # and a footer that says what AsheFlow never asks for. Addresses are never
 # logged here (Dimension 7): failures log the account id the caller passes.
 
-def _security_layout(*, heading: str, body_html: str) -> str:
+def _security_layout(*, heading: str, body_html: str, label: str = "Security") -> str:
     base = settings.app_base_url.rstrip("/")
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -739,7 +739,7 @@ def _security_layout(*, heading: str, body_html: str) -> str:
         <tr><td style="background:#16235A;border-radius:14px 14px 0 0;padding:20px 28px;">
           <table width="100%" cellpadding="0" cellspacing="0"><tr>
             <td><img src="{base}/email/logo-light@2x.png" width="150" height="29" alt="AsheFlow" style="display:block;border:0;outline:none;width:150px;height:29px;"></td>
-            <td align="right"><span style="color:#C9CFEF;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;">Security</span></td>
+            <td align="right"><span style="color:#C9CFEF;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;">{html.escape(label)}</span></td>
           </tr></table>
         </td></tr>
         <tr><td style="background:#ffffff;padding:28px;border-left:1px solid #DCDFE5;border-right:1px solid #DCDFE5;">
@@ -891,4 +891,30 @@ def send_mfa_setup_reminder(*, to_email: str, account_ref: str) -> None:
     )
     _send_security_email(to_email=to_email, subject=subject, text=text,
                          html_body=_security_layout(heading="Set up two-step sign-in", body_html=body),
+                         account_ref=account_ref)
+
+
+def send_claim_released_notice(*, to_email: str, name: str, block: str, area: str,
+                               reason: str, account_ref: str) -> None:
+    """To a surveyor whose claim platform staff released (ADR-545 D4).
+
+    Surveyors have no in-app inbox (no Employee row), so this is the only way
+    they learn why a block they held is free again.
+    """
+    first, first_html = _greeting_name(name)
+    subject = "Your survey block was released"
+    body = (
+        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, '
+        f'the AsheFlow team released your hold on <strong>{html.escape(block)}</strong> in '
+        f'<strong>{html.escape(area)}</strong>, so someone else can walk it.</p>'
+        '<table width="100%" cellpadding="0" cellspacing="0" style="background:#FBFAFD;border:1px solid #E6E2F0;border-radius:10px;margin-bottom:14px;"><tr><td style="padding:12px 16px;">'
+        f'<p style="margin:0;font-size:14px;line-height:1.5;color:#374151;"><strong>Reason:</strong> {html.escape(reason)}</p></td></tr></table>'
+        '<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;">Anything you already recorded on that block is kept. '
+        "If you still want to walk it, claim it again from the survey page while it's free.</p>"
+    )
+    text = (f"Hi {first},\n\nThe AsheFlow team released your hold on {block} in {area}, so someone else can walk it.\n\n"
+            f"Reason: {reason}\n\nAnything you already recorded on that block is kept. If you still want to walk it, "
+            "claim it again from the survey page while it's free.")
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading="Your block was released", body_html=body, label="Survey"),
                          account_ref=account_ref)

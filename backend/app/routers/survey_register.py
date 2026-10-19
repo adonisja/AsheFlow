@@ -61,7 +61,7 @@ from app.schemas.building_taxonomy import BUILDING_TYPES
 from app.services import survey_blocks, survey_progress
 from app.services.address_inventory import AddressSourceUnavailable
 from app.services.audit import super_admin_identity, write_audit
-from app.services.email import send_credentials_email
+from app.services.email import send_claim_released_notice, send_credentials_email
 from app.services.note_scrub import scrub_note
 
 logger = logging.getLogger(__name__)
@@ -1250,3 +1250,291 @@ def unlock_door(body: UnlockIn, writer: Writer = Depends(get_writer), db: Sessio
     db.commit()
     p = survey_progress.progress_for(db, walk.borough, walk.block_key, doors, _now())
     return UnlockOut(address=address, block_state=p.state)
+
+
+
+# ── ADR-545: survey activity, and helping a stuck surveyor ─────────────────────
+#
+# Platform support (and the owner) can SEE who is surveying and UNSTICK an
+# account or a claim. None of this writes a survey record (walks,
+# observations): ADR-504 keeps support off the dataset. Every action is
+# audited with the caller's real kind (_staff_identity).
+
+class ContributorHealthOut(BaseModel):
+    id: UUID
+    display_name: str
+    email: Optional[str] = None             # ADR-509 D3: visible to platform staff
+    cognito_username: Optional[str] = None
+    agreement_version: str
+    agreement_signed_on: date
+    revoked_at: Optional[datetime] = None
+    # "never_signed_in" | "active" | "disabled" | "missing" | "unknown"
+    account_status: str
+    in_surveyor_group: Optional[bool] = None    # None = could not tell
+    last_walk_at: Optional[datetime] = None
+
+
+class ActivityClaimOut(BaseModel):
+    id: UUID
+    area_name: str
+    street: str
+    description: str
+    holder: str                # contributor name, or "Owner"
+    claimed_at: datetime
+    expires_at: datetime
+    walk_open: bool
+
+
+class ActivityWalkOut(BaseModel):
+    id: UUID
+    holder: str
+    area_name: Optional[str] = None
+    street: str
+    started_at: datetime
+    last_observation_at: Optional[datetime] = None
+    doors_done: int            # observations recorded on this walk
+    doors_total: int           # doors on its list
+
+
+class ActivityOut(BaseModel):
+    contributors: list[ContributorHealthOut]
+    claims: list[ActivityClaimOut]
+    open_walks: list[ActivityWalkOut]
+
+
+def _account_state(client, username: Optional[str]) -> tuple[str, Optional[bool]]:
+    """Cognito's view of a contributor: status, and whether `surveyor` is held."""
+    if not username:
+        return "unknown", None
+    pool = settings.aws_cognito_user_pool_id
+    try:
+        u = client.admin_get_user(UserPoolId=pool, Username=username)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
+            return "missing", False
+        return "unknown", None
+    except BotoCoreError:
+        return "unknown", None
+    if not u.get("Enabled", True):
+        status_ = "disabled"
+    elif u.get("UserStatus") == "FORCE_CHANGE_PASSWORD":
+        status_ = "never_signed_in"
+    else:
+        status_ = "active"
+    try:
+        groups = client.admin_list_groups_for_user(UserPoolId=pool, Username=username, Limit=60)
+        in_group = any(g["GroupName"] == "surveyor" for g in groups.get("Groups", []))
+    except (ClientError, BotoCoreError):
+        in_group = None
+    return status_, in_group
+
+
+@router.get("/activity", response_model=ActivityOut)
+def survey_activity(staff: dict = Depends(get_platform_staff), db: Session = Depends(get_db)):
+    """D2 — who is surveying, what they hold, and what is stuck. Status and
+    counts only: no observation contents."""
+    from sqlalchemy import func as sa_func
+
+    contributors = db.query(SurveyContributor).order_by(SurveyContributor.display_name).all()
+    names = {c.cognito_sub: c.display_name for c in contributors}
+
+    def holder(sub: str) -> str:
+        return names.get(sub, "Owner")
+
+    last_walk = dict(db.query(SurveyWalk.writer_sub, sa_func.max(SurveyWalk.started_at))
+                     .group_by(SurveyWalk.writer_sub).all())
+
+    client = _cognito()
+    health = []
+    for c in contributors:
+        status_, in_group = _account_state(client, c.cognito_username)
+        health.append(ContributorHealthOut(
+            id=c.id, display_name=c.display_name, email=c.email, cognito_username=c.cognito_username,
+            agreement_version=c.agreement_version, agreement_signed_on=c.agreement_signed_on,
+            revoked_at=c.revoked_at, account_status=status_, in_surveyor_group=in_group,
+            last_walk_at=last_walk.get(c.cognito_sub),
+        ))
+
+    claims = []
+    for cl in _active_claims(db).order_by(SurveyBlockClaim.expires_at).all():
+        block = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.id == cl.area_block_id).one()
+        area = db.query(SurveyArea).filter(SurveyArea.id == cl.area_id).one()
+        walk = db.query(SurveyWalk).filter(SurveyWalk.id == cl.walk_id).first() if cl.walk_id else None
+        claims.append(ActivityClaimOut(
+            id=cl.id, area_name=area.name, street=block.street, description=block.description,
+            holder=holder(cl.writer_sub), claimed_at=cl.claimed_at, expires_at=cl.expires_at,
+            walk_open=walk is not None and walk.closed_at is None,
+        ))
+
+    walks = []
+    for w in (db.query(SurveyWalk).filter(SurveyWalk.closed_at.is_(None))
+              .order_by(SurveyWalk.started_at).all()):
+        n, last = (db.query(sa_func.count(SurveyObservation.id), sa_func.max(SurveyObservation.observed_at))
+                   .filter(SurveyObservation.walk_id == w.id).one())
+        area = db.query(SurveyArea).filter(SurveyArea.id == w.area_id).first() if w.area_id else None
+        walks.append(ActivityWalkOut(
+            id=w.id, holder=holder(w.writer_sub), area_name=area.name if area else None,
+            street=w.street, started_at=w.started_at, last_observation_at=last,
+            doors_done=n or 0, doors_total=len(w.addresses or []),
+        ))
+    return ActivityOut(contributors=health, claims=claims, open_walks=walks)
+
+
+def _contributor_or_404(db: Session, contributor_id: UUID) -> SurveyContributor:
+    c = db.query(SurveyContributor).filter(SurveyContributor.id == contributor_id).first()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Contributor not found.")
+    if not c.cognito_username:
+        raise HTTPException(status_code=409, detail="This contributor has no sign-in account on record.")
+    return c
+
+
+@router.post("/contributors/{contributor_id}/resend", response_model=InviteOut)
+def resend_contributor_signin(contributor_id: UUID, staff: dict = Depends(get_platform_staff),
+                              db: Session = Depends(get_db)):
+    """D3 — a fresh temporary password, emailed. Only while they have never
+    signed in: once they have, this would reset a working password."""
+    c = _contributor_or_404(db, contributor_id)
+    if c.revoked_at is not None:
+        raise HTTPException(status_code=409, detail="This contributor is revoked. Re-admit them first.")
+    client = _cognito()
+    status_, _ = _account_state(client, c.cognito_username)
+    if status_ != "never_signed_in":
+        raise HTTPException(status_code=409, detail=(
+            "They've already signed in, so their password works. If they've forgotten it, "
+            "they can use Forgot password on the sign-in page."))
+    temp_password = _temp_password()
+    try:
+        client.admin_set_user_password(UserPoolId=settings.aws_cognito_user_pool_id,
+                                       Username=c.cognito_username, Password=temp_password,
+                                       Permanent=False)
+    except (ClientError, BotoCoreError) as exc:
+        logger.error("survey resend: set password failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not reset the temporary password.")
+    write_audit(db, action_type="survey.contributor.resend", target_table="survey_contributors",
+                target_id=str(c.id), actor_id=None, company_id=None, detail=_staff_identity(staff))
+    db.commit()
+    delivered = True
+    try:
+        send_credentials_email(to_email=c.email, employee_name=c.display_name,
+                               username=c.cognito_username, temp_password=temp_password)
+    except Exception as exc:
+        logger.error("survey resend: credentials email failed: %s", type(exc).__name__)
+        delivered = False
+    return InviteOut(contributor=ContributorOut.model_validate(c), email_delivered=delivered,
+                     temp_password=None if delivered else temp_password)
+
+
+@router.post("/contributors/{contributor_id}/restore-access", response_model=ContributorOut)
+def restore_contributor_access(contributor_id: UUID, staff: dict = Depends(get_platform_staff),
+                               db: Session = Depends(get_db)):
+    """D3 — put an ACTIVE contributor back in `surveyor` when the group is missing."""
+    c = _contributor_or_404(db, contributor_id)
+    if c.revoked_at is not None:
+        raise HTTPException(status_code=409, detail="This contributor is revoked. Re-admit them instead.")
+    client = _cognito()
+    _, in_group = _account_state(client, c.cognito_username)
+    if in_group:
+        raise HTTPException(status_code=409, detail="They already have surveyor access.")
+    try:
+        client.admin_add_user_to_group(UserPoolId=settings.aws_cognito_user_pool_id,
+                                       Username=c.cognito_username, GroupName="surveyor")
+    except (ClientError, BotoCoreError) as exc:
+        logger.error("survey restore: group add failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not restore surveyor access.")
+    write_audit(db, action_type="survey.contributor.restore_access", target_table="survey_contributors",
+                target_id=str(c.id), actor_id=None, company_id=None, detail=_staff_identity(staff))
+    db.commit()
+    return c
+
+
+class ReadmitIn(BaseModel):
+    """D3 — re-admission is admission: the agreement is signed again (ADR-504 D1)."""
+    model_config = ConfigDict(extra="forbid")
+    agreement_version: str = Field(min_length=1, max_length=20)
+    agreement_signed_on: date
+    confirm_agreement_signed: bool
+
+    @model_validator(mode="after")
+    def _signed(self):
+        if not self.confirm_agreement_signed:
+            raise ValueError("Only re-admit someone who has signed the contributor agreement again.")
+        if self.agreement_signed_on > date.today():
+            raise ValueError("The signing date can't be in the future.")
+        return self
+
+
+@router.post("/contributors/{contributor_id}/readmit", response_model=ContributorOut)
+def readmit_contributor(contributor_id: UUID, body: ReadmitIn, staff: dict = Depends(get_platform_staff),
+                        db: Session = Depends(get_db)):
+    """D3 — only a contributor who was revoked; the exclusion is re-checked."""
+    c = _contributor_or_404(db, contributor_id)
+    if c.revoked_at is None:
+        raise HTTPException(status_code=409, detail="This contributor isn't revoked.")
+    _assert_not_excluded(db, c.cognito_sub)
+    c.revoked_at = None
+    c.agreement_version = body.agreement_version
+    c.agreement_signed_on = body.agreement_signed_on
+    c.admitted_at = _now()
+    c.admitted_by = (staff.get("id") or "")[:64] or None
+    db.flush()
+    write_audit(db, action_type="survey.contributor.readmit", target_table="survey_contributors",
+                target_id=str(c.id), actor_id=None, company_id=None,
+                detail={**_staff_identity(staff), "agreement_version": body.agreement_version})
+    db.commit()
+    db.refresh(c)
+    try:
+        _cognito().admin_add_user_to_group(UserPoolId=settings.aws_cognito_user_pool_id,
+                                           Username=c.cognito_username, GroupName="surveyor")
+    except (ClientError, BotoCoreError) as exc:
+        # The row is what get_writer reads; Survey activity will show the
+        # missing group, and Restore access fixes it.
+        logger.warning("survey readmit: group add failed: %s", type(exc).__name__)
+    return c
+
+
+class StaffReleaseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=10, max_length=200)
+
+
+@router.post("/claims/{claim_id}/staff-release", response_model=ActivityClaimOut)
+def staff_release_claim(claim_id: UUID, body: StaffReleaseIn, staff: dict = Depends(get_platform_staff),
+                        db: Session = Depends(get_db)):
+    """D4 — free a block someone is holding. The walk and its observations are
+    untouched; the holder is emailed the reason."""
+    # The reason is emailed and audited, so it gets the note's two guards (D4):
+    # refuse anything that reads as an access code, then scrub what's left.
+    if _CODE_WORDS.search(body.reason):
+        raise HTTPException(status_code=422, detail="A reason can't mention codes, PINs or passwords.")
+    reason, _flags = scrub_note(body.reason.strip())
+    reason = reason or ""
+    if len(reason) < 10:
+        raise HTTPException(status_code=422, detail="Give a reason of at least 10 characters.")
+    c = db.query(SurveyBlockClaim).filter(SurveyBlockClaim.id == claim_id).first()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    if not _in_force(c):
+        raise HTTPException(status_code=409, detail="This claim has already ended.")
+    c.released_at, c.release_reason = _now(), "staff_released"
+    db.flush()
+    write_audit(db, action_type="survey.claim.staff_release", target_table="survey_block_claims",
+                target_id=str(c.id), actor_id=None, company_id=None,
+                detail={**_staff_identity(staff), "reason": reason})
+    db.commit()
+    db.refresh(c)
+
+    block = db.query(SurveyAreaBlock).filter(SurveyAreaBlock.id == c.area_block_id).one()
+    area = db.query(SurveyArea).filter(SurveyArea.id == c.area_id).one()
+    holder = db.query(SurveyContributor).filter(SurveyContributor.cognito_sub == c.writer_sub).first()
+    if holder is not None and holder.email:
+        try:
+            send_claim_released_notice(to_email=holder.email, name=holder.display_name,
+                                       block=f"{block.street} ({block.description})", area=area.name,
+                                       reason=reason, account_ref=str(holder.id))
+        except Exception as exc:
+            logger.warning("survey staff release: notice failed: %s", type(exc).__name__)
+    walk = db.query(SurveyWalk).filter(SurveyWalk.id == c.walk_id).first() if c.walk_id else None
+    return ActivityClaimOut(id=c.id, area_name=area.name, street=block.street, description=block.description,
+                            holder=holder.display_name if holder else "Owner", claimed_at=c.claimed_at,
+                            expires_at=c.expires_at, walk_open=walk is not None and walk.closed_at is None)

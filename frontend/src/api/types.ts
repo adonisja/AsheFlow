@@ -3754,3 +3754,63 @@ export interface EmailConfirmRequest {
   current_code: string;
   new_code: string;
 }
+
+/* ── ADR-545: Survey activity (platform staff, read-only + account actions) ── */
+
+/** never_signed_in | active | disabled | missing | unknown (Cognito's view). */
+export type SurveyAccountStatus = 'never_signed_in' | 'active' | 'disabled' | 'missing' | 'unknown';
+
+export interface SurveyContributorHealth {
+  id: string;
+  display_name: string;
+  email: string | null;
+  cognito_username: string | null;
+  agreement_version: string;
+  agreement_signed_on: string;
+  revoked_at: string | null;
+  account_status: SurveyAccountStatus;
+  /** null = could not tell. */
+  in_surveyor_group: boolean | null;
+  last_walk_at: string | null;
+}
+
+export interface SurveyActivityClaim {
+  id: string;
+  area_name: string;
+  street: string;
+  description: string;
+  /** Contributor name, or "Owner". */
+  holder: string;
+  claimed_at: string;
+  expires_at: string;
+  walk_open: boolean;
+}
+
+export interface SurveyActivityWalk {
+  id: string;
+  holder: string;
+  area_name: string | null;
+  street: string;
+  started_at: string;
+  last_observation_at: string | null;
+  doors_done: number;
+  doors_total: number;
+}
+
+export interface SurveyActivity {
+  contributors: SurveyContributorHealth[];
+  claims: SurveyActivityClaim[];
+  open_walks: SurveyActivityWalk[];
+}
+
+/** POST /survey/contributors/{id}/readmit: the agreement is signed again. */
+export interface SurveyReadmitRequest {
+  agreement_version: string;
+  agreement_signed_on: string;
+  confirm_agreement_signed: boolean;
+}
+
+/** POST /survey/claims/{id}/staff-release. 10–200 characters; no codes. */
+export interface SurveyStaffReleaseRequest {
+  reason: string;
+}

@@ -3,6 +3,7 @@ import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck,
   ClipboardList, Menu, X, Bell, MapPin, UserPlus,
+  Activity,
 } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
@@ -25,10 +26,13 @@ const NAV: { to: string; label: string; icon: typeof Building2; roles?: string[]
   // had no reader. Super admin, not platform staff: the rows are customer
   // delivery addresses, and ADR-343 D4 keeps PII off every platform_support path.
   { to: '/superadmin/collection', label: 'Collected', icon: ClipboardList },
-  // ADR-504 — the survey register: the owner's own walks, outside any tenant.
-  { to: '/survey', label: 'Survey', icon: MapPin },
-  // ADR-509 — onboarding survey contributors; the one page platform support has.
+  // ADR-504 / ADR-545 D1 — the survey register: the owner's walks and every
+  // contributor's. A surveyor sees ONLY this entry.
+  { to: '/survey', label: 'Survey', icon: MapPin, roles: ['super_admin', 'surveyor'] },
+  // ADR-509 — onboarding survey contributors.
   { to: '/superadmin/surveyors', label: 'Surveyors', icon: UserPlus, roles: ['super_admin', 'platform_support'] },
+  // ADR-545 D2 — who is surveying, what they hold, what's stuck.
+  { to: '/superadmin/survey-activity', label: 'Survey activity', icon: Activity, roles: ['super_admin', 'platform_support'] },
   // ADR-507 — every notification type on every surface it reaches, before
   // anyone receives it. The production components inside a preview context,
   // plus Send to a test employee through the real pipeline.
@@ -76,8 +80,12 @@ function TitleBar() {
             <Shield className="h-3.5 w-3.5 text-brand" />
           </div>
           <span className="font-display text-foreground">AsheFlow</span>
+          {/* ADR-545 D1 — the layout now hosts three platform groups; the chip
+              says which one you are, so a surveyor isn't told "Super Admin". */}
           <span className="hidden sm:inline text-xs font-normal text-brand border border-brand/30 bg-brand/10 rounded-md px-1.5 py-0.5">
-            Super Admin
+            {groups.includes('super_admin') ? 'Super Admin'
+              : groups.includes('platform_support') ? 'Platform support'
+              : 'Surveyor'}
           </span>
         </div>
 
