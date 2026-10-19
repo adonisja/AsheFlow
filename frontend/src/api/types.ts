@@ -495,6 +495,13 @@ export interface PlatformAlert {
   /** null on a self-resolve — that null is what distinguishes "the condition
    *  ended" from "a person dismissed it". */
   resolved_by_email: string | null;
+  /** ADR-543 D2: who an account alert is about; null for infrastructure alerts. */
+  subject_kind: 'employee' | 'platform' | null;
+  /** The account handle (Cognito username). Super admins only: platform
+   *  support receives null (ADR-343 D4). */
+  subject_ref: string | null;
+  /** Role, or platform group for platform staff. */
+  subject_role: string | null;
 }
 
 export interface UnavailableStaff {

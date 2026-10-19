@@ -206,6 +206,10 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
                     db,
                     alert_type="mfa.privileged_unprotected",
                     company_id=emp.company_id,
+                    # ADR-543 D2: name the account, one alert each.
+                    subject_kind="employee",
+                    subject_ref=username,
+                    subject_role=emp.role,
                     message=(
                         "A privileged account has no MFA factor. If this was an "
                         "unenrolment it may indicate a compromised session "
@@ -237,6 +241,10 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
                     db,
                     alert_type="mfa.privileged_unprotected",
                     company_id=None,   # belongs to no tenant
+                    subject_kind="platform",
+                    subject_ref=username,
+                    subject_role=next((g for g in PLATFORM_GROUPS
+                                       if g in (_groups_for(username) or set())), "platform staff"),
                     message=(
                         "A platform account has no MFA factor. If this was an "
                         "unenrolment it may indicate a compromised session "

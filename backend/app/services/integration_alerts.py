@@ -85,6 +85,9 @@ def raise_platform_alert(
     message: str = DISCORD_DOWN_MESSAGE,
     severity: str = "warning",
     refresh_message: bool = False,
+    subject_kind: str | None = None,
+    subject_ref: str | None = None,
+    subject_role: str | None = None,
 ) -> None:
     """Record an infrastructure condition only a super admin can fix (ADR-335).
 
@@ -110,6 +113,10 @@ def raise_platform_alert(
     longer exists. Opt-in: Discord/email callers re-raise the same condition
     and keep today's behaviour.
 
+    `subject_*` (ADR-543 D2): which ACCOUNT an account alert is about. The
+    dedup key includes `subject_ref`, so each account gets its own alert;
+    infrastructure alerts pass none and dedup exactly as before.
+
     Never raises — this runs on paths that are ALREADY handling a failure.
     """
     try:
@@ -122,6 +129,8 @@ def raise_platform_alert(
         # against other platform-wide alerts, so the null case needs `is_()`.
         q = q.filter(PlatformAlert.company_id.is_(None)) if company_id is None \
             else q.filter(PlatformAlert.company_id == company_id)
+        q = q.filter(PlatformAlert.subject_ref.is_(None)) if subject_ref is None \
+            else q.filter(PlatformAlert.subject_ref == subject_ref)
 
         existing = q.first()
         if existing is not None:
@@ -136,6 +145,9 @@ def raise_platform_alert(
             company_id=company_id,
             message=message,
             severity=severity,
+            subject_kind=subject_kind,
+            subject_ref=subject_ref,
+            subject_role=subject_role,
         ))
         logger.warning(
             "platform alert raised: type=%s company=%s", alert_type, company_id,

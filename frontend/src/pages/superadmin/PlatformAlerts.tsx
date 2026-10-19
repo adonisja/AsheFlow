@@ -37,7 +37,26 @@ const TYPE_LABELS: Record<string, string> = {
   'security_infra.containment': 'Security: containment permissions',
   'security_infra.pool_triggers': 'Security: sign-in triggers',
   security_infra_degraded: 'Security (legacy, retired)',
+  // ADR-543 D4 — was rendered by the fallback as "Mfa.Privileged Unprotected".
+  'mfa.privileged_unprotected': 'Privileged account without MFA',
 };
+
+/** What a super admin should do about each account alert (ADR-543 D4). An
+ *  alert that only describes the problem leaves the reader to work out the
+ *  response under pressure. */
+const WHAT_TO_DO: Record<string, string> = {
+  'mfa.privileged_unprotected':
+    "Ask them to set up MFA from their Account page. If they say they didn't remove it, "
+    + 'treat it as a compromised session: reset their password and MFA now (ADR-386).',
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  super_admin: 'Super admin', platform_support: 'Platform support', admin: 'Admin',
+  management: 'Management', dispatch: 'Dispatch',
+};
+function roleLabel(r: string | null): string {
+  return r ? (ROLE_LABELS[r] ?? r.replace(/_/g, ' ')) : '';
+}
 
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] ?? t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -204,7 +223,7 @@ export default function PlatformAlerts() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-sm font-semibold">{typeLabel(a.alert_type)}</h3>
                     {a.severity === 'critical' && !a.is_resolved && (
-                      <span className="text-[10px] font-bold uppercase tracking-wide text-danger">
+                      <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-danger">
                         Critical
                       </span>
                     )}
@@ -214,16 +233,44 @@ export default function PlatformAlerts() {
                       </span>
                     )}
                   </div>
+                  {/* ADR-543 D4 — WHO, before what. A platform account has no
+                      company; a support viewer gets the role, not the handle. */}
+                  {a.subject_kind && (
+                    <p className="text-sm text-foreground mt-1.5">
+                      <span className="text-muted-foreground">
+                        {a.subject_kind === 'platform' ? 'Platform staff' : 'Account'}
+                      </span>{' '}
+                      {a.subject_ref
+                        ? <span className="font-mono font-semibold">{a.subject_ref}</span>
+                        : <span className="italic text-muted-foreground">hidden from support</span>}
+                      {a.subject_role && <> · {roleLabel(a.subject_role)}</>}
+                      {a.subject_kind === 'employee' && a.company_id && (
+                        <> · {companies[a.company_id] ?? `Company ${a.company_id.slice(0, 8)}`}</>
+                      )}
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground mt-1">{a.message}</p>
+                  {!a.is_resolved && WHAT_TO_DO[a.alert_type] && (
+                    <p className="text-sm mt-2 rounded-lg border border-border bg-surface px-3 py-2">
+                      <span className="font-semibold">What to do: </span>
+                      {WHAT_TO_DO[a.alert_type]}
+                    </p>
+                  )}
 
                   <p className="text-xs text-muted-foreground mt-2">
-                    {/* Scope first: "every tenant" vs "one company" changes the response. */}
-                    <span className="font-medium">
-                      {a.company_id
-                        ? (companies[a.company_id] ?? `Company ${a.company_id.slice(0, 8)}`)
-                        : 'All companies'}
-                    </span>
-                    {' · '}
+                    {/* Scope first: "every tenant" vs "one company" changes the
+                        response. An account alert already named its company
+                        (or "Platform staff") on the subject line. */}
+                    {!a.subject_kind && (
+                      <>
+                        <span className="font-medium">
+                          {a.company_id
+                            ? (companies[a.company_id] ?? `Company ${a.company_id.slice(0, 8)}`)
+                            : 'All companies'}
+                        </span>
+                        {' · '}
+                      </>
+                    )}
                     {/* occurrence_count and last_seen are what distinguish "still
                         failing" from "an alert exists" (ADR-335 D2). */}
                     {a.occurrence_count > 1 && `${a.occurrence_count} occurrences · `}

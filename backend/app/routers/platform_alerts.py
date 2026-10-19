@@ -46,6 +46,11 @@ class PlatformAlertOut(BaseModel):
     last_seen_at: Optional[datetime]
     resolved_at: Optional[datetime]
     resolved_by_email: Optional[str]
+    # ADR-543 D2/D3 — who an account alert is about. subject_ref (the account
+    # handle) is blanked for platform support (ADR-343 D4); kind and role stay.
+    subject_kind: Optional[str] = None
+    subject_ref: Optional[str] = None
+    subject_role: Optional[str] = None
 
 
 class ResolveRequest(BaseModel):
@@ -70,7 +75,13 @@ def list_platform_alerts(
     if not include_resolved:
         q = q.filter(PlatformAlert.is_resolved.is_(False))
     rows = q.order_by(PlatformAlert.last_seen_at.desc()).limit(limit).all()
-    return [PlatformAlertOut.model_validate(r, from_attributes=True) for r in rows]
+    out = [PlatformAlertOut.model_validate(r, from_attributes=True) for r in rows]
+    # ADR-543 D3: the account handle is for super admins. Platform support is a
+    # cross-tenant login and may not see personal identifiers (ADR-343 D4).
+    if "super_admin" not in set(_super.get("cognito_groups") or []):
+        for a in out:
+            a.subject_ref = None
+    return out
 
 
 class MfaResetRequest(BaseModel):

@@ -66,6 +66,7 @@ import Surveyors from './pages/superadmin/Surveyors';
 import SurveyStart from './pages/survey/SurveyStart';
 import SurveyWalkPage from './pages/survey/SurveyWalk';
 import SurveyAreaPage from './pages/survey/SurveyAreaPage';
+import SurveyLayout from './components/layout/SurveyLayout';
 import BuildingSurvey from './pages/BuildingSurvey';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
@@ -750,10 +751,14 @@ function App() {
           {/* ADR-504. The survey register: the owner and admitted contributors.
               Outside every Layout: a contributor has no Employee row, and the
               page is used on a phone on a sidewalk. The real gate is the API. */}
-          <Route path="/survey" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyStart /></ProtectedRoute>} />
-          <Route path="/survey/walk/:walkId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyWalkPage /></ProtectedRoute>} />
-          {/* ADR-513: an area's blocks, where a block is claimed. */}
-          <Route path="/survey/areas/:areaId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyAreaPage /></ProtectedRoute>} />
+          {/* ADR-543 D1: its own slim bar (a way back for a super admin,
+              sign-out for everyone), still outside the tenant/super-admin layouts. */}
+          <Route element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyLayout /></ProtectedRoute>}>
+            <Route path="/survey" element={<SurveyStart />} />
+            <Route path="/survey/walk/:walkId" element={<SurveyWalkPage />} />
+            {/* ADR-513: an area's blocks, where a block is claimed. */}
+            <Route path="/survey/areas/:areaId" element={<SurveyAreaPage />} />
+          </Route>
           {/* ADR-509. Same layout, opened to platform support for this route only;
               every route in the super-admin block below stays super-admin only. */}
           <Route element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><SuperAdminLayout /></ProtectedRoute>}>
