@@ -16,6 +16,10 @@ from app.services import device_fleet
 from app.tasks import device_sweep
 from tests.conftest import make_employee
 
+# ADR-540: privileged = 12h since the last MFA; field = 7 days idle.
+PRIV = (device_fleet.PRIVILEGED_CHALLENGE_TTL, "created")
+FIELD = (device_fleet.FIELD_DEVICE_TTL, "last_auth")
+
 
 class _Cognito:
     """Records which usernames were swept and at what TTL."""
@@ -27,9 +31,9 @@ class _Cognito:
         self.swept = {}
         self.alerts = []
 
-    def forget_stale(self, username, pool_id, region, ttl, now=None):
+    def forget_stale(self, username, pool_id, region, ttl, now=None, since="last_auth"):
         assert username not in self.swept, f"{username} swept twice"
-        self.swept[username] = ttl
+        self.swept[username] = (ttl, since)
         return 1
 
     def run(self, db, **kwargs):
@@ -55,31 +59,31 @@ def _registered(db, role, username):
 
 
 class TestAPlatformAccountWithNoRowIsSwept:
-    def test_a_super_admin_with_no_employee_row_is_swept_at_24h(self, db):
+    def test_a_super_admin_with_no_employee_row_is_swept_on_the_privileged_rule(self, db):
         """The incident: adon is only in Cognito."""
         c = _Cognito(platform={"adon"})
         result = c.run(db)
-        assert c.swept == {"adon": device_fleet.PRIVILEGED_DEVICE_TTL}
+        assert c.swept == {"adon": PRIV}
         assert result["platform_checked"] == 1
         assert result["platform_groups_read"] is True
 
     def test_it_is_swept_by_the_hourly_privileged_run_too(self, db):
         c = _Cognito(platform={"adon"})
         c.run(db, privileged_only=True)
-        assert c.swept == {"adon": device_fleet.PRIVILEGED_DEVICE_TTL}
+        assert c.swept == {"adon": PRIV}
 
     def test_a_group_member_with_an_employee_row_is_swept_once(self, db):
         _registered(db, "trainee", "adon")
         c = _Cognito(groups_by_user={"adon": {"super_admin"}}, platform={"adon"})
         result = c.run(db)
-        assert c.swept == {"adon": device_fleet.PRIVILEGED_DEVICE_TTL}
+        assert c.swept == {"adon": PRIV}
         assert result["platform_checked"] == 0   # covered by the row
 
     def test_an_unreadable_group_listing_still_sweeps_employees(self, db):
         _registered(db, "driver", "walk.er")
         c = _Cognito(platform=None)
         result = c.run(db)
-        assert c.swept == {"walk.er": device_fleet.FIELD_DEVICE_TTL}
+        assert c.swept == {"walk.er": FIELD}
         assert result["platform_groups_read"] is False
 
 
@@ -89,15 +93,15 @@ class TestTheHourlyRunIsPrivilegedOnly:
         _registered(db, "admin", "ad.min")
         c = _Cognito(platform=set())
         c.run(db, privileged_only=True)
-        assert c.swept == {"ad.min": device_fleet.PRIVILEGED_DEVICE_TTL}
+        assert c.swept == {"ad.min": PRIV}
 
     def test_the_nightly_run_sweeps_both_tiers(self, db):
         _registered(db, "driver", "dri.ver")
         _registered(db, "admin", "ad.min")
         c = _Cognito(platform=set())
         c.run(db)
-        assert c.swept == {"dri.ver": device_fleet.FIELD_DEVICE_TTL,
-                           "ad.min": device_fleet.PRIVILEGED_DEVICE_TTL}
+        assert c.swept == {"dri.ver": FIELD,
+                           "ad.min": PRIV}
 
     def test_the_hourly_entry_is_scheduled_with_the_switch(self):
         from app.celery_app import celery_app

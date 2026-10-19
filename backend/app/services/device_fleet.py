@@ -40,20 +40,28 @@ logger = logging.getLogger(__name__)
 MAX_REMEMBERED_DEVICES = 3
 
 # How long a remembered device may skip the MFA challenge before it is forgotten
-# and the next sign-in re-challenges (ADR-385).
+# and the next sign-in re-challenges (ADR-385; privileged rule ADR-540).
 #
 # These bound how LONG one device stays trusted; MAX_REMEMBERED_DEVICES bounds
 # how MANY are trusted at once. Neither subsumes the other: without the age
 # bound, a single daily-driver device is remembered forever; without the count
 # cap, a user accumulates unbounded trusted devices.
 #
-# 24h for privileged matches NIST SP 800-63B's AAL2 reauthentication ceiling.
-# 7d for field is deliberately below Duo's 30-day default -- the trend is
+# Privileged: 12h since the device last PASSED MFA (its DeviceCreateDate --
+# forgetting deletes the record, so the next challenged sign-in creates a new
+# one). Not since last USE: ADR-385 shipped an idle rule, and a laptop used
+# every morning was never re-challenged at all (ADR-540). 12h is the owner's
+# choice: an 8-hour shift plus a buffer. It is STRICTER than NIST SP 800-63B-4
+# AAL2 ("SHOULD be no more than 24 hours") and equal to AAL3 (12h). The 12h
+# AAL2 figure is from the withdrawn 800-63-3 -- see the ADR-463 lesson, which
+# ADR-540 nearly repeated.
+#
+# 7d for field (idle) is deliberately below Duo's 30-day default -- the trend is
 # downward against MFA-targeting attacks -- while staying far from the
 # per-session challenge a field user cannot tolerate: their app backgrounds and
 # drops sessions constantly on unreliable mobile networks.
-PRIVILEGED_DEVICE_TTL = timedelta(hours=24)
-FIELD_DEVICE_TTL = timedelta(days=7)
+PRIVILEGED_CHALLENGE_TTL = timedelta(hours=12)   # since DeviceCreateDate
+FIELD_DEVICE_TTL = timedelta(days=7)             # since DeviceLastAuthenticatedDate
 
 # Cognito's own ceiling for one AdminListDevices page. A user at the cap has
 # ~3 devices, so one page is always enough -- but ask for the max so a user who
@@ -66,6 +74,14 @@ class Device:
     key: str
     last_auth: Optional[datetime]
     remembered: bool
+    # When the device last passed MFA (ADR-540). Defaulted so the count rule's
+    # callers, which never needed it, are unchanged.
+    created: Optional[datetime] = None
+
+    @property
+    def created_key(self) -> datetime:
+        """Missing creation date sorts OLDEST: an unproven device is not trusted."""
+        return self.created or datetime.min.replace(tzinfo=timezone.utc)
 
     @property
     def sort_key(self) -> datetime:
@@ -86,6 +102,7 @@ def parse_devices(raw: list[dict]) -> list[Device]:
         out.append(Device(
             key=d["DeviceKey"],
             last_auth=d.get("DeviceLastAuthenticatedDate"),
+            created=d.get("DeviceCreateDate"),
             # Only remembered devices skip the challenge, so only they count
             # against the cap. A "not_remembered" row is inert.
             remembered=attrs.get("dev:device_remembered_status") == "remembered",
@@ -139,9 +156,25 @@ def select_stale(devices: list[Device], ttl: timedelta,
     return [d for d in devices if d.remembered and d.sort_key < cutoff]
 
 
+def select_unchallenged(devices: list[Device], max_age: timedelta,
+                        now: Optional[datetime] = None) -> list[Device]:
+    """Which remembered devices last passed MFA more than `max_age` ago (ADR-540).
+
+    The privileged rule. Unlike select_stale, USE does not extend it: a device
+    signed in on every hour is still forgotten `max_age` after its challenge.
+    Same boundary (strictly past) and same remembered-only filter.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - max_age
+    return [d for d in devices if d.remembered and d.created_key < cutoff]
+
+
 def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
-                 now: Optional[datetime] = None) -> int:
-    """Forget this user's remembered devices unused within `ttl`. Returns count.
+                 now: Optional[datetime] = None, since: str = "last_auth") -> int:
+    """Forget this user's remembered devices past `ttl`. Returns count.
+
+    since="last_auth": unused within `ttl` (field, idle). since="created":
+    passed MFA more than `ttl` ago (privileged, ADR-540).
 
     Never raises, for the same reason enforce_cap does not: this runs unattended
     on a schedule, and one user's AWS hiccup must not abort the sweep for
@@ -159,7 +192,10 @@ def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
         logger.warning("device_fleet: could not list devices: %s", type(exc).__name__)
         return 0
 
-    doomed = select_stale(parse_devices(resp.get("Devices", [])), ttl, now)
+    if since not in ("last_auth", "created"):
+        raise ValueError(f"unknown device age basis: {since!r}")
+    select = select_unchallenged if since == "created" else select_stale
+    doomed = select(parse_devices(resp.get("Devices", [])), ttl, now)
     forgotten = 0
     for d in doomed:
         try:

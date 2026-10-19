@@ -83,7 +83,8 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=7),
     },
     # ADR-385 — bounds how LONG a remembered device may skip the MFA challenge;
-    # MAX_REMEMBERED_DEVICES bounds how MANY. Privileged 24h, field 7 days.
+    # MAX_REMEMBERED_DEVICES bounds how MANY. Privileged 12h since the last MFA
+    # (ADR-540), field 7 days idle.
     #
     # 01:00 Eastern: no DSP is operating, and midnight already holds
     # check-training-submissions (00:01) and escalate-adp-mismatch (00:05).
@@ -97,9 +98,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.device_sweep.sweep_stale_devices",
         "schedule": crontab(hour=1, minute=37),
     },
-    # ADR-539 D2 — the privileged 24h limit, checked hourly so it means 24h
-    # and not up to ~48. Same task, privileged accounts only (incl. platform
-    # accounts with no Employee row, D1). :53 is free: the */5, */10, */15
+    # ADR-539 D2 — the privileged limit (12h since the last MFA, ADR-540),
+    # checked hourly so it means 12-13h and not up to a day more. Same task,
+    # privileged accounts only (incl. platform accounts with no Employee row,
+    # ADR-539 D1). :53 is free: the */5, */10, */15
     # tasks hold the multiples of five, and :07 / :23 are hourly already.
     "sweep-privileged-remembered-devices": {
         "task": "app.tasks.device_sweep.sweep_stale_devices",
