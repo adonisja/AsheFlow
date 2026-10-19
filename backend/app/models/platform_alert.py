@@ -59,6 +59,15 @@ class PlatformAlert(Base):
     subject_ref  = Column(String(128), nullable=True)
     subject_role = Column(String(32), nullable=True)
 
+    # ADR-544 — what a super admin has DONE about an account alert. Text, not
+    # an FK, for the reason resolved_by_* is text: a super admin has no
+    # Employee row (ADR-274 D13).
+    reminded_at             = Column(DateTime(timezone=True), nullable=True)
+    reminded_by_email       = Column(String(320), nullable=True)
+    reminder_count          = Column(Integer, nullable=False, default=0, server_default="0")
+    sessions_ended_at       = Column(DateTime(timezone=True), nullable=True)
+    sessions_ended_by_email = Column(String(320), nullable=True)
+
     # A platform alert is a CONDITION, not an inbox item (ADR-335 D2). It closes
     # when the integration answers again, not when someone reads it.
     is_resolved = Column(Boolean, nullable=False, default=False, index=True)

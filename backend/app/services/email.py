@@ -851,3 +851,44 @@ def send_email_changed_notice(*, to_email: str, employee_name: str,
     _send_security_email(to_email=to_email, subject=subject, text=text,
                          html_body=_security_layout(heading=subject, body_html=body),
                          account_ref=account_ref)
+
+
+def send_mfa_setup_reminder(*, to_email: str, account_ref: str) -> None:
+    """A super admin's reminder to set up two-step sign-in (ADR-544 D1).
+
+    No greeting by name: the sender has the account handle, not a name, and a
+    platform account has no Employee row to look one up from.
+    """
+    base = settings.app_base_url.rstrip("/")
+    link = f"{base}/mfa-setup"
+    subject = "Set up two-step sign-in for your AsheFlow account"
+    body = (
+        '<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">'
+        "Your AsheFlow account has admin-level access, and it doesn't have two-step "
+        "sign-in set up. An AsheFlow administrator has asked you to set it up today.</p>"
+        '<ol style="margin:0 0 16px;padding-left:20px;font-size:15px;line-height:1.55;color:#374151;">'
+        '<li style="margin:0 0 6px;">Install an authenticator app on your phone (Google Authenticator, Microsoft Authenticator or similar).</li>'
+        '<li style="margin:0 0 6px;">Sign in to AsheFlow and open <strong style="color:#111522;">Account</strong>, '
+        'then <strong style="color:#111522;">Security</strong>, or go straight to the setup page below.</li>'
+        '<li style="margin:0;">Scan the code with the app and enter the 6-digit number it shows.</li></ol>'
+        f'<p style="margin:0 0 16px;font-size:14px;color:#374151;">Setup page:<br>'
+        f'<a href="{html.escape(link)}" style="color:#8517D3;font-weight:600;word-break:break-all;">{html.escape(link)}</a></p>'
+        '<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #F1C7C7;border-radius:10px;"><tr><td style="padding:14px 16px;">'
+        '<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;"><strong style="color:#8E1F1F;">If you had two-step sign-in set up and didn\'t remove it,</strong> '
+        "someone else may have. Change your password from your Account page and tell your manager or the AsheFlow team straight away.</p>"
+        "</td></tr></table>"
+    )
+    text = (
+        "Your AsheFlow account has admin-level access, and it doesn't have two-step sign-in set up. "
+        "An AsheFlow administrator has asked you to set it up today.\n\n"
+        "1. Install an authenticator app on your phone.\n"
+        "2. Sign in to AsheFlow and open Account, then Security, or go to the setup page:\n"
+        f"   {link}\n"
+        "3. Scan the code and enter the 6-digit number it shows.\n\n"
+        "If you had two-step sign-in set up and didn't remove it, someone else may have. "
+        "Change your password and tell your manager or the AsheFlow team straight away.\n\n"
+        + _SECURITY_FOOTER_TEXT
+    )
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading="Set up two-step sign-in", body_html=body),
+                         account_ref=account_ref)

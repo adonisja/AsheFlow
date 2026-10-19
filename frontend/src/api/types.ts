@@ -502,6 +502,12 @@ export interface PlatformAlert {
   subject_ref: string | null;
   /** Role, or platform group for platform staff. */
   subject_role: string | null;
+  /** ADR-544 — actions a super admin has taken on the account. */
+  reminded_at: string | null;
+  reminded_by_email: string | null;
+  reminder_count: number;
+  sessions_ended_at: string | null;
+  sessions_ended_by_email: string | null;
 }
 
 export interface UnavailableStaff {
