@@ -69,10 +69,12 @@ def tier_for(role: str, groups: Optional[set[str]] = None) -> str:
     ever arrive as groups. Reading `Employee.role` alone makes two of the five
     privileged roles unreachable.
 
-    Measured on prod: `adon` is `super_admin` in Cognito and `trainee` on its
-    Employee row. Role-only classification put the platform's highest-privilege
-    account on the FIELD tier with a 14-day grace period -- the exact inversion
-    this tiering exists to prevent.
+    Measured on prod (ADR-377): `adon` was `super_admin` in Cognito and
+    `trainee` on an Employee row. Role-only classification put the platform's
+    highest-privilege account on the FIELD tier with a 14-day grace period --
+    the exact inversion this tiering exists to prevent. By 2026-10-18 adon had
+    no Employee row on either pool (ADR-539): a platform account may have none,
+    so anything that enumerates accounts must read the groups too.
 
     Escalation only. A group can promote a caller to privileged; it never
     demotes one, so a dispatch employee whose groups are missing keeps their

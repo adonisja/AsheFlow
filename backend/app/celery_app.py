@@ -97,6 +97,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.device_sweep.sweep_stale_devices",
         "schedule": crontab(hour=1, minute=37),
     },
+    # ADR-539 D2 — the privileged 24h limit, checked hourly so it means 24h
+    # and not up to ~48. Same task, privileged accounts only (incl. platform
+    # accounts with no Employee row, D1). :53 is free: the */5, */10, */15
+    # tasks hold the multiples of five, and :07 / :23 are hourly already.
+    "sweep-privileged-remembered-devices": {
+        "task": "app.tasks.device_sweep.sweep_stale_devices",
+        "schedule": crontab(minute=53),
+        "kwargs": {"privileged_only": True},
+    },
     "check-role-directory-drift": {
         "task": "app.tasks.role_directory.check_role_directory_drift",
         "schedule": crontab(hour=5, minute=0),
