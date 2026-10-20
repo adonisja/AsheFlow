@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { fetchAuthSession, signOut } from 'aws-amplify/auth';
+import axiosClient from '../api/axiosClient';
 
 import {
   expiryReason,
@@ -34,6 +35,8 @@ const ACTIVITY_THROTTLE_MS = 1000;
 
 /** How often the clocks are checked. Well under the 60s warning window, so the
  *  warning cannot be skipped by a coarse tick. */
+/** ADR-541: how often an open, visible tab confirms its session still stands. */
+const SESSION_CHECK_MS = 60 * 1000;
 const TICK_MS = 15 * 1000;
 
 /* Scrolling and mouse movement are activity too. Reading a long dispatch table
@@ -78,6 +81,28 @@ export function useSessionTimeout(
     })();
     return () => { cancelled = true; };
   }, [enabled]);
+
+  /* ADR-541 D2 amendment — learn promptly that this session was ended by a
+     password or email change on another device. A tab nobody touches makes no
+     requests, so without this it stayed up until the next click. One cheap
+     request on focus and every 60s while visible; the 401 it gets is handled
+     by axiosClient (records the reason, signs out). Platform accounts have no
+     Employee row, so the check would 403 for them -- they're skipped. */
+  const isPlatform = groups.some(g => g === 'super_admin' || g === 'platform_support' || g === 'surveyor');
+  useEffect(() => {
+    if (!enabled || isPlatform) return;
+    const check = () => {
+      if (document.hidden) return;
+      axiosClient.get('/employees/me/session').catch(() => { /* 401 handled by the interceptor */ });
+    };
+    const onVisible = () => { if (!document.hidden) check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    const id = setInterval(check, SESSION_CHECK_MS);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(id);
+    };
+  }, [enabled, isPlatform]);
 
   useEffect(() => {
     if (!enabled) return;

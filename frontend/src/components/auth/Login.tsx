@@ -16,7 +16,14 @@ export default function Login() {
   /* Written by useSessionTimeout on the way out (ADR-463). Read once: a
      reload should not keep re-announcing an old sign-out. */
   const [sessionEnded] = useState<string | null>(() => {
-    const v = new URLSearchParams(window.location.search).get('ended');
+    // The URL, or the reason axiosClient stored before signing out (it can lose
+    // the race to App's plain <Navigate to="/login">). Read once, then cleared.
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem('asheflow_session_ended');
+      sessionStorage.removeItem('asheflow_session_ended');
+    } catch { /* private mode */ }
+    const v = new URLSearchParams(window.location.search).get('ended') ?? stored;
     return v === 'idle' || v === 'absolute' || v === 'credentials'
       || v === 'password' || v === 'email' ? v : null;
   });

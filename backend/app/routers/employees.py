@@ -2107,6 +2107,19 @@ class _PasswordConfirmRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=256)
 
 
+@router.get("/me/session", status_code=status.HTTP_200_OK)
+def check_session(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_self),
+):
+    """ADR-541 D2 amendment — the cheapest request that still runs the full
+    caller check, so an open tab learns within a minute (or on focus) that its
+    session was ended by a password or email change elsewhere. Reaching this
+    body means the session is still good; the refusal is get_caller_employee's
+    coded 401, which both clients already route on."""
+    return {"ok": True}
+
+
 @router.post("/me/password/request-code", status_code=status.HTTP_200_OK)
 def request_password_code(
     caller: Employee = Depends(get_caller_employee),

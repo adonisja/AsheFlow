@@ -332,3 +332,46 @@ def test_every_self_service_endpoint_lets_every_role_in():
     """The old email gate left out captain, field_supervisor and driver_trainee."""
     from app.models.employee import VALID_ROLES
     assert set(E._allow_self.allowed_roles) == set(VALID_ROLES)
+
+
+# ── Amendment (2026-10-19 staging walk-through): the other device is told why,
+#    and learns within a minute ───────────────────────────────────────────────
+
+import pathlib as _pl
+_REPO = _pl.Path(__file__).resolve().parents[3]
+
+
+def test_the_session_check_endpoint_runs_the_full_caller_check():
+    sig = inspect.signature(E.check_session).parameters
+    assert sig["caller"].default.dependency is deps.get_caller_employee
+    assert sig["_"].default is E._allow_self or sig["_"].default.dependency is E._allow_self
+    assert E.check_session(caller=object(), _={}) == {"ok": True}
+
+
+def test_the_web_records_the_reason_before_signing_out():
+    """The race: signOut() flips the auth state and App's <Navigate to="/login">
+    wins while the await is pending, dropping a reason carried only in the URL."""
+    src = (_REPO / "frontend/src/api/axiosClient.ts").read_text()
+    block = src[src.index("error.response?.status === 401"):]
+    assert block.index("sessionStorage.setItem('asheflow_session_ended'") < block.index("await signOut()")
+
+
+def test_the_sign_in_page_reads_the_stored_reason_once():
+    src = (_REPO / "frontend/src/components/auth/Login.tsx").read_text()
+    assert "sessionStorage.getItem('asheflow_session_ended')" in src
+    assert "sessionStorage.removeItem('asheflow_session_ended')" in src
+
+
+def test_an_open_web_tab_checks_on_focus_and_every_minute():
+    src = (_REPO / "frontend/src/hooks/useSessionTimeout.ts").read_text()
+    assert "SESSION_CHECK_MS = 60 * 1000" in src
+    assert "'/employees/me/session'" in src and "visibilitychange" in src
+    # Platform accounts have no Employee row: the check would 403 for them.
+    assert "isPlatform" in src and "'surveyor'" in src
+
+
+def test_the_mobile_app_checks_on_foreground_and_every_minute():
+    """D7: web AND mobile."""
+    src = (_REPO / "mobile/src/contexts/AuthContext.tsx").read_text()
+    assert "'/employees/me/session'" in src
+    assert "AppState.addEventListener('change'" in src and "60_000" in src

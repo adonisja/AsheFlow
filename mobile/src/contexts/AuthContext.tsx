@@ -8,7 +8,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { unregisterFromPush } from '@api/pushRegistration';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
-import { Alert, Linking } from 'react-native';
+import { Alert, AppState, Linking } from 'react-native';
 import { onCredentialsChanged } from '@api/client';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
@@ -140,6 +140,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // ADR-541 D2 — the server ended this session because the password or email
   // was changed (here or on another device). Drop to sign-in and say why.
+  // ADR-541 D2 amendment — learn promptly that this session was ended by a
+  // password or email change elsewhere. An app sitting in the foreground makes
+  // no requests, so check on returning to the foreground and every 60s while
+  // active. A credentials_changed 401 is handled by api/client (clears tokens,
+  // fires onCredentialsChanged below).
+  useEffect(() => {
+    if (!user) return;
+    const check = () => { apiClient.get('/employees/me/session').catch(() => {}); };
+    let timer: ReturnType<typeof setInterval> | null =
+      AppState.currentState === 'active' ? setInterval(check, 60_000) : null;
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        check();
+        if (!timer) timer = setInterval(check, 60_000);
+      } else if (timer) {
+        clearInterval(timer); timer = null;
+      }
+    });
+    return () => { sub.remove(); if (timer) clearInterval(timer); };
+  }, [user]);
+
   useEffect(() => onCredentialsChanged(() => {
     setUser(null);
     setCapabilities(null);
