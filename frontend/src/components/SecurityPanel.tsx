@@ -146,8 +146,8 @@ export default function SecurityPanel() {
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 mb-5">
           <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
           <p className="text-xs text-foreground leading-relaxed">
-            No second factor is set up. Admin, management and dispatch accounts
-            need one to sign in.
+            No second factor is set up. Admin, management, dispatch and every
+            platform account (including surveyors) need one to sign in.
           </p>
         </div>
       )}

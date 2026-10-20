@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import require_configured, require_mfa_enrolled, RequireMode
 from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones, platform_alerts, crew_pins, truck_pins, separations, collection, sns_events, campaigns, privacy, role_guides, survey_register, notification_gallery, stolen_package_reports
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones, platform_alerts, crew_pins, truck_pins, separations, collection, sns_events, campaigns, privacy, role_guides, survey_register, notification_gallery, stolen_package_reports, platform_account
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -213,7 +213,9 @@ api_v1_router.include_router(sns_events.router)
 # caller and carries its own RoleChecker.
 api_v1_router.include_router(privacy.router)
 # ADR-504 — no `_configured`: the survey register belongs to no tenant.
-api_v1_router.include_router(survey_register.router)
+# ADR-549 D2: the register refuses an unenrolled caller. Not `_configured`:
+# require_configured is about a tenant's setup, and platform accounts have none.
+api_v1_router.include_router(survey_register.router, dependencies=[Depends(require_mfa_enrolled)])
 api_v1_router.include_router(companies.company_admin_router)
 # ADR-451 D4 — no auth dependency: the Owner confirming a new address may be
 # unable to sign in. The single-use token is the credential.
@@ -222,6 +224,9 @@ api_v1_router.include_router(companies.public_router)
 # no owning tenant, and a super admin must be able to read them precisely
 # when a company's configuration is broken.
 api_v1_router.include_router(platform_alerts.router)
+# ADR-549 D4: a platform account's own settings. No `_configured`: platform
+# accounts have no tenant setup, and get_platform_account gates every route.
+api_v1_router.include_router(platform_account.router)
 api_v1_router.include_router(notification_gallery.router)
 # ADR-465 D3. These three carry ordinary tenant data and were ungated by
 # omission, not by the ADR-335 reasoning above -- that argument is specific to

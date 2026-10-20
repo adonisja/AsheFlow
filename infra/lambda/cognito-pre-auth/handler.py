@@ -32,6 +32,9 @@ PRIVILEGED_GROUPS = {
     "management",
     "dispatch",
     "platform_support",
+    # ADR-549 D1: enrols at first sign-in (with ADR-548's 24-hour window).
+    # Their survey records carry their name and the ADR-504 attestation.
+    "surveyor",
 }
 
 # ADR-466 D2. Cognito wraps this in "PreAuthentication failed with error {msg}",

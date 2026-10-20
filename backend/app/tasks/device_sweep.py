@@ -60,6 +60,11 @@ SWEEP_TIMEZONE = "America/New_York"
 #: Cognito-only groups whose members have no Employee row (ADR-539 D1).
 PLATFORM_GROUPS = ("super_admin", "platform_support")
 
+#: ADR-549 D1. Also no Employee row, but swept on the FIELD timing (7 days
+#: since the last MFA): surveyors enrol before use like platform staff, yet
+#: re-challenging a phone every 12 h fights an outdoor walking job.
+SURVEYOR_GROUP = "surveyor"
+
 
 def _cognito_username(employee: Employee) -> str | None:
     """The Username this employee's Cognito account actually has (ADR-380 F7).
@@ -103,7 +108,7 @@ def _groups_for(username: str) -> set[str] | None:
         return None
 
 
-def _platform_usernames() -> set[str] | None:
+def _platform_usernames(groups: tuple[str, ...] = PLATFORM_GROUPS) -> set[str] | None:
     """Usernames in the platform groups, or None if they cannot be listed.
 
     None, not an empty set: "could not read" must be distinguishable in the
@@ -116,7 +121,7 @@ def _platform_usernames() -> set[str] | None:
     try:
         client = boto3.client("cognito-idp", region_name=settings.aws_region)
         paginator = client.get_paginator("list_users_in_group")
-        for group in PLATFORM_GROUPS:
+        for group in groups:
             for page in paginator.paginate(
                 UserPoolId=settings.aws_cognito_user_pool_id, GroupName=group,
             ):
@@ -260,6 +265,24 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
                 ttl=device_fleet.PRIVILEGED_CHALLENGE_TTL,
             )
 
+        # ADR-549 D1 — surveyors: field timing, so the daily run only. No
+        # unprotected alert here: a newly invited surveyor is legitimately
+        # unenrolled inside ADR-548's window, and the Lambda refuses them after
+        # it, so an alert would be noise that trains people to ignore the
+        # critical platform one above.
+        surveyor_checked = 0
+        surveyors = None
+        if not privileged_only:
+            surveyors = _platform_usernames((SURVEYOR_GROUP,))
+            for username in sorted((surveyors or set()) - seen - (platform or set())):
+                surveyor_checked += 1
+                forgotten += device_fleet.forget_stale(
+                    username=username,
+                    pool_id=settings.aws_cognito_user_pool_id,
+                    region=settings.aws_region,
+                    ttl=device_fleet.FIELD_DEVICE_TTL,
+                )
+
         if unprotected:
             db.commit()  # persist the alerts raised above
 
@@ -270,6 +293,8 @@ def sweep_stale_devices(privileged_only: bool = False) -> dict:
             checked, platform_checked, forgotten, skipped, unprotected,
         )
         return {"checked": checked, "platform_checked": platform_checked,
+                "surveyor_checked": surveyor_checked,
+                "surveyor_group_read": None if privileged_only else surveyors is not None,
                 "platform_groups_read": platform is not None,
                 "privileged_only": privileged_only,
                 "forgotten": forgotten, "skipped": skipped,

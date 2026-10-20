@@ -38,7 +38,9 @@ function signOutDeadline(status: MfaStatus | null): string {
 }
 
 export default function MfaRequired() {
-  const { mfaStatus } = useAuth();
+  const { mfaStatus, groups } = useAuth();
+  const isSurveyorOnly = groups.includes('surveyor')
+    && !groups.some(g => g === 'super_admin' || g === 'platform_support');
   const [signingOut, setSigningOut] = useState(false);
 
   /* ADR-527. The router sends a blocked account HERE, but nothing sent it back:
@@ -86,8 +88,13 @@ export default function MfaRequired() {
                 ? <>Your {mfaStatus.grace_days_total}-day window to set this up
                     has passed, so AsheFlow needs a second factor before you can
                     continue.</>
-                : <>Your role can see and change things across the whole company,
-                    so AsheFlow needs a second factor before you can continue.</>}
+                : isSurveyorOnly
+                  /* ADR-549 D1: true for a surveyor, unlike "across the whole
+                     company" -- what they protect is their own attestation. */
+                  ? <>Survey records carry your name and your signed agreement,
+                      so AsheFlow needs a second factor before you can continue.</>
+                  : <>Your role can see and change things across the whole company,
+                      so AsheFlow needs a second factor before you can continue.</>}
             </p>
           </div>
         </div>

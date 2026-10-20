@@ -61,6 +61,7 @@ import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
 import MyWorkforceRouteScreen from '@screens/Walker/MyWorkforceRouteScreen';
 import MfaRequiredScreen        from '@screens/MfaRequiredScreen';
 import SurveyNavigator          from '@screens/Survey/SurveyScreens';   // ADR-504
+import PlatformSupportScreen    from '@screens/PlatformSupportScreen';  // ADR-549 D6
 import MfaGracePrompt           from '@components/MfaGracePrompt';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
@@ -83,6 +84,8 @@ export type RootStackParamList = {
   /** ADR-381 D2 — shown INSTEAD OF Main when the grace period has closed. */
   MfaRequired: undefined;
   /** ADR-504 — accounts with no Employee row (surveyors, the platform owner). */
+  /** ADR-549 D6 — platform support signs in on mobile to a pointer to the web. */
+  PlatformSupport: undefined;
   Survey: undefined;
 };
 
@@ -409,6 +412,10 @@ export default function RootNavigator() {
           /* ADR-504. No Employee row means no tab works: every tab calls
              employee endpoints. They get the survey register instead. */
           <RootStack.Screen name="Survey" component={SurveyNavigator} />
+        ) : hasRole('platform_support') ? (
+          /* ADR-549 D6: support's pages are web-only; the tenant tab shell
+             below 403s on every tab for an account with no Employee row. */
+          <RootStack.Screen name="PlatformSupport" component={PlatformSupportScreen} />
         ) : (
           <RootStack.Screen name="Main" component={MainShell} />
         )}

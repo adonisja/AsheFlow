@@ -3031,6 +3031,18 @@ export interface Separation {
  *  the preference flag this reads, so an account can be protected while this
  *  says enrolled=false.
  */
+/** ADR-549 D4. GET /platform/me — a platform account's own profile, from
+ *  Cognito (super_admin, platform_support and surveyor have no Employee row). */
+export interface PlatformMe {
+  username: string;
+  name: string | null;
+  email: string | null;
+  email_verified: boolean;
+  groups: string[];
+  role_label: string;
+  mfa_enrolled: boolean | null;
+}
+
 export interface MfaStatus {
   required: boolean;
   enrolled: boolean | null;

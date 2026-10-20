@@ -32,6 +32,7 @@ import { errorText } from '@api/errorText';
 import { useColors } from '@contexts/ThemeContext';
 import { useAuth } from '@contexts/AuthContext';
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
+import PlatformAccountScreen from './PlatformAccountScreen';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── shapes (mirror backend/app/routers/survey_register.py) ──────────────────
@@ -86,7 +87,8 @@ const CONFIRMATIONS = [
 type ConfirmKey = typeof CONFIRMATIONS[number]['key'];
 
 type StackParams = { SurveyStart: undefined; SurveyWalk: { walkId: string };
-                     SurveyArea: { areaId: string; name: string } };
+                     SurveyArea: { areaId: string; name: string };
+                     PlatformAccount: undefined };   // ADR-549 D6
 const Stack = createNativeStackNavigator<StackParams>();
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -291,6 +293,8 @@ function SurveyStartScreen({ navigation }: NativeStackScreenProps<StackParams, '
         </View>
       )}
 
+      {/* ADR-549 D6: password and second factor live here for platform accounts. */}
+      <Button variant="ghost" onPress={() => navigation.navigate('PlatformAccount')}>My account</Button>
       <Button variant="ghost" onPress={() => void signOut()}>Sign out</Button>
     </ScreenShell>
   );
@@ -751,6 +755,7 @@ export default function SurveyNavigator() {
       <Stack.Screen name="SurveyStart" component={SurveyStartScreen} />
       <Stack.Screen name="SurveyWalk" component={SurveyWalkScreen} />
       <Stack.Screen name="SurveyArea" component={SurveyAreaScreen} />
+      <Stack.Screen name="PlatformAccount" component={PlatformAccountScreen} />
     </Stack.Navigator>
   );
 }

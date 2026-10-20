@@ -148,9 +148,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // no requests, so check on returning to the foreground and every 60s while
   // active. A credentials_changed 401 is handled by api/client (clears tokens,
   // fires onCredentialsChanged below).
+  // ADR-549 D3: platform accounts have no Employee row, so they check their
+  // own session stamp instead (the employee path 403s for them, silently).
+  const isPlatform = Boolean(user?.groups.some(g => g === 'super_admin' || g === 'platform_support' || g === 'surveyor'));
   useEffect(() => {
     if (!user) return;
-    const check = () => { apiClient.get('/employees/me/session').catch(() => {}); };
+    const path = isPlatform ? '/platform/me/session' : '/employees/me/session';
+    const check = () => { apiClient.get(path).catch(() => {}); };
     let timer: ReturnType<typeof setInterval> | null =
       AppState.currentState === 'active' ? setInterval(check, 60_000) : null;
     const sub = AppState.addEventListener('change', state => {
@@ -162,7 +166,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
     return () => { sub.remove(); if (timer) clearInterval(timer); };
-  }, [user]);
+  }, [user, isPlatform]);
 
   useEffect(() => onCredentialsChanged(() => {
     setUser(null);

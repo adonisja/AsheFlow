@@ -114,10 +114,16 @@ class TestTokensIssuedBeforeAChangeAreRefused:
 
     def test_get_caller_employee_answers_401(self, db):
         e = _person(db)
-        e.tokens_valid_after = datetime.now(timezone.utc)
+        stamp = datetime.now(timezone.utc)
+        e.tokens_valid_after = stamp
         db.commit()
+        # From the AWARE stamp, not e.tokens_valid_after: after the commit
+        # SQLite hands it back naive, and .timestamp() on a naive value applies
+        # the host's local offset. This test used to compute auth_time that
+        # way and passed only because deps made the same mistake (ADR-549:
+        # deps now reads a naive stamp as UTC, as it is stored).
         user = {"id": e.cognito_sub, "username": e.username, "email": e.email,
-                "cognito_groups": [], "auth_time": int(e.tokens_valid_after.timestamp()) - 60}
+                "cognito_groups": [], "auth_time": int(stamp.timestamp()) - 60}
         with pytest.raises(HTTPException) as exc:
             deps.get_caller_employee(current_user=user, db=db)
         assert exc.value.status_code == 401

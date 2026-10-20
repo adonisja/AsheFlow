@@ -47,7 +47,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_platform_staff, get_super_admin
+from app.api.deps import get_platform_staff, get_platform_user, get_super_admin
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
@@ -110,7 +110,7 @@ def _assert_not_excluded(db: Session, sub: str) -> None:
         )
 
 
-def get_writer(current_user: dict = Depends(get_current_user),
+def get_writer(current_user: dict = Depends(get_platform_user),
                db: Session = Depends(get_db)) -> Writer:
     sub = current_user.get("id")
     if not sub:
@@ -945,7 +945,7 @@ class AreaViewer:
     writer: Optional[Writer]            # None for platform support: it reads areas, never walks
 
 
-def get_area_viewer(current_user: dict = Depends(get_current_user),
+def get_area_viewer(current_user: dict = Depends(get_platform_user),
                     db: Session = Depends(get_db)) -> AreaViewer:
     groups = current_user.get("cognito_groups", [])
     if "platform_support" in groups and "super_admin" not in groups:

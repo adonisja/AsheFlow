@@ -168,6 +168,9 @@ _NO_AUDIT = {
     "truck_assignments.py::create_assignment",
     "truck_assignments.py::update_assignment",
     "truck_transfers.py::create_transfers",
+    # ADR-549: the platform twin of employees.py::request_password_code -- emails
+    # a code and changes nothing; /platform/me/password/confirm audits the change.
+    "platform_account.py::request_password_code",
 }
 
 # Follow-ups from D13 that D14 closed: truck CRUD, PlaceType Library

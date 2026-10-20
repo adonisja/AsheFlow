@@ -37,6 +37,7 @@ import MyWorkforceRoute from './pages/MyWorkforceRoute';
 import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
+import PlatformAccount from './pages/superadmin/PlatformAccount';
 // TEMPORARY design-review route for the ADR-271 drill-down mock. Remove with
 // the mock once the wired version lands.
 import AuditLog from './pages/AuditLog';
@@ -763,6 +764,10 @@ function App() {
                 seeing and unsticking surveyors. Never the walker pages. */}
             <Route path="/superadmin/surveyors" element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><Surveyors /></ProtectedRoute>} />
             <Route path="/superadmin/survey-activity" element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><SurveyActivityPage /></ProtectedRoute>} />
+            {/* ADR-549 D5: every platform account's own sign-in settings. Was
+                super-admin only and rendered the tenant Account page, whose
+                calls all 403 for an account with no Employee row. */}
+            <Route path="/superadmin/account" element={<PlatformAccount />} />
           </Route>
           {/* Super admin — separate layout, no Navbar, violet ambient */}
           <Route
@@ -778,7 +783,6 @@ function App() {
             <Route path="/superadmin/notifications" element={<NotificationGallery />} />
             <Route path="/superadmin/staff" element={<PlatformStaff />} />
             <Route path="/superadmin/collection" element={<CollectionData />} />
-            <Route path="/superadmin/account" element={<Account />} />
             <Route path="/superadmin" element={<Navigate to="/superadmin/companies" replace />} />
           </Route>
 

@@ -67,6 +67,31 @@ def end_all_sessions(employee, username: str) -> bool:
         return False
 
 
+def end_platform_sessions(db, sub: str, username: str) -> bool:
+    """end_all_sessions for an account with no Employee row (ADR-549 D3).
+
+    Same order and the same failure rule: the stamp this API enforces itself
+    goes first and unconditionally (caller commits), then Cognito's global
+    sign-out, whose failure is logged and reported rather than raised.
+    """
+    from app.models.platform_session import PlatformSessionStamp
+    now = datetime.now(timezone.utc)
+    row = db.get(PlatformSessionStamp, sub)
+    if row is None:
+        db.add(PlatformSessionStamp(cognito_sub=sub, tokens_valid_after=now, updated_at=now))
+    else:
+        row.tokens_valid_after = now
+        row.updated_at = now
+    try:
+        _cognito().admin_user_global_sign_out(
+            UserPoolId=settings.aws_cognito_user_pool_id, Username=username,
+        )
+        return True
+    except Exception as exc:  # boto raises ClientError/BotoCoreError; neither is user-facing
+        logger.warning("account_security: platform global sign-out failed: %s", type(exc).__name__)
+        return False
+
+
 # ── One-time codes ────────────────────────────────────────────────────────────
 
 def _digest(employee_id: UUID, purpose: str, code: str) -> str:
