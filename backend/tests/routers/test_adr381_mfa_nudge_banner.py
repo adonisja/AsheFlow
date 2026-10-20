@@ -115,13 +115,24 @@ class TestTheComponentMatchesThatLogic:
         )
 
     def test_it_links_to_the_page_the_trigger_names(self):
-        """The PreAuthentication lambda says 'go to Account > Security'. Two
-        instructions that can diverge will."""
+        """Two instructions that can diverge will. The banner links /account;
+        the trigger's refusal names NO page since ADR-466 (it says ask an
+        administrator), so the two cannot point at different places.
+
+        This test used to assert "Account > Security" was in the handler FILE.
+        After ADR-466 removed it from the message it kept passing on a code
+        comment that quoted the old text -- until ADR-548 reworded the comment.
+        It now reads the message itself."""
+        import importlib.util
         src = BANNER.read_text()
         assert 'to="/account"' in src
 
         handler = ROOT / "infra" / "lambda" / "cognito-pre-auth" / "handler.py"
-        assert "Account > Security" in handler.read_text()
+        spec = importlib.util.spec_from_file_location("pre_auth_handler_381", handler)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert "Account > Security" not in mod.ENROL_HINT
+        assert "/account" not in mod.ENROL_HINT and "administrator" in mod.ENROL_HINT
 
     def test_it_is_mounted_app_wide(self):
         """A banner on one page is not a warning."""

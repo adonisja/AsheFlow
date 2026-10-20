@@ -95,12 +95,24 @@ def build(spec: dict) -> dict[pathlib.Path, str]:
                 'font-size="30" font-weight="700" fill="{fill}">AsheFlow</text>')
     out[ASSETS / "logo-wordmark.svg"] = svg("0 0 190 48", wordmark.format(fill=fg_l))
 
+    # The lockup's canvas ends where its ink ends. It was 245 wide with the
+    # drawing ending near 183, so the logo carried ~60 units of empty space on
+    # its right: centred as a box, its INK sat 25px left of centre at 1920px,
+    # and the sign-in card beneath read as shifted right (owner, 2026-10-20).
+    #
+    # textLength pins the wordmark's width. An SVG loaded through <img> cannot
+    # use the page's web fonts, so the text renders in whatever Sora/Inter/
+    # system-ui fallback each device has -- a different width on every
+    # machine, and no fixed viewBox can fit all of them. Pinned, it is 124
+    # units everywhere: x 60 -> 184. The mark's ink starts at 2.8 (circle cx 5,
+    # r 2.2), so a 186.8 canvas leaves equal margins and centres the ink.
     lock = ('{mark}\n  <text x="60" y="33" font-family="Sora, Inter, system-ui, sans-serif" '
-            'font-size="27" font-weight="700" fill="{fill}">AsheFlow</text>')
+            'font-size="27" font-weight="700" textLength="124" lengthAdjust="spacingAndGlyphs" '
+            'fill="{fill}">AsheFlow</text>')
     out[ASSETS / "logo-full.svg"] = svg(
-        "0 0 245 48", lock.format(mark=_mark_paths(gold_l, navy_l, "white"), fill=fg_l))
+        "0 0 186.8 48", lock.format(mark=_mark_paths(gold_l, navy_l, "white"), fill=fg_l))
     out[ASSETS / "logo-full-light.svg"] = svg(
-        "0 0 245 48", lock.format(mark=_mark_paths(gold_d, navy_d, fg_d), fill=fg_d))
+        "0 0 186.8 48", lock.format(mark=_mark_paths(gold_d, navy_d, fg_d), fill=fg_d))
     return out
 
 

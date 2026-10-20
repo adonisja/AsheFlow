@@ -5,6 +5,7 @@ import { ShieldAlert, LogOut } from 'lucide-react';
 
 import SecurityPanel from '../components/SecurityPanel';
 import { useAuth } from '../contexts/AuthContext';
+import type { MfaStatus } from '../api/types';
 
 /** The wall a blocked privileged account meets (ADR-465 D1/D2).
  *
@@ -14,9 +15,28 @@ import { useAuth } from '../contexts/AuthContext';
  *
  *  The only exits are enrolling or signing out. Signing out lands on /login,
  *  and the next successful sign-in returns here -- `blocked` is recomputed from
- *  Cognito every time, never from a dismissed flag. That loop IS the
- *  enforcement: refusing costs a sign-in and changes nothing.
+ *  Cognito every time, never from a dismissed flag. For a privileged account
+ *  that holds only inside the 24-hour enrolment window (ADR-548); after it,
+ *  PreAuthentication refuses the sign-in, which is why the page states the
+ *  deadline instead of promising a free sign-out.
  */
+/** What signing out of the wall costs, AFTER the tier-neutral sentence
+ *  (ADR-469: "will not skip this step" is true for both tiers and stays
+ *  unbranched). Only the deadline differs (ADR-548 D4). */
+function signOutDeadline(status: MfaStatus | null): string {
+  if (status?.tier === 'field') {
+    return 'You will return here next time you sign in.';
+  }
+  if (status?.setup_window_ends_at) {
+    const ends = new Date(status.setup_window_ends_at).toLocaleString(undefined, {
+      weekday: 'short', hour: 'numeric', minute: '2-digit',
+    });
+    return `You can come back to finish until ${ends}. After that, an administrator will need to reset your setup.`;
+  }
+  // Deadline unreadable: say the rule rather than a time we do not have.
+  return 'You can come back to finish within 24 hours of your first sign-in. After that, an administrator will need to reset your setup.';
+}
+
 export default function MfaRequired() {
   const { mfaStatus } = useAuth();
   const [signingOut, setSigningOut] = useState(false);
@@ -90,10 +110,13 @@ export default function MfaRequired() {
             <LogOut className="w-3.5 h-3.5" />
             {signingOut ? 'Signing out…' : 'Sign out instead'}
           </button>
-          {/* Said plainly rather than discovered: leaving does not skip this. */}
+          {/* Said plainly rather than discovered: leaving does not skip this.
+              ADR-548 D4: for a privileged account it also has a deadline. The
+              old line ("you will return here next time you sign in") was false
+              for them -- signing out spent their only pass -- and is now true
+              only until setup_window_ends_at. */}
           <p className="text-xs text-subtle">
-            Signing out will not skip this step. You will return here next time
-            you sign in.
+            Signing out will not skip this step. {signOutDeadline(mfaStatus)}
           </p>
         </div>
 

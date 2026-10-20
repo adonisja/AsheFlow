@@ -204,9 +204,10 @@ class EmployeeMfaEnrolmentResponse(BaseModel):
     id: UUID
     name: str
     role: str
-    # True once the account has spent ADR-459's one-time enrolment pass. Paired
-    # with `enrolled=False` this is the lockout signature: the pass is gone and
-    # nothing was set up with it.
+    # True once the account's enrolment window has CLOSED (ADR-548: 24 hours
+    # from its first completed sign-in; ADR-459 made it one sign-in). Paired
+    # with `enrolled=False` this is the lockout signature: the window is gone
+    # and nothing was set up in it. Inside the window it stays False.
     pass_spent: bool
     enrolled: Optional[bool] = None
     # The lifecycle the roster shows, so the client does not recompute it from a

@@ -92,14 +92,22 @@ def test_preauth_running_twice_in_one_sign_in_is_harmless():
 
 # ── the bound ADR-459 intended still holds ─────────────────────────────────
 
-def test_one_completed_sign_in_then_refused():
+def test_one_completed_sign_in_opens_the_window_then_it_closes():
+    """ADR-548 changed the bound from one sign-in to 24 hours from the first
+    completed one. The stamp is still written by completion, never by an
+    attempt; what changed is how long it lets an unenrolled account back in."""
+    from datetime import datetime, timedelta, timezone
     mod = _load()
+    t0 = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    mod._now = lambda: t0
     u = _attach(mod, FakeUser(["admin"]))
     mod.handler(_ev(PRE), None)
-    mod.handler(_ev(POST), None)                        # completed: spent
+    mod.handler(_ev(POST), None)                        # completed: window opens
     assert u.attrs.get("custom:mfa_first_seen")
+    assert mod.handler(_ev(PRE), None) is not None      # signed out and back: allowed
+    mod._now = lambda: t0 + timedelta(hours=24)
     with pytest.raises(Exception) as exc:
-        mod.handler(_ev(PRE), None)                     # signed out, unenrolled
+        mod.handler(_ev(PRE), None)                     # a day later, unenrolled
     assert str(exc.value) == mod.ENROL_HINT
 
 

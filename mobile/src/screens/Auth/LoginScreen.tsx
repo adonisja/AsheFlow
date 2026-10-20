@@ -8,6 +8,7 @@ import { useAuth, type AuthChallenge } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
+import { classifySignInError } from './signInError';
 
 export default function LoginScreen() {
   const c = useColors();
@@ -19,6 +20,15 @@ export default function LoginScreen() {
   const [loading,        setLoading]        = useState(false);
   const [federatedLoading, setFederatedLoading] = useState<'Discord' | 'Google' | null>(null);
   const [error,          setError]          = useState<string | null>(null);
+  // ADR-548 D5: the enrolment-window refusal is a state, not an error.
+  const [mfaSetupClosed, setMfaSetupClosed] = useState(false);
+
+  /** Every catch goes through here, so Cognito's trigger wrapper never shows. */
+  const fail = (err: any, fallback: string) => {
+    const problem = classifySignInError(err?.message, fallback);
+    if (problem.kind === 'mfa_setup_closed') setMfaSetupClosed(true);
+    else setError(problem.text);
+  };
   const pwRef = useRef<TextInput>(null);
 
   /* ADR-362 — a sign-in can stop on a challenge instead of returning tokens.
@@ -35,11 +45,12 @@ export default function LoginScreen() {
     }
     setLoading(true);
     setError(null);
+    setMfaSetupClosed(false);
     try {
       const next = await signIn(username.trim(), password);
       if (next) { setChallenge(next); setAnswer(''); }
     } catch (err: any) {
-      setError(err.message ?? 'Sign-in failed. Check your credentials.');
+      fail(err, 'Sign-in failed. Check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -55,7 +66,7 @@ export default function LoginScreen() {
       setChallenge(next);
       setAnswer('');
     } catch (err: any) {
-      setError(err.message ?? 'That code was not accepted. Try again.');
+      fail(err, 'That code was not accepted. Try again.');
     } finally {
       setLoading(false);
     }
@@ -103,7 +114,7 @@ export default function LoginScreen() {
     try {
       await signInWithProvider(provider);
     } catch (err: any) {
-      setError(err.message ?? 'Sign-in failed. Please try again.');
+      fail(err, 'Sign-in failed. Please try again.');
     } finally {
       setFederatedLoading(null);
     }
@@ -259,6 +270,26 @@ export default function LoginScreen() {
             />
           </View>
 
+          {/* ADR-548 D5. Warning, not danger: nothing the person typed was
+              wrong, and there is one way out. What happened, then what to do. */}
+          {mfaSetupClosed && (
+            <View
+              accessibilityRole="alert"
+              style={[s.noticeBox, { backgroundColor: c.warning + '14', borderColor: c.warning + '40' }]}
+            >
+              <Text style={[s.noticeTitle, { color: c.foreground }]}>Two-factor setup needed</Text>
+              <Text style={[s.noticeBody, { color: c.mutedForeground }]}>
+                This account needs two-factor authentication, and the 24 hours to
+                set it up after your first sign-in have passed.
+              </Text>
+              <Text style={[s.noticeBody, { color: c.mutedForeground }]}>
+                <Text style={{ color: c.foreground, fontWeight: fontWeight.semibold }}>What to do: </Text>
+                ask an administrator to reset your two-factor setup. Then sign in
+                again and you will go straight to setup.
+              </Text>
+            </View>
+          )}
+
           {/* Error */}
           {error && (
             <View style={[s.errorBox, { backgroundColor: c.danger + '0D', borderColor: c.danger + '30' }]}>
@@ -401,6 +432,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   errorBox:  { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginBottom: spacing.sm },
   errorText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  noticeBox:   { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.xs },
+  noticeTitle: { fontSize: fontSize.md, fontWeight: fontWeight.semibold },
+  noticeBody:  { fontSize: fontSize.sm, lineHeight: 20 },
 
   btn: {
     marginTop: spacing.xs,

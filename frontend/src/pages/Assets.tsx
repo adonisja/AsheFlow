@@ -1231,9 +1231,10 @@ function PeopleTab() {
             <ul className="divide-y divide-border">
               {enrolment.map(r => {
                 /* The lockout signature, and the reason this panel exists: the
-                   one-time enrolment pass (ADR-459) is spent and nothing was
-                   set up with it, so PreAuthentication refuses every later
-                   sign-in. The roster cannot show this -- a refused sign-in
+                   enrolment window (ADR-459; 24 hours since ADR-548) has closed
+                   and nothing was set up in it, so PreAuthentication refuses
+                   every later sign-in. Someone still inside the window has
+                   pass_spent false and reads "Setup not finished". The roster cannot show this -- a refused sign-in
                    issues no token, so account_status never leaves
                    'pending_verification' and the row reads "Registered", which
                    looks like waiting on the user. */
@@ -1259,7 +1260,7 @@ function PeopleTab() {
                     ) : lockedOut ? (
                       <span
                         className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md bg-danger/10 text-danger shrink-0"
-                        title="Their one-time setup window was used without finishing. Reset two-factor on their row to let them try again."
+                        title="Their 24-hour setup window closed without finishing. Reset two-factor on their row to let them try again."
                       >
                         <ShieldOff className="w-3 h-3" /> Cannot sign in
                       </span>

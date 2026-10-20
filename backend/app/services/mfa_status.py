@@ -37,6 +37,37 @@ MFA_FIELD_ROLES = frozenset({
 # trying to work.
 DEFAULT_MFA_GRACE_DAYS = 14
 
+# ADR-548. A privileged account with no factor may sign in for this long after
+# its first COMPLETED sign-in (the custom:mfa_first_seen stamp, ADR-459/530),
+# so signing out of the /mfa-setup wall is not a lockout. Mirrored by
+# SETUP_WINDOW_HOURS in infra/lambda/cognito-pre-auth/handler.py -- the Lambda
+# deploys alone and cannot import this -- and a test pins the two equal.
+PRIVILEGED_SETUP_WINDOW = timedelta(hours=24)
+FIRST_SEEN_ATTR = "custom:mfa_first_seen"
+_FUTURE_SKEW = timedelta(minutes=5)
+
+
+def setup_window_ends_at(stamp: Optional[str], now: Optional[datetime] = None
+                         ) -> tuple[str, Optional[datetime]]:
+    """("unopened" | "open" | "closed", when it ends) for an enrolment stamp.
+
+    The same reading as the Lambda's _window_open: a stamp that cannot be
+    trusted (unparseable, naive, or dated in the future) is CLOSED, with no end
+    time, because PreAuthentication refuses it. Reporting it as open would tell
+    an admin a locked-out person is fine.
+    """
+    if not stamp:
+        return "unopened", None
+    now = now or datetime.now(timezone.utc)
+    try:
+        first = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return "closed", None
+    if first.tzinfo is None or first > now + _FUTURE_SKEW:
+        return "closed", None
+    ends = first + PRIVILEGED_SETUP_WINDOW
+    return ("open" if now < ends else "closed"), ends
+
 
 @dataclass(frozen=True)
 class MfaStatus:
@@ -175,3 +206,32 @@ def is_enrolled(cognito_sub: Optional[str], username: Optional[str]) -> Optional
         logger.warning("mfa_status: could not read enrolment: %s", type(exc).__name__)
         return None
     return bool(resp.get("UserMFASettingList"))
+
+
+def read_setup_window(username: Optional[str]) -> tuple[Optional[str], Optional[datetime]]:
+    """Cognito's enrolment stamp for one user, read as a window (ADR-548 D3).
+
+    (None, None) when it cannot be read. A separate admin_get_user from
+    is_enrolled, deliberately: it is only asked for an UNENROLLED privileged
+    account -- the person on the wall -- so the extra round-trip is rare, and
+    leaving is_enrolled's shape alone keeps every caller and test of it as is.
+    """
+    import logging
+
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    from app.core.config import settings
+
+    if not username:
+        return None, None
+    try:
+        client = boto3.client("cognito-idp", region_name=settings.aws_region)
+        resp = client.admin_get_user(
+            UserPoolId=settings.aws_cognito_user_pool_id, Username=username)
+    except (ClientError, BotoCoreError) as exc:
+        logging.getLogger(__name__).warning(
+            "mfa_status: could not read setup window: %s", type(exc).__name__)
+        return None, None
+    attrs = {a["Name"]: a.get("Value") for a in resp.get("UserAttributes", [])}
+    return setup_window_ends_at(attrs.get(FIRST_SEEN_ATTR))

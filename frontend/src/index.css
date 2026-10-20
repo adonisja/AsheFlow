@@ -295,6 +295,14 @@
      which caps the MEASURE independently of the container. */
   .layout-form { @apply w-full mx-auto; max-width: clamp(20rem, 62vw, 56rem); }
 
+  /* Sign-in and other pre-shell cards (ADR-548 follow-up). Was a fixed
+     `max-w-sm` (24rem) at every size: right on a phone, marooned on a
+     1920px display. Grows with the viewport between a phone-width floor and
+     a 32rem ceiling -- wider than a form field ever needs to be, but enough
+     that the card holds its place on a large screen. Never wider than the
+     space it is given, so a 360px phone keeps its 16px gutters. */
+  .layout-auth { @apply w-full mx-auto; max-width: min(100%, clamp(22rem, 22vw + 8rem, 32rem)); }
+
   /* ── Brand gradients ───────────────────────────────────────────────────────
      These were USED but never DEFINED — `gradient-primary` at 6 call sites and
      `gradient-text-brand` at 1, including the navbar. An undefined utility is

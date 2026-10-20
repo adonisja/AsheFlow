@@ -71,6 +71,9 @@ export type MfaStatus = {
   grace_days_total: number;
   days_remaining: number | null;
   blocked: boolean;
+  /** ADR-548. ISO end of an unenrolled privileged account's 24-hour enrolment
+   *  window; null otherwise. */
+  setup_window_ends_at: string | null;
 };
 
 /** A Cognito challenge that sign-in stopped on (ADR-362).
