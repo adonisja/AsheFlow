@@ -7,7 +7,6 @@ Cognito, SES and Redis stubbed at their real names (CI has no Redis).
 """
 import ast
 import inspect
-import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -17,6 +16,7 @@ from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from app.api import deps
+from tests._credentials import make_test_password
 from app.models.audit_log import AuditLog
 from app.routers import employees as E
 from app.services import account_security as AS
@@ -47,11 +47,9 @@ class FakeRedis:
         pass
 
 
-# Built at runtime, never a literal: a password-shaped string in a test is
-# what secret scanners flag (GitGuardian incident 38384008 on PR #80 was this
-# file's old fixture). It only ever reaches a mocked Cognito.
-_NEW_PASSWORD = "Aa1!" + secrets.token_urlsafe(12)
-
+# Generated, never written (ADR-547): GitGuardian incident 38384008 on PR #80
+# was this file's old literal fixture. It only ever reaches a mocked Cognito.
+_NEW_PASSWORD = make_test_password()
 
 def _client_error(code):
     return ClientError({"Error": {"Code": code, "Message": code}}, "op")
@@ -220,7 +218,7 @@ class TestPasswordChange:
 
     def test_the_request_rejects_unknown_keys(self):
         with pytest.raises(Exception):
-            E._PasswordConfirmRequest(code="123456", new_password=_NEW_PASSWORD, old_password="x")
+            E._PasswordConfirmRequest(code="123456", new_password=_NEW_PASSWORD, old_password=make_test_password())
 
 
 # ── R2/D3: an email change needs codes from both inboxes ────────────────────

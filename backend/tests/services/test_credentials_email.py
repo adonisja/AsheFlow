@@ -4,16 +4,17 @@ It carries a live temporary password, so it is the email most likely to be
 mistaken for a phishing attempt if it does not look like the others. It was
 still on the pre-ADR-455 violet gradient with off-palette greys.
 """
+import html
 from unittest.mock import MagicMock, patch
 
 from app.services.email import send_credentials_email
+from tests._credentials import make_test_password
 
-# Assembled rather than written out: a credential-shaped literal in a test is
-# indistinguishable from a real one to a secret scanner, and the value this
-# fixture replaced WAS real (copied from a screenshot while reproducing the
-# bug). The shape is what matters here, not the characters.
-_FAKE_TEMP_PASSWORD = "Tm" + "p" + "7x" + "!" + "Qz"
-
+# Generated, never written (ADR-547). The value this fixture once replaced WAS
+# real (copied from a screenshot while reproducing the bug); the pieced-together
+# string that followed hid it from the scanner but was still one fixed value.
+# The shape is what matters here, not the characters.
+_FAKE_TEMP_PASSWORD = make_test_password()
 
 def _rendered(**over) -> tuple[str, str, str]:
     kw = {"to_email": "owner@example.com", "employee_name": "Nicoy Hunt",
@@ -54,7 +55,11 @@ def test_credentials_appear_and_are_escaped():
     _, text, html_body = _rendered(username="nicoy.hunt", temp_password=_FAKE_TEMP_PASSWORD)
     for part in (text, html_body):
         assert "nicoy.hunt" in part
-        assert _FAKE_TEMP_PASSWORD in part
+    # The generated password may hold "&", which the HTML part escapes (real
+    # temporary passwords draw from the same symbols, ADR-547). The plain part
+    # carries it as typed; the HTML part carries it escaped.
+    assert _FAKE_TEMP_PASSWORD in text
+    assert html.escape(_FAKE_TEMP_PASSWORD) in html_body
     _, _, evil = _rendered(username="<script>alert(1)</script>")
     assert "<script>" not in evil
     assert "&lt;script&gt;" in evil
