@@ -7,6 +7,7 @@
  * action is on an account or a claim.
  */
 import { useCallback, useEffect, useState } from 'react';
+import AccountId from '../../components/ui/AccountId';
 import { Check, Copy, Loader2, RefreshCw } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -15,7 +16,7 @@ import { errorText } from '../../utils/errorText';
 import { formatDate, formatDateTime, getLocalYMD } from '../../utils/date';
 import type {
   SurveyAccountStatus, SurveyActivity, SurveyActivityClaim, SurveyContributorHealth,
-  SurveyContributorInvited, SurveyStaffReleaseResult,
+  SurveyContributorInvited, SurveyStaffReleaseResult, SurveyMfaResetResult,
 } from '../../api/types';
 
 const STATUS: Record<SurveyAccountStatus, { label: string; tone: string }> = {
@@ -54,6 +55,11 @@ export default function SurveyActivityPage() {
   const [releasing, setReleasing] = useState<SurveyActivityClaim | null>(null);
   const [reason, setReason] = useState('');
   const [readmitting, setReadmitting] = useState<SurveyContributorHealth | null>(null);
+  // ADR-550 D2: reset a surveyor's two-factor, by surveyor ID, with a reason.
+  const [resetting, setResetting] = useState<SurveyContributorHealth | null>(null);
+  const [resetReason, setResetReason] = useState('');
+  // ADR-550 D1: find a surveyor by name, email or surveyor ID.
+  const [query, setQuery] = useState('');
   const [agreement, setAgreement] = useState({ version: '', signedOn: getLocalYMD(), confirmed: false });
 
   const load = useCallback(async () => {
@@ -102,6 +108,17 @@ export default function SurveyActivityPage() {
     const name = readmitting.display_name;
     setReadmitting(null);
     return `${name} is a contributor again.`;
+  });
+
+  const submitReset = () => resetting && run(`reset-${resetting.id}`, async () => {
+    const { data } = await axiosClient.post<SurveyMfaResetResult>(
+      `/survey/contributors/${resetting.id}/reset-mfa`, { reason: resetReason.trim() });
+    const name = resetting.display_name;
+    setResetting(null); setResetReason('');
+    // From the server's outcome, not assumed (ADR-546 Case 1).
+    return data.surveyor_emailed
+      ? `${name}'s two-factor was reset and they were signed out everywhere. They were emailed the reason and will set it up again at their next sign-in.`
+      : `${name}'s two-factor was reset and they were signed out everywhere. The email to them failed, so tell them yourself.`;
   });
 
   const submitRelease = () => releasing && run(`release-${releasing.id}`, async () => {
@@ -158,7 +175,12 @@ export default function SurveyActivityPage() {
         <div className="grid gap-5 2xl:grid-cols-2">
           {/* ── Surveyors ── */}
           <section className="card p-4 space-y-3 2xl:col-span-2" aria-labelledby="people-h">
-            <h2 id="people-h" className="text-sm font-semibold">Surveyors</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 id="people-h" className="text-sm font-semibold">Surveyors</h2>
+              <input type="search" value={query} onChange={e => setQuery(e.target.value)}
+                     placeholder="Find by name, email or surveyor ID" aria-label="Find a surveyor"
+                     className="input min-h-11 w-full sm:w-72" />
+            </div>
             {data.contributors.length === 0 ? (
               <p className="text-sm text-muted-foreground">No surveyors yet. Add one from the Surveyors page.</p>
             ) : (
@@ -171,7 +193,13 @@ export default function SurveyActivityPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.contributors.map(c => {
+                    {data.contributors.filter(c => {
+                      const q = query.trim().toLowerCase();
+                      if (!q) return true;
+                      return c.display_name.toLowerCase().includes(q)
+                        || (c.email ?? '').toLowerCase().includes(q)
+                        || c.id.toLowerCase().startsWith(q);
+                    }).map(c => {
                       const s = STATUS[c.account_status];
                       const needsGroup = !c.revoked_at && c.in_surveyor_group === false && c.account_status !== 'missing';
                       return (
@@ -179,6 +207,7 @@ export default function SurveyActivityPage() {
                           <td className="py-2 pr-3">
                             <div className="font-medium">{c.display_name}</div>
                             <div className="text-xs text-muted-foreground">{c.email ?? 'no email recorded'}</div>
+                            <AccountId id={c.id} label="Surveyor ID" />
                           </td>
                           <td className="py-2 pr-3 space-x-1 space-y-1">
                             {c.revoked_at
@@ -201,6 +230,13 @@ export default function SurveyActivityPage() {
                                 {busy === `restore-${c.id}` ? 'Restoring…' : 'Restore access'}
                               </button>
                             )}
+                            {!c.revoked_at && c.account_status === 'active' && (
+                              <button type="button" disabled={busy !== null}
+                                      onClick={() => { setResetting(c); setResetReason(''); }}
+                                      className="btn-ghost min-h-11 px-3 text-sm disabled:opacity-50">
+                                Reset two-factor
+                              </button>
+                            )}
                             {c.revoked_at && (
                               <button type="button" disabled={busy !== null}
                                       onClick={() => { setReadmitting(c); setAgreement({ version: '', signedOn: getLocalYMD(), confirmed: false }); }}
@@ -215,6 +251,30 @@ export default function SurveyActivityPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+
+            {resetting && (
+              <form className="rounded-lg border border-border p-3 space-y-3"
+                    onSubmit={e => { e.preventDefault(); submitReset(); }}>
+                <p className="text-sm">
+                  Reset two-factor for <strong>{resetting.display_name}</strong>{' '}
+                  <AccountId id={resetting.id} label="Surveyor ID" />. This clears their authenticator, signs them out
+                  everywhere, and gives them 24 hours from their next sign-in to set it up again. They're emailed the reason.
+                </p>
+                <label htmlFor="reset-reason" className="block text-xs text-muted-foreground">
+                  Reason (10–200 characters). Never paste a code or password.
+                </label>
+                <textarea id="reset-reason" required minLength={10} maxLength={200} rows={2}
+                          value={resetReason} onChange={e => setResetReason(e.target.value)}
+                          className="input w-full" />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setResetting(null)} className="btn-ghost min-h-11 px-3 text-sm">Cancel</button>
+                  <button type="submit" disabled={resetReason.trim().length < 10 || busy !== null}
+                          className="btn-primary min-h-11 px-3 text-sm disabled:opacity-50">
+                    {busy?.startsWith('reset') ? 'Resetting…' : 'Reset two-factor'}
+                  </button>
+                </div>
+              </form>
             )}
 
             {readmitting && (

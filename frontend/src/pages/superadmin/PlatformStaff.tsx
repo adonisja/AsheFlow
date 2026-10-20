@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import AccountId from '../../components/ui/AccountId';
 import { ShieldCheck, UserPlus, RefreshCw, KeyRound } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -7,6 +8,7 @@ import { SkeletonCard } from '../../components/ui/Skeleton';
 import { errorText } from '../../utils/errorText';
 import { useConfirm } from '../../hooks/useConfirm';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import { useAuth } from '../../contexts/AuthContext';
 
 /** Platform staff, and the MFA reset that had no caller (ADR-394, ADR-389).
  *
@@ -22,6 +24,8 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
  */
 
 interface StaffRow {
+  /** ADR-550 D1: the account ID (Cognito sub). Resets target THIS, never a name. */
+  account_id: string;
   username: string;
   email: string;
   /** The person's actual name. Empty for accounts created outside this UI --
@@ -49,6 +53,9 @@ const GROUPS = [
 ];
 
 export default function PlatformStaff() {
+  // The reset endpoint is get_super_admin; offer the row button to no one else.
+  const { groups } = useAuth();
+  const isSuperAdmin = groups.includes('super_admin');
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -129,12 +136,13 @@ export default function PlatformStaff() {
     }
   };
 
-  const handleReset = async () => {
-    const target = resetUser.trim();
-    if (!target) return;
+  /* ADR-550 D3. One reset, two ways in: a staff row passes its ACCOUNT ID (a
+     name typed into a box is how the wrong account gets reset); the box below
+     passes a username, for rescuing a tenant admin by name (ADR-389). */
+  const doReset = async (target: { account_id: string } | { username: string }, label: string) => {
     const ok = await confirm({
       title: 'Reset two-factor authentication',
-      message: `Clear ${target}'s MFA factor, end every session and forget every remembered device? They will set it up again at their next sign-in.`,
+      message: `Clear ${label}'s MFA factor, end every session and forget every remembered device? They get 24 hours from their next sign-in to set it up again.`,
       confirmLabel: 'Reset',
       variant: 'danger',
     });
@@ -142,12 +150,12 @@ export default function PlatformStaff() {
     setResetting(true);
     setResetMsg(null);
     try {
-      const res = await axiosClient.post('/platform/mfa/reset', { username: target });
+      const res = await axiosClient.post('/platform/mfa/reset', target);
       setResetMsg({
         ok: true,
-        text: `Cleared. Signed out, ${res.data.devices_forgotten} device(s) forgotten.`,
+        text: `${label}: cleared and signed out everywhere, ${res.data.devices_forgotten} device(s) forgotten.`,
       });
-      setResetUser('');
+      if ('username' in target) setResetUser('');
     } catch (err: any) {
       // 502 means containment ran but did NOT fully complete. The operator must
       // not read it as done -- the account may still be locked out (ADR-392).
@@ -160,6 +168,12 @@ export default function PlatformStaff() {
     } finally {
       setResetting(false);
     }
+  };
+
+  const handleReset = async () => {
+    const target = resetUser.trim();
+    if (!target) return;
+    await doReset({ username: target }, target);
   };
 
   // Pending accounts are excluded deliberately: the group is recorded, not
@@ -239,6 +253,7 @@ export default function PlatformStaff() {
                       {r.name && (
                         <p className="text-xs text-muted-foreground truncate">{r.username}</p>
                       )}
+                      <AccountId id={r.account_id} label="Account ID" />
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -269,6 +284,15 @@ export default function PlatformStaff() {
                     <span className="text-xs bg-accent rounded-md px-2 py-1">
                       {r.group === 'super_admin' ? 'Super admin' : 'Platform support'}
                     </span>
+                    {/* Super admin only (the endpoint is get_super_admin). A
+                        pending account has no factor to reset. */}
+                    {isSuperAdmin && !r.pending && r.account_id && (
+                      <button type="button" disabled={resetting}
+                              onClick={() => void doReset({ account_id: r.account_id }, r.name || r.username)}
+                              className="text-xs font-medium px-2.5 py-1 min-h-[44px] rounded-lg border border-danger/40 text-danger hover:bg-danger/5 disabled:opacity-50">
+                        Reset 2FA
+                      </button>
+                    )}
                   </div>
                 </li>
               ))}
@@ -371,10 +395,11 @@ export default function PlatformStaff() {
           <KeyRound className="w-4 h-4 text-muted-foreground" /> Reset two-factor authentication
         </h3>
         <p className="text-sm text-muted-foreground mb-4">
-          For an account that has lost its authenticator. Clears the factor, ends
-          every session and forgets every remembered device. A privileged account
-          must also be removed from its group temporarily before it can sign in
-          again. See the lockout runbook.
+          Any account, by username: for rescuing a company's admin who has lost
+          their authenticator. Clears the factor, ends every session and forgets
+          every remembered device; they get 24 hours from their next sign-in to
+          set it up again (ADR-466, ADR-548). Reset staff from their row above,
+          by account ID.
         </p>
         <div className="flex gap-3 flex-wrap items-start">
           <div className="flex-1 min-w-[220px]">

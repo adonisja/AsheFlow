@@ -18,6 +18,7 @@ import { Lock, CheckCircle2, UserCircle2 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import type { PlatformMe } from '../../api/types';
 import SecurityPanel from '../../components/SecurityPanel';
+import AccountId from '../../components/ui/AccountId';
 import SectionHeader from '../../components/ui/SectionHeader';
 import { errorText } from '../../utils/errorText';
 
@@ -101,6 +102,8 @@ export default function PlatformAccount() {
                 {me.email && !me.email_verified && <span className="ml-2 text-xs text-warning">not verified</span>}
               </dd>
               <dt className="text-muted-foreground">Role</dt><dd className="text-foreground">{me.role_label}</dd>
+              <dt className="text-muted-foreground">Account ID</dt><dd><AccountId id={me.account_id} label="" /></dd>
+              {me.surveyor_id && (<><dt className="text-muted-foreground">Surveyor ID</dt><dd><AccountId id={me.surveyor_id} label="" /></dd></>)}
             </dl>
           )}
           <p className="text-xs text-muted-foreground mt-5">

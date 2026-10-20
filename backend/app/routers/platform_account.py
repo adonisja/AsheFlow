@@ -16,6 +16,8 @@ import logging
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -68,6 +70,10 @@ def _rate_key(caller: dict) -> str:
 
 
 class PlatformMeOut(BaseModel):
+    # ADR-550 D1: the account's permanent IDs. account_id is the Cognito sub
+    # (every platform account); surveyor_id is the contributor row's id.
+    account_id: str
+    surveyor_id: UUID | None = None
     username: str
     name: str | None
     email: str | None
@@ -84,7 +90,7 @@ class _PasswordConfirmRequest(BaseModel):
 
 
 @router.get("", response_model=PlatformMeOut)
-def get_me(caller: dict = Depends(get_platform_account)):
+def get_me(caller: dict = Depends(get_platform_account), db: Session = Depends(get_db)):
     """The caller's own profile, from Cognito (there is no other record)."""
     username = _username_or_409(caller)
     groups = sorted(set(caller.get("cognito_groups", [])) & PLATFORM_ACCOUNT_GROUPS)
@@ -99,7 +105,12 @@ def get_me(caller: dict = Depends(get_platform_account)):
     except (ClientError, BotoCoreError) as exc:
         # Degrade to what the token says; "could not read" is never "not enrolled".
         logger.warning("platform me: could not read %s: %s", username, type(exc).__name__)
+    from app.models.survey_register import SurveyContributor
+    surveyor_id = (db.query(SurveyContributor.id)
+                   .filter(SurveyContributor.cognito_sub == caller["id"]).scalar())
     return PlatformMeOut(
+        account_id=caller["id"],
+        surveyor_id=surveyor_id,
         username=username,
         name=attrs.get("name"),
         email=attrs.get("email") or caller.get("email"),

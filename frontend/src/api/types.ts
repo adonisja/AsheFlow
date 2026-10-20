@@ -3034,6 +3034,10 @@ export interface Separation {
 /** ADR-549 D4. GET /platform/me — a platform account's own profile, from
  *  Cognito (super_admin, platform_support and surveyor have no Employee row). */
 export interface PlatformMe {
+  /** ADR-550 D1: the account's permanent ID (Cognito sub). */
+  account_id: string;
+  /** ADR-550 D1: the surveyor ID (contributor row), for surveyors only. */
+  surveyor_id: string | null;
   username: string;
   name: string | null;
   email: string | null;
@@ -3833,4 +3837,13 @@ export interface SurveyStaffReleaseRequest {
 /** ADR-546 D4: whether the holder's notice was actually sent. */
 export interface SurveyStaffReleaseResult extends SurveyActivityClaim {
   holder_emailed: boolean;
+}
+
+/** ADR-550 D2. POST /survey/contributors/{surveyor_id}/reset-mfa. */
+export interface SurveyMfaResetResult {
+  contributor_id: string;
+  signed_out: boolean;
+  factor_cleared: boolean;
+  devices_forgotten: number;
+  surveyor_emailed: boolean;
 }

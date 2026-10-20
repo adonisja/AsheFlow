@@ -92,6 +92,32 @@ def end_platform_sessions(db, sub: str, username: str) -> bool:
         return False
 
 
+def mark_sessions_ended(db, sub: str) -> str:
+    """Write the session stamp this API enforces, for whichever kind of account
+    `sub` is (ADR-550 D4). Returns "employee" or "platform".
+
+    An MFA reset signs the account out at Cognito, which revokes REFRESH tokens
+    only; access tokens are verified locally here and kept working for up to an
+    hour. When the reset is because a phone was stolen, that hour is the thief's.
+    A tenant employee is stamped on their row (ADR-541), any other account in
+    platform_session_stamps (ADR-549). The caller commits.
+    """
+    from app.models.employee import Employee
+    from app.models.platform_session import PlatformSessionStamp
+    now = datetime.now(timezone.utc)
+    emp = db.query(Employee).filter(Employee.cognito_sub == sub).first()
+    if emp is not None:
+        emp.tokens_valid_after = now
+        return "employee"
+    row = db.get(PlatformSessionStamp, sub)
+    if row is None:
+        db.add(PlatformSessionStamp(cognito_sub=sub, tokens_valid_after=now, updated_at=now))
+    else:
+        row.tokens_valid_after = now
+        row.updated_at = now
+    return "platform"
+
+
 # ── One-time codes ────────────────────────────────────────────────────────────
 
 def _digest(employee_id: UUID, purpose: str, code: str) -> str:

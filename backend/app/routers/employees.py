@@ -1472,6 +1472,9 @@ def reset_employee_mfa(
         # lives at /account behind the sign-in it blocks.
         clear_factor=True,
     )
+    # ADR-550 D4: Cognito's sign-out leaves access tokens working here for up
+    # to an hour; the stamp ends them now. Written whatever Cognito said.
+    target.tokens_valid_after = datetime.now(timezone.utc)
 
     write_audit(
         db=db,

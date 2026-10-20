@@ -158,8 +158,10 @@ def test_me_reads_the_callers_own_cognito_record():
     c.admin_get_user.return_value = {"UserMFASettingList": None, "UserAttributes": [
         {"Name": "name", "Value": "Test Surveyor"}, {"Name": "email", "Value": "s@example.com"},
         {"Name": "email_verified", "Value": "true"}]}
+    db = MagicMock()
+    db.query.return_value.filter.return_value.scalar.return_value = None   # not a contributor row
     with patch.object(P, "_cognito", return_value=c):
-        out = P.get_me(caller=_surveyor())
+        out = P.get_me(caller=_surveyor(), db=db)
     assert c.admin_get_user.call_args.kwargs["Username"] == "test.surveyor"
     assert (out.name, out.role_label, out.mfa_enrolled, out.email_verified) == \
         ("Test Surveyor", "Surveyor", False, True)

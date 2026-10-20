@@ -9,7 +9,7 @@
  * signed out everywhere, this phone included.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import { Button } from '@components/ui/primitives';
 import MfaEnrolment from '@components/MfaEnrolment';
@@ -20,6 +20,7 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type PlatformMe = {
+  account_id: string; surveyor_id: string | null;   // ADR-550 D1
   username: string; name: string | null; email: string | null; email_verified: boolean;
   groups: string[]; role_label: string; mfa_enrolled: boolean | null;
 };
@@ -87,6 +88,10 @@ export default function PlatformAccountScreen({ navigation }: { navigation: { go
             <Text style={s.body}>{me.name || me.username}</Text>
             <Text style={s.muted}>{me.username}</Text>
             <Text style={s.muted}>{me.email ?? 'No email on file'}{me.email && !me.email_verified ? ' (not verified)' : ''}</Text>
+            {/* ADR-550 D1: the IDs support asks for -- names repeat, these don't.
+                selectable so they can be copied with the system long-press. */}
+            {me.surveyor_id && <Text style={s.mono} selectable>Surveyor ID {me.surveyor_id}</Text>}
+            <Text style={s.mono} selectable>Account ID {me.account_id}</Text>
           </>
         )}
         <Text style={s.hint}>A super admin sets platform names and email addresses.</Text>
@@ -140,6 +145,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   body:  { fontSize: fontSize.base, color: c.foreground },
   muted: { fontSize: fontSize.sm, color: c.mutedForeground, lineHeight: 20 },
   hint:  { fontSize: fontSize.xs, color: c.mutedForeground },
+  mono:  { fontSize: fontSize.xs, color: c.mutedForeground, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }) },
   error: { fontSize: fontSize.sm, color: c.danger },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.md,
            paddingVertical: spacing.sm + 2, fontSize: fontSize.base, color: c.foreground, backgroundColor: c.background },

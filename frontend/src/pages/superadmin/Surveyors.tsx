@@ -12,6 +12,7 @@
  * where anyone delivers (ADR-504 D3).
  */
 import { useCallback, useEffect, useState } from 'react';
+import AccountId from '../../components/ui/AccountId';
 import { Check, Copy, Loader2, MapPinned, UserPlus } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -284,7 +285,10 @@ export default function Surveyors() {
               <tbody>
                 {rows.map(r => (
                   <tr key={r.id} className="border-t border-border/60">
-                    <td className="py-2 pr-3">{r.display_name}</td>
+                    <td className="py-2 pr-3">
+                      <div>{r.display_name}</div>
+                      <AccountId id={r.id} label="Surveyor ID" />
+                    </td>
                     <td className="py-2 pr-3 text-muted-foreground">{r.email ?? 'not recorded'}</td>
                     <td className="py-2 pr-3">{r.agreement_version}, signed {formatDate(r.agreement_signed_on)}</td>
                     <td className="py-2 pr-3">{formatDate(r.admitted_at)}</td>

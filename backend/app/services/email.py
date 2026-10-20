@@ -908,6 +908,35 @@ def send_mfa_setup_reminder(*, to_email: str, account_ref: str) -> None:
                          account_ref=account_ref)
 
 
+def send_surveyor_mfa_reset_notice(*, to_email: str, name: str, reason: str,
+                                   account_ref: str) -> None:
+    """To a surveyor whose two-factor platform staff reset (ADR-550 D2).
+
+    They have no in-app inbox, and a reset nobody told them about reads, the
+    next time they sign in, exactly like someone tampering with their account.
+    So it says what happened, why, and what to do -- and who to tell if they
+    did not ask for it.
+    """
+    first, first_html = _greeting_name(name)
+    subject = "Your two-factor sign-in was reset"
+    body = (
+        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, '
+        'the AsheFlow team reset the two-factor sign-in on your survey account and signed it out everywhere.</p>'
+        '<table width="100%" cellpadding="0" cellspacing="0" style="background:#FBFAFD;border:1px solid #E6E2F0;border-radius:10px;margin-bottom:14px;"><tr><td style="padding:12px 16px;">'
+        f'<p style="margin:0;font-size:14px;line-height:1.5;color:#374151;"><strong>Reason:</strong> {html.escape(reason)}</p></td></tr></table>'
+        '<p style="margin:0 0 14px;font-size:14px;line-height:1.55;color:#374151;">Next time you sign in you\'ll be asked to set up '
+        'an authenticator app again. You have 24 hours from that sign-in to finish.</p>'
+        '<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;">If you didn\'t ask for this, reply to this email '
+        'so we can check your account.</p>'
+    )
+    text = (f"Hi {first},\n\nThe AsheFlow team reset the two-factor sign-in on your survey account and signed it out everywhere.\n\n"
+            f"Reason: {reason}\n\nNext time you sign in you'll be asked to set up an authenticator app again. "
+            "You have 24 hours from that sign-in to finish.\n\nIf you didn't ask for this, reply to this email so we can check your account.")
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading="Your two-factor sign-in was reset", body_html=body, label="Security"),
+                         account_ref=account_ref)
+
+
 def send_claim_released_notice(*, to_email: str, name: str, block: str, area: str,
                                reason: str, account_ref: str) -> None:
     """To a surveyor whose claim platform staff released (ADR-545 D4).
