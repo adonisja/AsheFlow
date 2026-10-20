@@ -31,9 +31,9 @@ export interface Employee {
  *  "not enrolled" (ADR-377). Render unknown as unknown -- an AWS hiccup must
  *  not accuse someone of being unprotected.
  *
- *  enrolled === false && pass_spent  is the lockout signature: the one-time
- *  enrolment pass is gone and nothing was set up with it, so PreAuthentication
- *  refuses every later sign-in.
+ *  enrolled === false && pass_spent  is the lockout signature: the enrolment
+ *  window (24 hours from the first completed sign-in, ADR-548) has closed and
+ *  nothing was set up in it, so PreAuthentication refuses every later sign-in.
  */
 /** ADR-470 D2. GET /employees/mfa-deadline — dispatch/management/admin.
  *
@@ -3038,6 +3038,9 @@ export interface MfaStatus {
   grace_days_total: number;
   days_remaining: number | null;
   blocked: boolean;
+  /** ADR-548. When an unenrolled privileged account's 24-hour enrolment window
+   *  closes (ISO). Null for everyone else, or when it could not be read. */
+  setup_window_ends_at: string | null;
 }
 
 /* ── Workforce mode: the captain's truck-day (ADR-291/297/299/302) ────────────

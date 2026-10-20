@@ -27,7 +27,23 @@ import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 export default function MfaRequiredScreen() {
   const c = useColors();
   const s = styles(c);
-  const { refreshMfaStatus, signOut } = useAuth();
+  const { refreshMfaStatus, signOut, mfaStatus } = useAuth();
+
+  // ADR-548 D4. What signing out costs. A privileged account has a deadline;
+  // without this line the Sign out button below looked free and was not.
+  const ends = mfaStatus?.setup_window_ends_at
+    ? new Date(mfaStatus.setup_window_ends_at).toLocaleString(undefined, {
+        weekday: 'short', hour: 'numeric', minute: '2-digit',
+      })
+    : null;
+  // Same shape as the web wall: a tier-neutral first sentence (ADR-469), then
+  // the deadline, which only a privileged account has.
+  const signOutNote = 'Signing out will not skip this step. ' + (
+    mfaStatus?.tier === 'field'
+      ? 'You will return here next time you sign in.'
+      : ends
+        ? `You can come back to finish until ${ends}. After that, an administrator will need to reset your setup.`
+        : 'You can come back to finish within 24 hours of your first sign-in. After that, an administrator will need to reset your setup.');
 
   return (
     <SafeAreaView style={s.safe}>
@@ -48,6 +64,7 @@ export default function MfaRequiredScreen() {
         <TouchableOpacity onPress={signOut} style={s.signOut}>
           <Text style={s.signOutText}>Sign out</Text>
         </TouchableOpacity>
+        <Text style={s.signOutNote}>{signOutNote}</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -60,4 +77,5 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   body:      { fontSize: fontSize.md, color: c.mutedForeground, lineHeight: 22 },
   signOut:   { marginTop: spacing.xl, alignItems: 'center' },
   signOutText: { color: c.mutedForeground, fontSize: fontSize.sm },
+  signOutNote: { color: c.mutedForeground, fontSize: fontSize.xs, textAlign: 'center', lineHeight: 18 },
 });

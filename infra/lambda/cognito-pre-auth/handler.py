@@ -1,7 +1,8 @@
 """PreAuthentication: refuse a privileged sign-in with no MFA factor (ADR-362 D4).
 
-Also attached as PostAuthentication (ADR-530), where it does one thing: spend
-the one-time enrolment pass. The handler branches on event["triggerSource"].
+Also attached as PostAuthentication (ADR-530), where it does one thing: start
+the enrolment window by stamping the first completed sign-in. Since ADR-548
+the window is 24 hours, not one sign-in. The handler branches on event["triggerSource"].
 
 Cognito has no native "require MFA for this group". `MfaConfiguration: ON` is
 all-or-nothing and would lock out every un-enrolled user the moment it is set;
@@ -16,7 +17,7 @@ smaller harm. The one case it fails CLOSED on is an explicit refusal below.
 """
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 
@@ -35,25 +36,35 @@ PRIVILEGED_GROUPS = {
 
 # ADR-466 D2. Cognito wraps this in "PreAuthentication failed with error {msg}",
 # which is AWS's and not configurable -- so the user always sees our sentence
-# inside theirs. What we control is what follows.
+# inside theirs. ADR-548 D5: both clients recognise the wrapper and render a
+# designed panel, so this sentence is what an OLD client shows raw.
 #
-# The previous text named this trigger and pointed at Account > Security, which
-# (a) is an internal implementation detail and (b) is no longer where enrolment
-# lives: ADR-465 routes it to /mfa-setup. Worse, someone seeing this message has
-# usually SPENT their one enrolment pass (ADR-459), so they cannot reach either
-# page and the instruction was a dead end. It now names the way out for them.
+# ADR-548. It now says the window closed and names the one way out. The
+# previous text told the reader to "sign in on the web to finish setup" --
+# but anyone refused here has a closed window, so signing in cannot help.
 #
 # No trailing period: the wrapper supplies its own, and two in a row was the
 # visible seam between AWS's sentence and ours.
 ENROL_HINT = (
-    "Set up two-factor authentication to continue. Sign in on the web at "
-    "asheflow.com to finish setup - if you are already there, ask your "
-    "administrator to reset your two-factor setup"
+    "Your 24-hour window to set up two-factor authentication has closed. "
+    "Ask your administrator to reset your two-factor setup"
 )
 
-# ADR-459 D3. Stamped on the one sign-in this trigger lets through unenrolled.
-# Its ONLY job is to record that the one-time exemption has been spent, so the
-# window cannot be replayed. ADR-530: written by the PostAuthentication run,
+# ADR-548 D1. The pass is a WINDOW from the first completed sign-in, not one
+# sign-in. ADR-465's wall offers Sign out as its only exit, and with a single
+# pass that exit led straight into this refusal (manager.test on prod,
+# 2026-10-20: allowed 12:45:05, spent 12:45:06, refused 12:46:27).
+# Mirrors app.services.mfa_status.PRIVILEGED_SETUP_WINDOW; a test pins parity.
+SETUP_WINDOW_HOURS = 24
+
+# A stamp dated further ahead than this is not trusted (ADR-548 D1): the
+# attribute is user-writable today (WriteAttributes: null), and a future date
+# would otherwise hold the window open for ever.
+FUTURE_SKEW = timedelta(minutes=5)
+
+# ADR-459 D3. Stamped on the first completed sign-in this trigger lets through
+# unenrolled. It records WHEN the enrolment window opened; ADR-548 closes the
+# window 24 hours later, so the stamp cannot be replayed into a fresh one. ADR-530: written by the PostAuthentication run,
 # i.e. only once a sign-in has COMPLETED. PreAuthentication fires before the
 # password is even checked, so stamping there let a typo, a Back button, a
 # closed tab -- or anyone who knew the username -- spend a new owner's pass. Never read for authorisation: a forged value can
@@ -81,6 +92,28 @@ except Exception:  # pragma: no cover -- init must never stop the function loadi
     _client = None
 
 
+def _now() -> datetime:
+    """The clock, as a seam the tests can set."""
+    return datetime.now(timezone.utc)
+
+
+def _window_open(stamp: str, now: datetime) -> bool:
+    """Is the 24-hour enrolment window that `stamp` opened still open?
+
+    Anything it cannot trust reads as CLOSED: an unparseable value, a naive
+    one, or one dated in the future. ADR-459's property was "a forged value can
+    only make an account more restricted"; a time window could break that, so
+    this keeps it (ADR-548 D1).
+    """
+    try:
+        first = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return False
+    if first.tzinfo is None or first > now + FUTURE_SKEW:
+        return False
+    return now < first + timedelta(hours=SETUP_WINDOW_HOURS)
+
+
 def _cognito():
     global _client
     if _client is None:
@@ -102,7 +135,7 @@ def _stamp_first_seen(pool_id: str, username: str) -> None:
             Username=username,
             UserAttributes=[{
                 "Name": FIRST_SEEN_ATTR,
-                "Value": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "Value": _now().isoformat(timespec="seconds"),
             }],
         )
     except Exception:
@@ -257,7 +290,17 @@ def handler(event, context):
             )
             return event
 
-        logger.info("pre-auth: refusing %s — privileged with no MFA factor", username)
+        # ADR-548 D1. Stamped, but the window it opened may still be open:
+        # signing out of /mfa-setup to fetch a phone must not be a lockout.
+        if _window_open(attrs[FIRST_SEEN_ATTR], _now()):
+            logger.info(
+                "pre-auth: allowing %s -- privileged, no factor, inside the "
+                "%dh enrolment window (ADR-548)", username, SETUP_WINDOW_HOURS,
+            )
+            return event
+
+        logger.info("pre-auth: refusing %s — privileged with no MFA factor, "
+                    "enrolment window closed", username)
         # Raising is how a Cognito trigger denies; the message reaches the user.
         raise Exception(ENROL_HINT)
 

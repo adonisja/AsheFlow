@@ -84,8 +84,12 @@ def test_once_the_password_is_their_own_the_next_completion_spends_it():
     pool.status = "CONFIRMED"                              # they set their own password
     mod.handler(pool.ev(POST), None)                       # a completed sign-in
     assert pool.attrs.get(mod.FIRST_SEEN_ATTR)
+    # ADR-548: the stamp opens a 24-hour window; refused once it has passed.
+    from datetime import datetime, timedelta
+    opened = datetime.fromisoformat(pool.attrs[mod.FIRST_SEEN_ATTR])
+    mod._now = lambda: opened + timedelta(hours=24)
     with pytest.raises(Exception) as exc:
-        mod.handler(pool.ev(PRE), None)                    # signed out, never enrolled
+        mod.handler(pool.ev(PRE), None)                    # a day on, never enrolled
     assert str(exc.value) == mod.ENROL_HINT
 
 

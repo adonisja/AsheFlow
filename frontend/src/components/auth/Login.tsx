@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { signIn, signInWithRedirect, confirmSignIn } from 'aws-amplify/auth';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { classifySignInError } from '../../utils/signInError';
 import QRCode from 'qrcode';
 import logoFull from '../../assets/logo-full.svg';
 import logoFullLight from '../../assets/logo-full-light.svg';
@@ -12,6 +13,8 @@ export default function Login() {
   const [password,               setPassword]               = useState('');
   const [newPassword,            setNewPassword]            = useState('');
   const [error,                  setError]                  = useState('');
+  // ADR-548 D5: the enrolment-window refusal is a state, not an error.
+  const [mfaSetupClosed,         setMfaSetupClosed]         = useState(false);
   const [successMsg,             setSuccessMsg]             = useState('');
   /* Written by useSessionTimeout on the way out (ADR-463). Read once: a
      reload should not keep re-announcing an old sign-out. */
@@ -74,6 +77,7 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setMfaSetupClosed(false);
     setSuccessMsg('');
 
     /* Read whatever step Amplify reports and put the matching field on screen.
@@ -162,7 +166,9 @@ export default function Login() {
         }));
       }
     } catch (err: any) {
-      setError(err.message || 'Sign in failed. Check your credentials.');
+      const problem = classifySignInError(err?.message, 'Sign in failed. Check your credentials.');
+      if (problem.kind === 'mfa_setup_closed') setMfaSetupClosed(true);
+      else setError(problem.text);
     } finally {
       setSubmitting(false);
     }
@@ -228,7 +234,7 @@ export default function Login() {
       <div className="absolute bottom-[-20%] right-[-10%] w-[400px] h-[400px] rounded-full opacity-15 dark:opacity-20"
            style={{ background: 'radial-gradient(circle, hsl(var(--brand) / 0.20), transparent 70%)' }} />
 
-      <div className="w-full max-w-sm animate-slide-up relative z-10">
+      <div className="layout-auth animate-slide-up relative z-10">
         {/* Logo */}
         <div className="flex items-center justify-center mb-10">
           {/* The wordmark is a baked-SVG, so it cannot follow the theme. Its dark
@@ -239,13 +245,38 @@ export default function Login() {
           <img src={logoFullLight} alt="" aria-hidden className="h-10 w-auto hidden dark:block" />
         </div>
 
-        <div className="card-elevated p-8 backdrop-blur-sm bg-card/90">
+        <div className="card-elevated p-6 sm:p-8 2xl:p-10 backdrop-blur-sm bg-card/90">
           <h2 className="text-xl font-semibold text-center text-foreground mb-1">
             {copy ? copy.heading : 'Welcome back'}
           </h2>
           <p className="text-subtle text-center mb-8">
             {copy ? copy.sub : 'Sign in to your AsheFlow account'}
           </p>
+
+          {/* ADR-548 D5. Not red: the person did nothing wrong, and there is one
+              way out. Says what happened, then what to do, in that order. */}
+          {mfaSetupClosed && (
+            /* The icon sits in the heading row, not in a column of its own: a
+               column indents every line of the body ~2rem past the form's
+               left edge, and the card reads as shifted right (owner, 2026-10-20). */
+            <div role="alert" className="bg-warning/10 border border-warning/30 rounded-xl px-4 py-4 mb-6">
+              <div className="space-y-1.5 text-sm">
+                <p className="flex items-center gap-2 font-semibold text-foreground">
+                  <ShieldAlert className="w-4 h-4 text-warning shrink-0" aria-hidden="true" />
+                  Two-factor setup needed
+                </p>
+                <p className="text-muted-foreground">
+                  This account needs two-factor authentication, and the 24 hours
+                  to set it up after your first sign-in have passed.
+                </p>
+                <p className="text-muted-foreground">
+                  <span className="font-medium text-foreground">What to do: </span>
+                  ask an administrator to reset your two-factor setup. Then sign
+                  in again and you will go straight to setup.
+                </p>
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">

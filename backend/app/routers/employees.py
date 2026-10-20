@@ -867,7 +867,12 @@ def get_mfa_enrolment(
                 enrolled = bool(resp.get("UserMFASettingList"))
                 attrs = {a["Name"]: a.get("Value")
                          for a in resp.get("UserAttributes", [])}
-                pass_spent = bool(attrs.get("custom:mfa_first_seen"))
+                # ADR-548 D3: "spent" now means the 24-hour window has CLOSED.
+                # Stamped-but-open is someone mid-setup, not a lockout, and
+                # the Assets page must not tell an admin otherwise.
+                window, _ends = mfa_status.setup_window_ends_at(
+                    attrs.get(mfa_status.FIRST_SEEN_ATTR))
+                pass_spent = window == "closed"
             except (ClientError, BotoCoreError) as exc:
                 # Per-row, so one unreadable account does not blank the others.
                 # Stays None -- "could not tell", never "not enrolled".
@@ -913,6 +918,19 @@ def get_my_employee(
     return EmployeeResponse.model_validate(caller)
 
 
+def _with_setup_window(out: dict, username: str | None) -> dict:
+    """Add `setup_window_ends_at` (ADR-548 D3): when an unenrolled privileged
+    account's enrolment window closes, so the wall can say so instead of
+    promising a sign-out is free. Null for everyone else, or when unreadable --
+    the page then shows no deadline rather than a wrong one."""
+    out["setup_window_ends_at"] = None
+    if out.get("tier") == "privileged" and out.get("enrolled") is False:
+        state, ends = mfa_status.read_setup_window(username)
+        if state == "open" and ends is not None:
+            out["setup_window_ends_at"] = ends.isoformat()
+    return out
+
+
 @identity_router.get("/me/mfa-status")
 def get_my_mfa_status(
     db: Session = Depends(get_db),
@@ -948,10 +966,10 @@ def get_my_mfa_status(
         enrolled = mfa_status.is_enrolled(
             current_user.get("id"), current_user.get("username"),
         )
-        return mfa_status.evaluate(
+        return _with_setup_window(mfa_status.evaluate(
             role="", enrolled=True if enrolled is None else enrolled,
             grace_started_at=None, groups=groups,
-        ).as_dict()
+        ).as_dict(), current_user.get("username"))
 
     # ADR-374 — a MachineCaller has no role, no cognito_sub and no grace column.
     # Reaching for any of them here is the exact AttributeError that 500'd the
@@ -992,6 +1010,7 @@ def get_my_mfa_status(
         )
         out = status_obj.as_dict()
         out["enrolled"] = None      # honest: unknown, not confirmed
+        out["setup_window_ends_at"] = None
         return out
 
     if not enrolled and caller.mfa_grace_started_at is None:
@@ -1022,7 +1041,7 @@ def get_my_mfa_status(
     )
 
     grace_days = mfa_status.DEFAULT_MFA_GRACE_DAYS
-    return mfa_status.evaluate(
+    status_obj = mfa_status.evaluate(
         role=caller.role,
         enrolled=enrolled,
         grace_started_at=caller.mfa_grace_started_at,
@@ -1032,7 +1051,8 @@ def get_my_mfa_status(
         # groups. Prod's `adon` is super_admin in Cognito and `trainee` on its
         # Employee row -- role alone put it on the field tier.
         groups=groups,
-    ).as_dict()
+    )
+    return _with_setup_window(status_obj.as_dict(), cognito_username_for(caller))
 
 
 @router.get("/by-discord/{discord_id}", response_model=EmployeePublicResponse)
