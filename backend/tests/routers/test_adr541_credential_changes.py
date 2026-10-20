@@ -7,6 +7,7 @@ Cognito, SES and Redis stubbed at their real names (CI has no Redis).
 """
 import ast
 import inspect
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -44,6 +45,12 @@ class FakeRedis:
 
     def expire(self, k, ttl):
         pass
+
+
+# Built at runtime, never a literal: a password-shaped string in a test is
+# what secret scanners flag (GitGuardian incident 38384008 on PR #80 was this
+# file's old fixture). It only ever reaches a mocked Cognito.
+_NEW_PASSWORD = "Aa1!" + secrets.token_urlsafe(12)
 
 
 def _client_error(code):
@@ -176,7 +183,7 @@ class TestPasswordChange:
     def test_the_right_code_changes_it_and_ends_every_session(self, db, env):
         e = _person(db)
         out = E.confirm_password_change(
-            payload=E._PasswordConfirmRequest(code="123456", new_password="N3w!passw0rd"),
+            payload=E._PasswordConfirmRequest(code="123456", new_password=_NEW_PASSWORD),
             caller=e, db=db, _={},
         )
         env["cognito"].confirm_forgot_password.assert_called_once()
@@ -191,7 +198,7 @@ class TestPasswordChange:
         env["cognito"].confirm_forgot_password.side_effect = _client_error("CodeMismatchException")
         with pytest.raises(HTTPException) as exc:
             E.confirm_password_change(
-                payload=E._PasswordConfirmRequest(code="000000", new_password="N3w!passw0rd"),
+                payload=E._PasswordConfirmRequest(code="000000", new_password=_NEW_PASSWORD),
                 caller=e, db=db, _={},
             )
         assert exc.value.status_code == 400
@@ -204,7 +211,7 @@ class TestPasswordChange:
         e = _person(db)
         env["cognito"].admin_user_global_sign_out.side_effect = _client_error("InternalErrorException")
         E.confirm_password_change(
-            payload=E._PasswordConfirmRequest(code="123456", new_password="N3w!passw0rd"),
+            payload=E._PasswordConfirmRequest(code="123456", new_password=_NEW_PASSWORD),
             caller=e, db=db, _={},
         )
         assert e.tokens_valid_after is not None
@@ -213,7 +220,7 @@ class TestPasswordChange:
 
     def test_the_request_rejects_unknown_keys(self):
         with pytest.raises(Exception):
-            E._PasswordConfirmRequest(code="123456", new_password="N3w!passw0rd", old_password="x")
+            E._PasswordConfirmRequest(code="123456", new_password=_NEW_PASSWORD, old_password="x")
 
 
 # ── R2/D3: an email change needs codes from both inboxes ────────────────────
