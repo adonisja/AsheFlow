@@ -3,7 +3,8 @@
 THE DECISION IS A PERSON, NOT A SCORE
 -------------------------------------
 There is no driver graduation quiz. A driver trainee completes their phases and
-**dispatch/management approves the promotion explicitly**; the supervising
+**management or an admin approves the promotion explicitly** (ADR-537: "not a
+dispatcher concern" -- /transition is management+admin only); the supervising
 driver's observation is input to that decision, not the decision itself. A
 driving assessment is a judgement about road conduct that no question bank
 stands in for.
@@ -30,7 +31,7 @@ So an unrecorded bad day is recoverable through supervision, not demotion.
 """
 import logging
 from datetime import date
-from typing import List, Optional
+from typing import List
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -117,6 +118,29 @@ def driver_trainees_awaiting_promotion(
     return out
 
 
+def driver_phases_remaining(db: Session, trainee: Employee, cfg=None) -> List[int]:
+    """Driver-training phases this trainee has not closed, in order (ADR-537 D3).
+
+    "Finished" means what it means above: the observation phase (N, from the
+    plan -- never hardcoded) is closed. Phases advance only on close, so a closed
+    observation phase means every earlier one closed too, and the answer is [].
+    Otherwise it is every phase 1..N without a closed record.
+    """
+    cfg = cfg or get_company_config(db, trainee.company_id)
+    plan = phase_plan(cfg, TRACK_DRIVER)
+    closed = {
+        r.current_day_number
+        for r in db.query(TrainingRecord.current_day_number).filter(
+            TrainingRecord.trainee_id == trainee.id,
+            TrainingRecord.company_id == trainee.company_id,
+            TrainingRecord.phase_closed.is_(True),
+        )
+    }
+    if plan.observation in closed:
+        return []
+    return [p for p in range(1, plan.observation + 1) if p not in closed]
+
+
 def promotion_warning(entry: dict) -> dict:
     """The dispatch-run warning for one trainee awaiting promotion.
 
@@ -147,6 +171,8 @@ def promotion_warning(entry: dict) -> dict:
         "verdict": verdict,
         "message": (
             f"🎓 **{name} has completed the driver training program.** {detail} "
-            "Promote them to driver from the employee page."
+            # ADR-537 D5: dispatch sees this warning but cannot promote --
+            # /transition is management and admin only.
+            "Management or an admin promotes them to driver from the employee page."
         ),
     }

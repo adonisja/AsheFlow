@@ -1,7 +1,19 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 import { ASHEFLOW_API_URL, ASHEFLOW_LAN_IP } from '@env';
-import { getValidIdToken, touchLastActive } from './tokenRefresh';
+import { clearTokens, getValidIdToken, touchLastActive } from './tokenRefresh';
+
+/* ADR-541 D2. Another device changed this account's password or email, so the
+   server ended this session on purpose. A silent refresh cannot fix that (the
+   refresh token is revoked, and a still-fresh ID token would just 401 again),
+   so the tokens are cleared and AuthContext is told, so the person sees WHY.
+   Routed on the code, never the text (ADR-465 D3). */
+type Listener = () => void;
+const credentialsChangedListeners = new Set<Listener>();
+export function onCredentialsChanged(fn: Listener): () => void {
+  credentialsChangedListeners.add(fn);
+  return () => { credentialsChangedListeners.delete(fn); };
+}
 
 function resolveBaseUrl(): string {
   // Explicit override wins (e.g. staging/prod URL set in .env)
@@ -48,6 +60,11 @@ apiClient.interceptors.response.use(
   },
   async err => {
     const original = err.config;
+    if (err.response?.status === 401 && err.response?.data?.detail?.code === 'credentials_changed') {
+      await clearTokens();
+      credentialsChangedListeners.forEach(fn => fn());
+      return Promise.reject(err);
+    }
     if (err.response?.status === 401 && original && !original._retried) {
       original._retried = true;
       const token = await getValidIdToken();

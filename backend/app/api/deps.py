@@ -122,8 +122,49 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         "id": user_id,
         "email": email,
         "username": username,
-        "cognito_groups": payload.get("cognito:groups", [])
+        "cognito_groups": payload.get("cognito:groups", []),
+        # ADR-541 D2 — when the person actually AUTHENTICATED, for
+        # tokens_valid_after. Not `iat`: a refresh mints a new token with a new
+        # iat, so an iat check would let a session that survived a failed
+        # global sign-out refresh its way past the stamp. auth_time survives
+        # refreshes. `iat` is kept as the fallback for a token without it.
+        "auth_time": payload.get("auth_time", payload.get("iat")),
     }
+
+
+def _issued_before_revocation(employee, current_user: dict) -> bool:
+    """True if this token's SIGN-IN predates the employee's last password/email change.
+
+    ADR-541 D2. Cognito's AdminUserGlobalSignOut revokes REFRESH tokens, but
+    this API verifies access and ID tokens locally against JWKS, so a token
+    from before the change keeps working here until it expires. The stamp
+    closes that window -- and because it is compared with `auth_time` (when the
+    person signed in, unchanged by refreshes), it also refuses a session that
+    refreshed after the change because the global sign-out failed.
+
+    Compared in whole seconds: auth_time is an integer second and the stamp is
+    floored to one, so the sign-in that FOLLOWS the change (same second or
+    later) is accepted while every earlier session is refused. A token with no
+    time at all is refused once a stamp exists.
+    """
+    stamp = getattr(employee, "tokens_valid_after", None)
+    if employee is None or stamp is None:
+        return False
+    signed_in = current_user.get("auth_time")
+    if not isinstance(signed_in, (int, float)):
+        return True
+    return int(signed_in) < int(stamp.timestamp())
+
+
+# Routed on the CODE by both clients (ADR-465 D3's rule: never on the text),
+# so the sign-in screen can say why this device was signed out.
+_SESSION_ENDED = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail={
+        "code": "credentials_changed",
+        "message": "Your session ended because your password or email changed. Sign in again.",
+    },
+)
 
 def _resolve_employee_from_cognito(current_user: dict, db: Session):
     """Shared lookup chain: cognito_sub → discord_id → email → UUID fallback.
@@ -251,6 +292,8 @@ def get_caller_employee(
         )
 
     employee, sub = _resolve_employee_from_cognito(current_user, db)
+    if _issued_before_revocation(employee, current_user):
+        raise _SESSION_ENDED
 
     needs_commit = False
 
@@ -308,6 +351,10 @@ def get_caller_employee_anonymous(
     if current_user is None:
         return None
     employee, sub = _resolve_employee_from_cognito(current_user, db)
+    if _issued_before_revocation(employee, current_user):
+        # A public endpoint treats a revoked token as no token (ADR-541 D2),
+        # rather than 401ing a collector off a page that needs no sign-in.
+        return None
     if employee and sub and not employee.cognito_sub:
         employee.cognito_sub = sub
         db.commit()
@@ -325,6 +372,8 @@ def get_caller_employee_optional(
     not being in the DB should not block the operation.
     """
     employee, sub = _resolve_employee_from_cognito(current_user, db)
+    if _issued_before_revocation(employee, current_user):
+        raise _SESSION_ENDED
 
     if employee and sub and not employee.cognito_sub:
         employee.cognito_sub = sub

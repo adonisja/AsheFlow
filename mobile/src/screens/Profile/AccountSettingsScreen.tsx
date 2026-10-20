@@ -19,23 +19,17 @@ import {
   View, Text, StyleSheet, TouchableOpacity,
   ScrollView, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors, useTheme } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import MfaEnrolment from '@components/MfaEnrolment';
-import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } from '@env';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
-
-const REGION           = (COGNITO_USER_POOL_ID ?? 'us-east-2_').split('_')[0];
-const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
-const CLIENT_ID        = COGNITO_CLIENT_ID ?? '';
 
 type EmailStep    = 'idle' | 'entering' | 'verifying';
 /** Same three states as email: the Discord flow is deliberately identical, so
  *  a user who has changed their email already knows how this works. */
 type DiscordStep  = 'idle' | 'entering' | 'verifying';
-type PasswordStep = 'idle' | 'open';
+type PasswordStep = 'idle' | 'code';
 
 export default function AccountSettingsScreen() {
   const c = useColors();
@@ -46,7 +40,9 @@ export default function AccountSettingsScreen() {
   // Email edit
   const [emailStep,    setEmailStep]    = useState<EmailStep>('idle');
   const [newEmail,     setNewEmail]     = useState('');
-  const [code,         setCode]         = useState('');
+  const [currentCode,  setCurrentCode]  = useState('');
+  const [newCode,      setNewCode]      = useState('');
+  const [masked,       setMasked]       = useState<{ current: string; new: string } | null>(null);
   const [emailBusy,    setEmailBusy]    = useState(false);
   const [currentEmail, setCurrentEmail] = useState(user?.email ?? '');
 
@@ -62,12 +58,21 @@ export default function AccountSettingsScreen() {
 
   // Password change
   const [pwStep,     setPwStep]     = useState<PasswordStep>('idle');
-  const [currentPw,  setCurrentPw]  = useState('');
+  const [pwCode,     setPwCode]     = useState('');
+  const [pwSentTo,   setPwSentTo]   = useState('');
   const [newPw,      setNewPw]      = useState('');
   const [confirmPw,  setConfirmPw]  = useState('');
-  const [showCurrent, setShowCurrent] = useState(false);
   const [showNew,     setShowNew]     = useState(false);
   const [pwBusy,     setPwBusy]     = useState(false);
+
+  // ── Credential changes (ADR-541) ────────────────────────────────────────────
+  // Both are confirmed by codes sent to the person's inbox, and both END EVERY
+  // SESSION on success -- this one included -- so the app signs out and says why.
+  // Neither calls Cognito directly any more: the server makes the change.
+
+  const leaveAfterChange = (title: string, body: string) => {
+    Alert.alert(title, body, [{ text: 'Sign in again', onPress: signOut }], { cancelable: false });
+  };
 
   // ── Email handlers ──────────────────────────────────────────────────────────
 
@@ -78,50 +83,41 @@ export default function AccountSettingsScreen() {
     }
     setEmailBusy(true);
     try {
-      const accessToken = await AsyncStorage.getItem('asheflow_access_token');
-      if (!accessToken) throw new Error('Not authenticated');
-      await apiClient.post('/employees/me/email/request-change', {
-        access_token: accessToken,
-        new_email: newEmail.trim().toLowerCase(),
-      });
+      const res = await apiClient.post<{ current_masked: string; new_masked: string }>(
+        '/employees/me/email/request-change', { new_email: newEmail.trim().toLowerCase() },
+      );
+      setMasked({ current: res.data.current_masked, new: res.data.new_masked });
       setEmailStep('verifying');
     } catch (e: any) {
-      Alert.alert('Error', errorText(e, e.message ?? 'Could not send verification code.'));
+      Alert.alert('Could not send codes', errorText(e, 'Please try again.'));
     } finally {
       setEmailBusy(false);
     }
   };
 
   const confirmEmailChange = async () => {
-    if (code.trim().length < 6) {
-      Alert.alert('Invalid code', 'Enter the 6-digit code sent to your new email.');
+    if (currentCode.trim().length < 6 || newCode.trim().length < 6) {
+      Alert.alert('Codes needed', 'Enter both 6-digit codes.');
       return;
     }
     setEmailBusy(true);
     try {
-      const accessToken = await AsyncStorage.getItem('asheflow_access_token');
-      if (!accessToken) throw new Error('Not authenticated');
       await apiClient.post('/employees/me/email/confirm-change', {
-        access_token: accessToken,
-        code: code.trim(),
-        new_email: newEmail.trim().toLowerCase(),
+        current_code: currentCode.trim(),
+        new_code: newCode.trim(),
       });
       setCurrentEmail(newEmail.trim().toLowerCase());
-      setEmailStep('idle');
-      setNewEmail('');
-      setCode('');
-      Alert.alert('Done', 'Email updated. Sign in again to refresh your session.', [
-        { text: 'Sign out now', onPress: signOut },
-        { text: 'Later', style: 'cancel' },
-      ]);
+      leaveAfterChange('Email updated', 'You were signed out everywhere. Sign in again to continue.');
     } catch (e: any) {
-      Alert.alert('Error', errorText(e, e.message ?? 'Could not verify code.'));
+      Alert.alert('Could not verify', errorText(e, 'Please try again.'));
     } finally {
       setEmailBusy(false);
     }
   };
 
-  const cancelEmail = () => { setEmailStep('idle'); setNewEmail(''); setCode(''); };
+  const cancelEmail = () => {
+    setEmailStep('idle'); setNewEmail(''); setCurrentCode(''); setNewCode(''); setMasked(null);
+  };
 
   // ── Discord handlers ────────────────────────────────────────────────────────
 
@@ -173,11 +169,24 @@ export default function AccountSettingsScreen() {
 
   const cancelDiscord = () => { setDStep('idle'); setDId(''); setDCode(''); setDHelp(false); };
 
-  // ── Password handler ────────────────────────────────────────────────────────
+  // ── Password handlers ───────────────────────────────────────────────────────
+
+  const requestPasswordCode = async () => {
+    setPwBusy(true);
+    try {
+      const res = await apiClient.post<{ sent_to: string }>('/employees/me/password/request-code');
+      setPwSentTo(res.data.sent_to);
+      setPwStep('code');
+    } catch (e: any) {
+      Alert.alert('Could not send code', errorText(e, 'Please try again.'));
+    } finally {
+      setPwBusy(false);
+    }
+  };
 
   const handleChangePassword = async () => {
-    if (!currentPw.trim() || !newPw.trim()) {
-      Alert.alert('Required', 'Fill in all password fields.');
+    if (pwCode.trim().length < 6) {
+      Alert.alert('Code needed', 'Enter the 6-digit code from the email.');
       return;
     }
     if (newPw !== confirmPw) {
@@ -190,33 +199,10 @@ export default function AccountSettingsScreen() {
     }
     setPwBusy(true);
     try {
-      const accessToken = await AsyncStorage.getItem('asheflow_access_token');
-      if (!accessToken) throw new Error('Not authenticated');
-      const res = await fetch(COGNITO_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-amz-json-1.1',
-          'X-Amz-Target': 'AWSCognitoIdentityProviderService.ChangePassword',
-        },
-        body: JSON.stringify({
-          AccessToken:      accessToken,
-          PreviousPassword: currentPw,
-          ProposedPassword: newPw,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        const t = data.__type ?? '';
-        if (t === 'NotAuthorizedException')  { Alert.alert('Wrong password', 'Current password is incorrect.'); return; }
-        if (t === 'InvalidPasswordException') { Alert.alert('Invalid password', data.message ?? 'Password does not meet requirements.'); return; }
-        Alert.alert('Error', data.message ?? 'Could not change password.');
-        return;
-      }
-      Alert.alert('Password updated', 'Your password has been changed.');
-      setCurrentPw(''); setNewPw(''); setConfirmPw('');
-      setPwStep('idle');
-    } catch {
-      Alert.alert('Error', 'Could not change password. Check your connection.');
+      await apiClient.post('/employees/me/password/confirm', { code: pwCode.trim(), new_password: newPw });
+      leaveAfterChange('Password changed', 'You were signed out everywhere. Sign in with your new password.');
+    } catch (e: any) {
+      Alert.alert('Could not change password', errorText(e, 'Please try again.'));
     } finally {
       setPwBusy(false);
     }
@@ -224,8 +210,8 @@ export default function AccountSettingsScreen() {
 
   const cancelPassword = () => {
     setPwStep('idle');
-    setCurrentPw(''); setNewPw(''); setConfirmPw('');
-    setShowCurrent(false); setShowNew(false);
+    setPwCode(''); setNewPw(''); setConfirmPw('');
+    setShowNew(false);
   };
 
   // ── Theme picker ────────────────────────────────────────────────────────────
@@ -257,16 +243,24 @@ export default function AccountSettingsScreen() {
           </View>
 
           {/* Email row */}
+          {/* ADR-541 R3: a first email is added by an admin -- with no current
+              address there is nothing to confirm the change against. */}
           {emailStep === 'idle' && (
             <TouchableOpacity
               style={s.row}
-              onPress={() => { setNewEmail(currentEmail); setEmailStep('entering'); }}
+              onPress={() => {
+                if (!currentEmail) {
+                  Alert.alert('Add your email', 'Ask your manager or an admin to add your email address from the People page.');
+                  return;
+                }
+                setNewEmail(''); setEmailStep('entering');
+              }}
               activeOpacity={0.7}
             >
               <Text style={[s.rowLabel, { color: c.mutedForeground }]}>Email</Text>
               <View style={s.rowRight}>
                 <Text style={[s.rowValue, { color: c.foreground }]} numberOfLines={1}>{currentEmail || '—'}</Text>
-                <Text style={[s.editChip, { color: c.primary }]}>Edit</Text>
+                <Text style={[s.editChip, { color: c.primary }]}>{currentEmail ? 'Change' : 'Add'}</Text>
               </View>
             </TouchableOpacity>
           )}
@@ -286,7 +280,8 @@ export default function AccountSettingsScreen() {
                 autoFocus
               />
               <Text style={[s.editHint, { color: c.mutedForeground }]}>
-                A verification code will be sent to the new address.
+                We'll email a code to your current address and one to the new address.
+                After the change you'll be signed out everywhere.
               </Text>
               <View style={s.editActions}>
                 <TouchableOpacity onPress={cancelEmail} style={[s.editBtn, { borderColor: c.border }]}>
@@ -307,31 +302,44 @@ export default function AccountSettingsScreen() {
 
           {emailStep === 'verifying' && (
             <View style={s.editBlock}>
-              <Text style={[s.editLabel, { color: c.foreground }]}>Verification code</Text>
-              <Text style={[s.editHint, { color: c.mutedForeground }]}>
-                Enter the 6-digit code sent to {newEmail}
+              <Text style={[s.editLabel, { color: c.foreground }]}>
+                Code sent to {masked?.current ?? 'your current email'}
               </Text>
               <TextInput
                 style={[s.input, s.codeInput, { color: c.foreground, borderColor: c.border, backgroundColor: c.surfaceMuted }]}
-                value={code}
-                onChangeText={setCode}
+                value={currentCode}
+                onChangeText={setCurrentCode}
+                placeholder="000000"
+                placeholderTextColor={c.placeholder}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                maxLength={6}
+                autoFocus
+              />
+              <Text style={[s.editLabel, { color: c.foreground }]}>
+                Code sent to {masked?.new ?? 'the new email'}
+              </Text>
+              <TextInput
+                style={[s.input, s.codeInput, { color: c.foreground, borderColor: c.border, backgroundColor: c.surfaceMuted }]}
+                value={newCode}
+                onChangeText={setNewCode}
                 placeholder="000000"
                 placeholderTextColor={c.placeholder}
                 keyboardType="number-pad"
                 maxLength={6}
-                autoFocus
               />
+              <Text style={[s.editHint, { color: c.mutedForeground }]}>Codes expire in 10 minutes.</Text>
               <View style={s.editActions}>
                 <TouchableOpacity onPress={cancelEmail} style={[s.editBtn, { borderColor: c.border }]}>
                   <Text style={[s.editBtnText, { color: c.mutedForeground }]}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => { setEmailStep('entering'); setCode(''); }} style={[s.editBtn, { borderColor: c.border }]}>
+                <TouchableOpacity onPress={() => { setEmailStep('entering'); setCurrentCode(''); setNewCode(''); }} style={[s.editBtn, { borderColor: c.border }]}>
                   <Text style={[s.editBtnText, { color: c.primary }]}>Resend</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={confirmEmailChange}
-                  disabled={emailBusy || code.length < 6}
-                  style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: (emailBusy || code.length < 6) ? 0.5 : 1 }]}
+                  disabled={emailBusy || currentCode.length < 6 || newCode.length < 6}
+                  style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: (emailBusy || currentCode.length < 6 || newCode.length < 6) ? 0.5 : 1 }]}
                 >
                   {emailBusy
                     ? <ActivityIndicator size="small" color={c.primaryForeground} />
@@ -462,7 +470,22 @@ export default function AccountSettingsScreen() {
         <View style={[s.section, { backgroundColor: c.card, borderColor: c.border }]}>
 
           {pwStep === 'idle' ? (
-            <TouchableOpacity style={s.row} onPress={() => setPwStep('open')} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={s.row}
+              onPress={() => {
+                if (!currentEmail) {
+                  Alert.alert('Email needed', 'Changing your password needs an email address to send a code to. Ask your manager or an admin to add it.');
+                  return;
+                }
+                Alert.alert(
+                  'Change password',
+                  "We'll email you a code. After the change you'll be signed out everywhere, including this phone.",
+                  [{ text: 'Cancel', style: 'cancel' }, { text: 'Email me a code', onPress: requestPasswordCode }],
+                );
+              }}
+              activeOpacity={0.7}
+              disabled={pwBusy}
+            >
               <Text style={[s.rowLabel, { color: c.mutedForeground }]}>Password</Text>
               <View style={s.rowRight}>
                 <Text style={[s.rowValue, { color: c.foreground }]}>••••••••</Text>
@@ -471,24 +494,20 @@ export default function AccountSettingsScreen() {
             </TouchableOpacity>
           ) : (
             <View style={s.editBlock}>
-              {/* Current password */}
+              {/* Code from the email (ADR-541 D1) */}
               <View style={s.pwField}>
-                <Text style={[s.editLabel, { color: c.foreground }]}>Current password</Text>
-                <View style={[s.pwInputRow, { borderColor: c.border, backgroundColor: c.surfaceMuted }]}>
-                  <TextInput
-                    style={[s.pwInput, { color: c.foreground }]}
-                    secureTextEntry={!showCurrent}
-                    placeholder="Enter current password"
-                    placeholderTextColor={c.placeholder}
-                    value={currentPw}
-                    onChangeText={setCurrentPw}
-                    autoCapitalize="none"
-                    autoFocus
-                  />
-                  <TouchableOpacity onPress={() => setShowCurrent(v => !v)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Text style={[s.showHide, { color: c.primary }]}>{showCurrent ? 'Hide' : 'Show'}</Text>
-                  </TouchableOpacity>
-                </View>
+                <Text style={[s.editLabel, { color: c.foreground }]}>Code sent to {pwSentTo}</Text>
+                <TextInput
+                  style={[s.input, s.codeInput, { color: c.foreground, borderColor: c.border, backgroundColor: c.surfaceMuted }]}
+                  value={pwCode}
+                  onChangeText={setPwCode}
+                  placeholder="000000"
+                  placeholderTextColor={c.placeholder}
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  maxLength={6}
+                  autoFocus
+                />
               </View>
 
               {/* New password */}
@@ -543,7 +562,7 @@ export default function AccountSettingsScreen() {
                 >
                   {pwBusy
                     ? <ActivityIndicator size="small" color={c.primaryForeground} />
-                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Update Password</Text>}
+                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Change password</Text>}
                 </TouchableOpacity>
               </View>
             </View>

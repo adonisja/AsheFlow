@@ -22,13 +22,15 @@ class PlatformAlert(Base):
     """
     __tablename__ = "platform_alerts"
     __table_args__ = (
-        # The dedup key (ADR-335 D2): one OPEN alert per type per tenant.
+        # The dedup key (ADR-335 D2): one OPEN alert per type per tenant --
+        # and, since ADR-543 D2, per SUBJECT account, so two unprotected admins
+        # in one company are two alerts, not one alert with a merged count.
         # Partial, so resolved rows do not block a genuine recurrence. Not a
         # unique constraint because Postgres treats NULL company_id values as
         # distinct, which would let platform-wide alerts pile up.
         Index(
             "ix_platform_alerts_open",
-            "alert_type", "company_id",
+            "alert_type", "company_id", "subject_ref",
             unique=False,
             postgresql_where=(Column("is_resolved") == False),  # noqa: E712
         ),
@@ -45,6 +47,26 @@ class PlatformAlert(Base):
 
     message  = Column(Text, nullable=False)
     severity = Column(String(20), nullable=False, default="warning")
+
+    # ADR-543 D2 — WHO an account alert is about. NULL for infrastructure
+    # alerts (Discord, SES, backups), which are about no account.
+    #   subject_kind  'employee' | 'platform' (platform staff have no Employee row)
+    #   subject_ref   the Cognito username: the account's handle, not a name.
+    #                 Returned to super admins only (ADR-343 D4: platform
+    #                 support must not see personal identifiers).
+    #   subject_role  the role or platform group, which support MAY see.
+    subject_kind = Column(String(16), nullable=True)
+    subject_ref  = Column(String(128), nullable=True)
+    subject_role = Column(String(32), nullable=True)
+
+    # ADR-544 — what a super admin has DONE about an account alert. Text, not
+    # an FK, for the reason resolved_by_* is text: a super admin has no
+    # Employee row (ADR-274 D13).
+    reminded_at             = Column(DateTime(timezone=True), nullable=True)
+    reminded_by_email       = Column(String(320), nullable=True)
+    reminder_count          = Column(Integer, nullable=False, default=0, server_default="0")
+    sessions_ended_at       = Column(DateTime(timezone=True), nullable=True)
+    sessions_ended_by_email = Column(String(320), nullable=True)
 
     # A platform alert is a CONDITION, not an inbox item (ADR-335 D2). It closes
     # when the integration answers again, not when someone reads it.

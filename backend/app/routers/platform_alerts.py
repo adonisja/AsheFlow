@@ -46,6 +46,18 @@ class PlatformAlertOut(BaseModel):
     last_seen_at: Optional[datetime]
     resolved_at: Optional[datetime]
     resolved_by_email: Optional[str]
+    # ADR-543 D2/D3 — who an account alert is about. subject_ref (the account
+    # handle) is blanked for platform support (ADR-343 D4); kind and role stay.
+    subject_kind: Optional[str] = None
+    subject_ref: Optional[str] = None
+    subject_role: Optional[str] = None
+    # ADR-544 — actions taken on the account. Who acted is a super admin's
+    # email, which support may see as the same field resolved_by_email is.
+    reminded_at: Optional[datetime] = None
+    reminded_by_email: Optional[str] = None
+    reminder_count: int = 0
+    sessions_ended_at: Optional[datetime] = None
+    sessions_ended_by_email: Optional[str] = None
 
 
 class ResolveRequest(BaseModel):
@@ -70,7 +82,13 @@ def list_platform_alerts(
     if not include_resolved:
         q = q.filter(PlatformAlert.is_resolved.is_(False))
     rows = q.order_by(PlatformAlert.last_seen_at.desc()).limit(limit).all()
-    return [PlatformAlertOut.model_validate(r, from_attributes=True) for r in rows]
+    out = [PlatformAlertOut.model_validate(r, from_attributes=True) for r in rows]
+    # ADR-543 D3: the account handle is for super admins. Platform support is a
+    # cross-tenant login and may not see personal identifiers (ADR-343 D4).
+    if "super_admin" not in set(_super.get("cognito_groups") or []):
+        for a in out:
+            a.subject_ref = None
+    return out
 
 
 class MfaResetRequest(BaseModel):
@@ -545,4 +563,138 @@ def resolve_platform_alert(
     )
     db.commit()
     db.refresh(row)
+    return PlatformAlertOut.model_validate(row, from_attributes=True)
+
+
+# ── ADR-544: act on the account an alert is about ─────────────────────────────
+#
+# Super admin only (ADR-343: platform support never acts on an account). Both
+# need an ACCOUNT alert of an actionable type: an infrastructure alert names no
+# account to act on.
+
+REMINDABLE = {"mfa.privileged_unprotected"}
+REMINDER_COOLDOWN_SECONDS = 24 * 3600
+
+
+def _account_alert_or_error(db: Session, alert_id: UUID) -> PlatformAlert:
+    row = db.query(PlatformAlert).filter(PlatformAlert.id == alert_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+    if row.is_resolved:
+        raise HTTPException(status_code=409, detail="That alert is already resolved.")
+    if not row.subject_ref or row.alert_type not in REMINDABLE:
+        raise HTTPException(status_code=400, detail="This alert isn't about an account, so there's no one to act on.")
+    return row
+
+
+def _verified_email(username: str) -> str | None:
+    """The account's email if Cognito marks it verified; None otherwise."""
+    try:
+        attrs = boto3.client("cognito-idp", region_name=settings.aws_region).admin_get_user(
+            UserPoolId=settings.aws_cognito_user_pool_id, Username=username,
+        ).get("UserAttributes", [])
+    except (ClientError, BotoCoreError):
+        return None
+    a = {x["Name"]: x["Value"] for x in attrs}
+    return a.get("email") if a.get("email_verified") == "true" and a.get("email") else None
+
+
+@router.post("/alerts/{alert_id}/remind", status_code=status.HTTP_200_OK)
+def remind_alert_account(
+    alert_id: UUID,
+    _super: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+) -> PlatformAlertOut:
+    """D1 — email the account a reminder to set up MFA. Once per 24 hours."""
+    row = _account_alert_or_error(db, alert_id)
+    now = datetime.now(timezone.utc)
+    if row.reminded_at is not None:
+        last = row.reminded_at if row.reminded_at.tzinfo else row.reminded_at.replace(tzinfo=timezone.utc)
+        if (now - last).total_seconds() < REMINDER_COOLDOWN_SECONDS:
+            raise HTTPException(status_code=429, detail="A reminder was sent less than 24 hours ago.")
+
+    to = _verified_email(row.subject_ref)
+    if not to:
+        raise HTTPException(
+            status_code=409,
+            detail="This account has no verified email to remind. Sign them out instead.",
+        )
+    from app.services.email import send_mfa_setup_reminder
+    try:
+        send_mfa_setup_reminder(to_email=to, account_ref=row.subject_ref)
+    except ClientError:
+        raise HTTPException(status_code=502, detail="Couldn't send the reminder. Try again.")
+
+    row.reminded_at = now
+    row.reminded_by_email = _super.get("email")
+    row.reminder_count = (row.reminder_count or 0) + 1
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(row.company_id) if row.company_id else None,
+        actor_id=None,  # ADR-274 D13
+        action_type="platform_alert.account_reminded",
+        target_table="platform_alerts",
+        target_id=str(row.id),
+        after={**super_admin_identity(_super), "alert_type": row.alert_type,
+               "subject_kind": row.subject_kind, "reminder_count": row.reminder_count},
+    )
+    db.commit()
+    db.refresh(row)
+    return PlatformAlertOut.model_validate(row, from_attributes=True)
+
+
+@router.post("/alerts/{alert_id}/sign-out", status_code=status.HTTP_200_OK)
+def sign_out_alert_account(
+    alert_id: UUID,
+    _super: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+) -> PlatformAlertOut:
+    """D2 — end every session and forget every device (ADR-387's containment).
+
+    clear_factor=False: if MFA was removed by an attacker, adding a factor back
+    is the victim's job; if they never had one, PreAuthentication refuses their
+    next privileged sign-in until they enrol (ADR-530).
+    """
+    row = _account_alert_or_error(db, alert_id)
+    result = mfa_containment.contain(
+        username=row.subject_ref,
+        pool_id=settings.aws_cognito_user_pool_id,
+        region=settings.aws_region,
+        clear_factor=False,
+    )
+    if row.subject_kind == "employee" and row.company_id is not None:
+        # ADR-541 D2 — refuse the existing access tokens here at once; Cognito's
+        # sign-out only stops refreshes. Scoped to the alert's company.
+        from app.models.employee import Employee
+        emp = db.query(Employee).filter(
+            Employee.company_id == row.company_id,
+            (Employee.username == row.subject_ref) | (Employee.email == row.subject_ref),
+        ).first()
+        if emp is not None:
+            emp.tokens_valid_after = datetime.now(timezone.utc)
+
+    # Only claim it on the card when Cognito confirmed it. The attempt is
+    # audited either way, with what actually happened.
+    if result.signed_out:
+        row.sessions_ended_at = datetime.now(timezone.utc)
+        row.sessions_ended_by_email = _super.get("email")
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(row.company_id) if row.company_id else None,
+        actor_id=None,  # ADR-274 D13
+        action_type="platform_alert.account_signed_out",
+        target_table="platform_alerts",
+        target_id=str(row.id),
+        after={**super_admin_identity(_super), "alert_type": row.alert_type,
+               "subject_kind": row.subject_kind,
+               "signed_out": result.signed_out,
+               "devices_forgotten": result.devices_forgotten,
+               "errors": result.errors[:5]},
+    )
+    db.commit()
+    db.refresh(row)
+    if not result.signed_out:
+        raise HTTPException(status_code=502, detail="Cognito didn't confirm the sign-out. Try again.")
     return PlatformAlertOut.model_validate(row, from_attributes=True)

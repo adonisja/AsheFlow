@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, field_validator, EmailStr, Field
-from typing import Optional, Literal, List
+from typing import Optional, Literal
 from uuid import UUID
 from datetime import datetime
 import re
@@ -47,6 +47,10 @@ class EmployeeCreate(BaseModel):
     @classmethod
     def validate_discord_id(cls, v):
         return _validate_discord_id(v)
+    # ADR-538 D4: the manager/admin's sign-off that every role was reviewed, required
+    # when this grant is allowed only because the company's setup window is open.
+    # Not an Employee column -- create_employee excludes it from the row.
+    roles_reviewed: bool = False
 
 
 class EmployeeUpdate(BaseModel):
@@ -266,8 +270,17 @@ class RoleTransitionRequest(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    new_role: Literal["walker", "trainer", "captain"] = Field(
+    # ADR-537: "driver" added. ROLE_TRANSITIONS has allowed driver_trainee -> driver
+    # since 2026-08-22 (ADR-264 D10 revised), but this Literal predated it, so every
+    # driver promotion failed validation and the only way to make a driver was the
+    # Edit dropdown -- which skipped training.
+    new_role: Literal["walker", "trainer", "captain", "driver", "field_supervisor"] = Field(
         ..., description="Target field role. Legal transitions are enforced server-side."
+    )
+    confirm_incomplete: bool = Field(
+        False,
+        description=("ADR-537 D3: promote a driver trainee whose training phases are not all "
+                     "complete. Without it the server answers 409 listing the remaining phases."),
     )
     reason: Optional[str] = Field(
         None, max_length=280,

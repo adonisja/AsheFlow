@@ -495,6 +495,19 @@ export interface PlatformAlert {
   /** null on a self-resolve — that null is what distinguishes "the condition
    *  ended" from "a person dismissed it". */
   resolved_by_email: string | null;
+  /** ADR-543 D2: who an account alert is about; null for infrastructure alerts. */
+  subject_kind: 'employee' | 'platform' | null;
+  /** The account handle (Cognito username). Super admins only: platform
+   *  support receives null (ADR-343 D4). */
+  subject_ref: string | null;
+  /** Role, or platform group for platform staff. */
+  subject_role: string | null;
+  /** ADR-544 — actions a super admin has taken on the account. */
+  reminded_at: string | null;
+  reminded_by_email: string | null;
+  reminder_count: number;
+  sessions_ended_at: string | null;
+  sessions_ended_by_email: string | null;
 }
 
 export interface UnavailableStaff {
@@ -3705,4 +3718,104 @@ export interface SurveyContributorInvited {
   email_delivered: boolean;
   /** Only when the credentials email failed; shown once, never stored. */
   temp_password: string | null;
+}
+
+/** POST /employees/{id}/transition (ADR-256, ADR-537). Mirrors
+ *  schemas/employee.py RoleTransitionRequest. `driver` was missing from the server
+ *  Literal for two months while the server's transition table allowed it, so no
+ *  client could promote a driver; typing the body here keeps the two in step. */
+export interface RoleTransitionRequest {
+  new_role: 'walker' | 'trainer' | 'captain' | 'driver' | 'field_supervisor';
+  /** ADR-537 D3: promote a driver trainee whose phases are not all complete. */
+  confirm_incomplete?: boolean;
+  reason?: string;
+}
+
+/* ── ADR-541: credential changes, confirmed by email ─────────────────────── */
+
+/** POST /employees/me/password/confirm. Server: extra="forbid", code 4–10, password 8–256. */
+export interface PasswordConfirmRequest {
+  code: string;
+  new_password: string;
+}
+
+/** POST /employees/me/email/request-change. Codes go to BOTH the current and the new inbox. */
+export interface EmailChangeRequest {
+  new_email: string;
+}
+export interface EmailChangeCodesSent {
+  detail: string;
+  current_masked: string;
+  new_masked: string;
+}
+
+/** POST /employees/me/email/confirm-change. One code from each inbox. */
+export interface EmailConfirmRequest {
+  current_code: string;
+  new_code: string;
+}
+
+/* ── ADR-545: Survey activity (platform staff, read-only + account actions) ── */
+
+/** never_signed_in | active | disabled | missing | unknown (Cognito's view). */
+export type SurveyAccountStatus = 'never_signed_in' | 'active' | 'disabled' | 'missing' | 'unknown';
+
+export interface SurveyContributorHealth {
+  id: string;
+  display_name: string;
+  email: string | null;
+  cognito_username: string | null;
+  agreement_version: string;
+  agreement_signed_on: string;
+  revoked_at: string | null;
+  account_status: SurveyAccountStatus;
+  /** null = could not tell. */
+  in_surveyor_group: boolean | null;
+  last_walk_at: string | null;
+}
+
+export interface SurveyActivityClaim {
+  id: string;
+  area_name: string;
+  street: string;
+  description: string;
+  /** Contributor name, or "Owner". */
+  holder: string;
+  claimed_at: string;
+  expires_at: string;
+  walk_open: boolean;
+}
+
+export interface SurveyActivityWalk {
+  id: string;
+  holder: string;
+  area_name: string | null;
+  street: string;
+  started_at: string;
+  last_observation_at: string | null;
+  doors_done: number;
+  doors_total: number;
+}
+
+export interface SurveyActivity {
+  contributors: SurveyContributorHealth[];
+  claims: SurveyActivityClaim[];
+  open_walks: SurveyActivityWalk[];
+}
+
+/** POST /survey/contributors/{id}/readmit: the agreement is signed again. */
+export interface SurveyReadmitRequest {
+  agreement_version: string;
+  agreement_signed_on: string;
+  confirm_agreement_signed: boolean;
+}
+
+/** POST /survey/claims/{id}/staff-release. 10–200 characters; no codes. */
+export interface SurveyStaffReleaseRequest {
+  reason: string;
+}
+
+/** ADR-546 D4: whether the holder's notice was actually sent. */
+export interface SurveyStaffReleaseResult extends SurveyActivityClaim {
+  holder_emailed: boolean;
 }

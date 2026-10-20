@@ -66,6 +66,7 @@ import Surveyors from './pages/superadmin/Surveyors';
 import SurveyStart from './pages/survey/SurveyStart';
 import SurveyWalkPage from './pages/survey/SurveyWalk';
 import SurveyAreaPage from './pages/survey/SurveyAreaPage';
+import SurveyActivityPage from './pages/superadmin/SurveyActivity';
 import BuildingSurvey from './pages/BuildingSurvey';
 import { useParams } from 'react-router-dom';
 function CompanyDetailWithKey() {
@@ -747,17 +748,21 @@ function App() {
             />
           </Route>
 
-          {/* ADR-504. The survey register: the owner and admitted contributors.
-              Outside every Layout: a contributor has no Employee row, and the
-              page is used on a phone on a sidewalk. The real gate is the API. */}
-          <Route path="/survey" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyStart /></ProtectedRoute>} />
-          <Route path="/survey/walk/:walkId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyWalkPage /></ProtectedRoute>} />
-          {/* ADR-513: an area's blocks, where a block is claimed. */}
-          <Route path="/survey/areas/:areaId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyAreaPage /></ProtectedRoute>} />
-          {/* ADR-509. Same layout, opened to platform support for this route only;
-              every route in the super-admin block below stays super-admin only. */}
-          <Route element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><SuperAdminLayout /></ProtectedRoute>}>
-            <Route path="/superadmin/surveyors" element={<Surveyors />} />
+          {/* ADR-545 D1. Surveying is platform-staff work, so the survey
+              register lives in the PLATFORM layout (supersedes ADR-543's
+              stand-alone bar). The layout admits all three platform groups;
+              each page keeps its own gate, and the nav shows each group only
+              its own entries. A contributor still needs no Employee row:
+              SuperAdminLayout never reads one. */}
+          <Route element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support', 'surveyor']}><SuperAdminLayout /></ProtectedRoute>}>
+            {/* ADR-504/513: the walker pages. Writers only. */}
+            <Route path="/survey" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyStart /></ProtectedRoute>} />
+            <Route path="/survey/walk/:walkId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyWalkPage /></ProtectedRoute>} />
+            <Route path="/survey/areas/:areaId" element={<ProtectedRoute allowedRoles={['super_admin', 'surveyor']}><SurveyAreaPage /></ProtectedRoute>} />
+            {/* ADR-509 / ADR-545 D2: support's survey pages -- onboarding, and
+                seeing and unsticking surveyors. Never the walker pages. */}
+            <Route path="/superadmin/surveyors" element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><Surveyors /></ProtectedRoute>} />
+            <Route path="/superadmin/survey-activity" element={<ProtectedRoute allowedRoles={['super_admin', 'platform_support']}><SurveyActivityPage /></ProtectedRoute>} />
           </Route>
           {/* Super admin — separate layout, no Navbar, violet ambient */}
           <Route

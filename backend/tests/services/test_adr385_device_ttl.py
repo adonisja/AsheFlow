@@ -7,7 +7,7 @@ because Cognito refuses tokens before any of our code runs. Cadence therefore
 lives in a scheduled AdminForgetDevice sweep, and these tests pin its rules.
 
 The AGE rule is distinct from the COUNT rule (MAX_REMEMBERED_DEVICES). Neither
-subsumes the other, so select_stale gets its own tests rather than reusing
+subsumes the other, so the age rule gets its own tests rather than reusing
 select_for_eviction's.
 """
 from datetime import datetime, timedelta, timezone
@@ -18,16 +18,23 @@ from app.services import mfa_status
 
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
 
+# A fixed 24h window for the age-rule properties below; the tier values have
+# their own policy tests.
+DAY = timedelta(hours=24)
+
 
 def _dev(key: str, hours_ago: float | None, remembered: bool = True) -> df.Device:
-    last = None if hours_ago is None else NOW - timedelta(hours=hours_ago)
-    return df.Device(key=key, last_auth=last, remembered=remembered)
+    """A device that last passed MFA `hours_ago` (and was used just now, which
+    must not matter -- ADR-540)."""
+    created = None if hours_ago is None else NOW - timedelta(hours=hours_ago)
+    return df.Device(key=key, last_auth=NOW, remembered=remembered, created=created)
 
 
 class TestTheTtlsMatchThePolicy:
-    def test_privileged_is_24_hours(self):
-        """NIST SP 800-63B puts the AAL2 reauthentication ceiling at 24h."""
-        assert df.PRIVILEGED_DEVICE_TTL == timedelta(hours=24)
+    def test_privileged_is_12_hours_since_the_last_mfa(self):
+        """Owner's choice, ADR-540: a shift plus a buffer. Stricter than NIST SP
+        800-63B-4 AAL2 (24h SHOULD); equal to AAL3."""
+        assert df.PRIVILEGED_CHALLENGE_TTL == timedelta(hours=12)
 
     def test_field_is_7_days(self):
         """Below Duo's 30-day default deliberately; well above per-session."""
@@ -36,45 +43,51 @@ class TestTheTtlsMatchThePolicy:
     def test_field_is_longer_than_privileged(self):
         """The whole point: a field phone drops sessions constantly on mobile
         networks, so it must be challenged LESS often than an admin laptop."""
-        assert df.FIELD_DEVICE_TTL > df.PRIVILEGED_DEVICE_TTL
+        assert df.FIELD_DEVICE_TTL > df.PRIVILEGED_CHALLENGE_TTL
 
 
-class TestSelectStale:
+class TestTheAgeRule:
+    """ADR-385's age rule, measured from the last MFA since ADR-540.
+
+    These were idle-rule tests (`select_stale`, hours since last USE). Both tiers
+    now count from DeviceCreateDate, so the same properties are pinned on
+    select_unchallenged: inside survives, past is selected, the boundary is not
+    inclusive, a missing date is untrusted, a not-remembered device is ignored,
+    and the two tiers disagree about the same device.
+    """
+
     def test_a_device_inside_the_ttl_survives(self):
         devs = [_dev("fresh", hours_ago=1)]
-        assert df.select_stale(devs, df.PRIVILEGED_DEVICE_TTL, now=NOW) == []
+        assert df.select_unchallenged(devs, DAY, now=NOW) == []
 
     def test_a_device_past_the_ttl_is_selected(self):
         devs = [_dev("stale", hours_ago=25)]
-        got = df.select_stale(devs, df.PRIVILEGED_DEVICE_TTL, now=NOW)
+        got = df.select_unchallenged(devs, DAY, now=NOW)
         assert [d.key for d in got] == ["stale"]
 
     def test_the_boundary_is_not_inclusive(self):
-        """Exactly at the TTL is still trusted; a device is stale only once it is
-        PAST it. Prevents a device being forgotten on the tick it was used."""
+        """Exactly at the TTL is still trusted; stale only once PAST it."""
         devs = [_dev("exact", hours_ago=24)]
-        assert df.select_stale(devs, df.PRIVILEGED_DEVICE_TTL, now=NOW) == []
+        assert df.select_unchallenged(devs, DAY, now=NOW) == []
 
-    def test_a_never_authenticated_device_is_stale(self):
-        """No DeviceLastAuthenticatedDate means it never completed an auth, so it
-        has no claim to be trusted. Treating a missing timestamp as `now` would
-        make an unproven device permanently un-forgettable."""
+    def test_a_device_with_no_creation_date_is_stale(self):
+        """No DeviceCreateDate means no proof it ever passed MFA. Treating a
+        missing timestamp as `now` would make it permanently un-forgettable."""
         devs = [_dev("never", hours_ago=None)]
-        got = df.select_stale(devs, df.PRIVILEGED_DEVICE_TTL, now=NOW)
+        got = df.select_unchallenged(devs, DAY, now=NOW)
         assert [d.key for d in got] == ["never"]
 
     def test_a_not_remembered_device_is_left_alone(self):
-        """It is already challenged on every sign-in. Forgetting it is a wasted
-        API call, and the sweep runs across every employee."""
+        """It is already challenged on every sign-in; forgetting it is a wasted
+        API call across every employee."""
         devs = [_dev("inert", hours_ago=999, remembered=False)]
-        assert df.select_stale(devs, df.FIELD_DEVICE_TTL, now=NOW) == []
+        assert df.select_unchallenged(devs, df.FIELD_DEVICE_TTL, now=NOW) == []
 
     def test_the_two_tiers_disagree_about_the_same_device(self):
-        """A 3-day-old device: stale for an admin, fine for a walker. This is the
-        behaviour MfaConfiguration could not express at all."""
+        """A device challenged 3 days ago: stale for an admin, fine for a walker."""
         devs = [_dev("d", hours_ago=72)]
-        assert [d.key for d in df.select_stale(devs, df.PRIVILEGED_DEVICE_TTL, now=NOW)] == ["d"]
-        assert df.select_stale(devs, df.FIELD_DEVICE_TTL, now=NOW) == []
+        assert [d.key for d in df.select_unchallenged(devs, df.PRIVILEGED_CHALLENGE_TTL, now=NOW)] == ["d"]
+        assert df.select_unchallenged(devs, df.FIELD_DEVICE_TTL, now=NOW) == []
 
 
 class TestTierSelectionCannotInvertPrivilege:
@@ -95,14 +108,14 @@ class TestTierSelectionCannotInvertPrivilege:
     def test_the_ttl_that_would_have_been_applied_is_the_wrong_one(self):
         """Concretely: 7 days instead of 24 hours for the platform's highest
         privilege account."""
-        wrong = (df.PRIVILEGED_DEVICE_TTL
+        wrong = (DAY
                  if mfa_status.tier_for("trainee", groups=None) == "privileged"
                  else df.FIELD_DEVICE_TTL)
-        right = (df.PRIVILEGED_DEVICE_TTL
+        right = (DAY
                  if mfa_status.tier_for("trainee", groups={"super_admin"}) == "privileged"
                  else df.FIELD_DEVICE_TTL)
         assert wrong == df.FIELD_DEVICE_TTL
-        assert right == df.PRIVILEGED_DEVICE_TTL
+        assert right == DAY
 
     def test_groups_never_demote(self):
         """Escalation only -- a dispatch employee whose groups are unreadable

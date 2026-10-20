@@ -1,7 +1,18 @@
 """Bound how long a remembered device may skip the MFA challenge (ADR-385).
 
-Registered in celery_app.py beat_schedule — runs 01:00 Eastern, when no DSP is
-operating.
+Registered in celery_app.py beat_schedule — runs 01:37 Eastern for every tier,
+and hourly for the privileged tier only (ADR-539 D2), so "24 hours since last
+use" holds within an hour rather than up to ~48. ADR-540 then changed the
+rule to "since the device last passed MFA" (DeviceCreateDate) for both tiers
+-- 12h privileged, 7 days field -- so a device in daily use is re-challenged.
+
+WHO IS SWEPT (ADR-539 D1)
+Employee rows, AND the members of the platform groups (super_admin,
+platform_support) in Cognito. A platform account has NO Employee row --
+those roles are not valid Employee.role values -- so a sweep that walks only
+Employee rows never sees the platform's highest-privilege accounts. That is
+exactly what happened: adon's remembered devices outlived the 24h limit by
+weeks on both pools until 2026-10-18.
 
 WHY THIS EXISTS AND `MfaConfiguration: ON` DOES NOT
 ADR-377 planned to flip the pool to `ON`. That is mutually exclusive with the
@@ -46,6 +57,9 @@ logger = logging.getLogger(__name__)
 
 SWEEP_TIMEZONE = "America/New_York"
 
+#: Cognito-only groups whose members have no Employee row (ADR-539 D1).
+PLATFORM_GROUPS = ("super_admin", "platform_support")
+
 
 def _cognito_username(employee: Employee) -> str | None:
     """The Username this employee's Cognito account actually has (ADR-380 F7).
@@ -89,15 +103,45 @@ def _groups_for(username: str) -> set[str] | None:
         return None
 
 
+def _platform_usernames() -> set[str] | None:
+    """Usernames in the platform groups, or None if they cannot be listed.
+
+    None, not an empty set: "could not read" must be distinguishable in the
+    task result from "the platform has no such accounts".
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    names: set[str] = set()
+    try:
+        client = boto3.client("cognito-idp", region_name=settings.aws_region)
+        paginator = client.get_paginator("list_users_in_group")
+        for group in PLATFORM_GROUPS:
+            for page in paginator.paginate(
+                UserPoolId=settings.aws_cognito_user_pool_id, GroupName=group,
+            ):
+                names.update(u["Username"] for u in page.get("Users", []))
+    except (ClientError, BotoCoreError) as exc:
+        logger.warning(
+            "device sweep: could not list platform groups: %s", type(exc).__name__,
+        )
+        return None
+    return names
+
+
 @celery_app.task(name="app.tasks.device_sweep.sweep_stale_devices")
-def sweep_stale_devices() -> dict:
+def sweep_stale_devices(privileged_only: bool = False) -> dict:
     """Forget remembered devices past their tier's TTL.
 
-    Privileged: 24h. Field: 7 days. Returns a summary for the task result so a
-    run that forgot nothing is distinguishable from one that never ran.
+    Privileged: 12h, field: 7 days, both since the last MFA (ADR-540). `privileged_only` is the hourly run
+    (ADR-539 D2): same code, field accounts skipped, so the two schedules
+    cannot drift apart. Returns a summary for the task result so a run that
+    forgot nothing is distinguishable from one that never ran.
     """
     db = SessionLocal()
     checked = forgotten = skipped = unprotected = 0
+    platform_checked = 0
+    seen: set[str] = set()
     try:
         # The timezone assumption, surfaced. Cheap, and it is the difference
         # between a future incident and a log line that already explains itself.
@@ -130,14 +174,16 @@ def sweep_stale_devices() -> dict:
                 skipped += 1
                 continue
 
+            seen.add(username)
+
             # Groups, not the role alone. `super_admin` and `platform_support`
             # are NOT in Employee.VALID_ROLES -- a DB constraint rejects them --
-            # so they arrive ONLY as Cognito groups. Measured on prod: `adon` is
-            # `super_admin` in Cognito and `trainee` on its Employee row, so
-            # role-only classification would hand the platform's highest-privilege
-            # account the 7-day FIELD ttl instead of 24h (ADR-377 D2).
+            # so they arrive ONLY as Cognito groups. A platform account that
+            # also holds an Employee row (adon once did, as `trainee`) would get
+            # the 7-day FIELD ttl from its role alone (ADR-377 D2). One with no
+            # row at all is covered by the platform-group pass below (ADR-539).
             tier = mfa_status.tier_for(emp.role, groups=_groups_for(username))
-            if tier == "none":
+            if tier == "none" or (privileged_only and tier != "privileged"):
                 skipped += 1
                 continue
 
@@ -149,14 +195,21 @@ def sweep_stale_devices() -> dict:
             #
             # ADR-387 responds to the SetUserMFAPreference event in seconds; this
             # catches whatever that path missed, within a day.
-            if tier == "privileged" and not mfa_status.is_enrolled(
+            #
+            # `is False`, not `not`: is_enrolled returns None for "could not
+            # tell", and an AWS hiccup is not an unprotected account (ADR-539 D3).
+            if tier == "privileged" and mfa_status.is_enrolled(
                 emp.cognito_sub, username,
-            ):
+            ) is False:
                 unprotected += 1
                 raise_platform_alert(
                     db,
                     alert_type="mfa.privileged_unprotected",
                     company_id=emp.company_id,
+                    # ADR-543 D2: name the account, one alert each.
+                    subject_kind="employee",
+                    subject_ref=username,
+                    subject_role=emp.role,
                     message=(
                         "A privileged account has no MFA factor. If this was an "
                         "unenrolment it may indicate a compromised session "
@@ -165,7 +218,9 @@ def sweep_stale_devices() -> dict:
                     severity="critical",
                 )
 
-            ttl = (device_fleet.PRIVILEGED_DEVICE_TTL if tier == "privileged"
+            # ADR-540: both tiers measured from the last MFA (DeviceCreateDate).
+            privileged = tier == "privileged"
+            ttl = (device_fleet.PRIVILEGED_CHALLENGE_TTL if privileged
                    else device_fleet.FIELD_DEVICE_TTL)
 
             checked += 1
@@ -176,15 +231,48 @@ def sweep_stale_devices() -> dict:
                 ttl=ttl,
             )
 
+        # ADR-539 D1 — platform accounts with no Employee row. Privileged by
+        # definition (membership of a platform group IS the escalation).
+        platform = _platform_usernames()
+        for username in sorted((platform or set()) - seen):
+            if mfa_status.is_enrolled(None, username) is False:
+                unprotected += 1
+                raise_platform_alert(
+                    db,
+                    alert_type="mfa.privileged_unprotected",
+                    company_id=None,   # belongs to no tenant
+                    subject_kind="platform",
+                    subject_ref=username,
+                    subject_role=next((g for g in PLATFORM_GROUPS
+                                       if g in (_groups_for(username) or set())), "platform staff"),
+                    message=(
+                        "A platform account has no MFA factor. If this was an "
+                        "unenrolment it may indicate a compromised session "
+                        "(ADR-386)."
+                    ),
+                    severity="critical",
+                )
+            platform_checked += 1
+            forgotten += device_fleet.forget_stale(
+                username=username,
+                pool_id=settings.aws_cognito_user_pool_id,
+                region=settings.aws_region,
+                ttl=device_fleet.PRIVILEGED_CHALLENGE_TTL,
+            )
+
         if unprotected:
             db.commit()  # persist the alerts raised above
 
         logger.info(
-            "device sweep: checked %d employee(s), forgot %d stale device(s), "
-            "skipped %d, %d privileged unprotected",
-            checked, forgotten, skipped, unprotected,
+            "device sweep%s: checked %d employee(s) and %d platform account(s), "
+            "forgot %d stale device(s), skipped %d, %d privileged unprotected",
+            " (privileged only)" if privileged_only else "",
+            checked, platform_checked, forgotten, skipped, unprotected,
         )
-        return {"checked": checked, "forgotten": forgotten, "skipped": skipped,
+        return {"checked": checked, "platform_checked": platform_checked,
+                "platform_groups_read": platform is not None,
+                "privileged_only": privileged_only,
+                "forgotten": forgotten, "skipped": skipped,
                 "privileged_unprotected": unprotected,
                 "ran_at": datetime.now(ZoneInfo(SWEEP_TIMEZONE)).isoformat()}
     finally:

@@ -37,6 +37,13 @@ EXEMPT = {
         "super-admin only; platform staff groups, not tenant roles",
     "survey_register.invite_contributor":
         "platform staff only; fixed 'surveyor' group",
+    # ADR-545 D3: both only RE-grant the fixed 'surveyor' group to an account
+    # that already holds an active (restore) or revoked (readmit, agreement
+    # re-signed) contributor row; never a tenant role, never a new account.
+    "survey_register.restore_contributor_access":
+        "platform staff only; fixed 'surveyor' group, active contributor row required",
+    "survey_register.readmit_contributor":
+        "platform staff only; fixed 'surveyor' group, revoked contributor row + re-signed agreement required",
     "graduate_trainees.graduate_eligible_trainees":
         "system job: trainee -> walker on passing the graduation quiz (ADR-264); no caller",
     "adp_sync.sync_adp_employees":

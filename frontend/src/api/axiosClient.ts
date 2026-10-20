@@ -35,6 +35,16 @@ axiosClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
+      /* ADR-541 D2: another device changed this account's password or email,
+         so this session was ended on purpose. Routed on the code.
+         Recorded BEFORE signOut: signing out flips the auth state, and App's
+         <Navigate to="/login"> wins the race to plain /login while the await
+         below is still pending -- so a reason carried only in the URL below
+         was lost (staging walk-through, 2026-10-19). */
+      const credentialsChanged = error.response?.data?.detail?.code === 'credentials_changed';
+      if (credentialsChanged) {
+        try { sessionStorage.setItem('asheflow_session_ended', 'credentials'); } catch { /* private mode */ }
+      }
       // JWT expired or invalid — sign out and redirect to login so the user
       // gets a fresh token rather than seeing silent API failures.
       try {
@@ -42,7 +52,7 @@ axiosClient.interceptors.response.use(
       } catch {
         // signOut itself failed (e.g. already signed out) — still redirect
       }
-      window.location.href = '/login';
+      window.location.href = `/login${credentialsChanged ? '?ended=credentials' : ''}`;
     }
 
     /* ADR-465 D3. The API refuses a blocked caller with this code, and the

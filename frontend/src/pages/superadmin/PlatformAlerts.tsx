@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { formatDateTime } from '../../utils/date';
-import { AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, LogOut, Mail, RefreshCw, ShieldAlert } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -37,7 +37,30 @@ const TYPE_LABELS: Record<string, string> = {
   'security_infra.containment': 'Security: containment permissions',
   'security_infra.pool_triggers': 'Security: sign-in triggers',
   security_infra_degraded: 'Security (legacy, retired)',
+  // ADR-543 D4 — was rendered by the fallback as "Mfa.Privileged Unprotected".
+  'mfa.privileged_unprotected': 'Privileged account without MFA',
 };
+
+/** What a super admin should do about each account alert (ADR-543 D4). An
+ *  alert that only describes the problem leaves the reader to work out the
+ *  response under pressure. */
+const WHAT_TO_DO: Record<string, string> = {
+  'mfa.privileged_unprotected':
+    "Ask them to set up MFA from their Account page. If they say they didn't remove it, "
+    + 'treat it as a compromised session: reset their password and MFA now (ADR-386).',
+};
+
+/** Alert types a super admin can act on the account for (ADR-544). Mirrors
+ *  REMINDABLE in routers/platform_alerts.py. */
+const ACTIONABLE = new Set(['mfa.privileged_unprotected']);
+
+const ROLE_LABELS: Record<string, string> = {
+  super_admin: 'Super admin', platform_support: 'Platform support', admin: 'Admin',
+  management: 'Management', dispatch: 'Dispatch',
+};
+function roleLabel(r: string | null): string {
+  return r ? (ROLE_LABELS[r] ?? r.replace(/_/g, ' ')) : '';
+}
 
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] ?? t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -102,6 +125,28 @@ export default function PlatformAlerts() {
     return () => clearInterval(id);
   }, [load]);
 
+  // ADR-544 — act on the account. Sign-out asks first, in the page.
+  const [acting, setActing] = useState<string | null>(null);
+  const [confirmSignOut, setConfirmSignOut] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const actOnAccount = async (alertId: string, action: 'remind' | 'sign-out') => {
+    setActing(alertId);
+    setError(null); setNotice(null);
+    try {
+      await axiosClient.post(`/platform/alerts/${alertId}/${action}`, {});
+      setNotice(action === 'remind'
+        ? 'Reminder sent.'
+        : 'Signed out everywhere. Their next sign-in will require two-step sign-in.');
+      setConfirmSignOut(null);
+      await load();
+    } catch (err: unknown) {
+      setError(errorText(err, action === 'remind' ? 'Could not send the reminder.' : 'Could not sign them out.'));
+    } finally {
+      setActing(null);
+    }
+  };
+
   const resolve = async (alertId: string) => {
     setResolving(alertId);
     setError(null);
@@ -126,6 +171,11 @@ export default function PlatformAlerts() {
       />
 
       <ErrorBanner message={error} />
+      {notice && (
+        <p role="status" className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">
+          {notice}
+        </p>
+      )}
 
       {/* The headline a super admin needs before reading anything else. */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -204,7 +254,7 @@ export default function PlatformAlerts() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-sm font-semibold">{typeLabel(a.alert_type)}</h3>
                     {a.severity === 'critical' && !a.is_resolved && (
-                      <span className="text-[10px] font-bold uppercase tracking-wide text-danger">
+                      <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-danger">
                         Critical
                       </span>
                     )}
@@ -214,16 +264,93 @@ export default function PlatformAlerts() {
                       </span>
                     )}
                   </div>
+                  {/* ADR-543 D4 — WHO, before what. A platform account has no
+                      company; a support viewer gets the role, not the handle. */}
+                  {a.subject_kind && (
+                    <p className="text-sm text-foreground mt-1.5">
+                      <span className="text-muted-foreground">
+                        {a.subject_kind === 'platform' ? 'Platform staff' : 'Account'}
+                      </span>{' '}
+                      {a.subject_ref
+                        ? <span className="font-mono font-semibold">{a.subject_ref}</span>
+                        : <span className="italic text-muted-foreground">hidden from support</span>}
+                      {a.subject_role && <> · {roleLabel(a.subject_role)}</>}
+                      {a.subject_kind === 'employee' && a.company_id && (
+                        <> · {companies[a.company_id] ?? `Company ${a.company_id.slice(0, 8)}`}</>
+                      )}
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground mt-1">{a.message}</p>
+                  {!a.is_resolved && WHAT_TO_DO[a.alert_type] && (
+                    <p className="text-sm mt-2 rounded-lg border border-border bg-surface px-3 py-2">
+                      <span className="font-semibold">What to do: </span>
+                      {WHAT_TO_DO[a.alert_type]}
+                    </p>
+                  )}
+
+                  {/* ADR-544 — what has been done, so a second admin doesn't
+                      repeat it, and the two actions. Only when the handle is
+                      visible: support gets subject_ref=null and never acts. */}
+                  {(a.reminded_at || a.sessions_ended_at) && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      {a.reminded_at && (
+                        <>Reminder sent {sinceLabel(a.reminded_at)}{a.reminded_by_email && ` by ${a.reminded_by_email}`}
+                          {a.reminder_count > 1 && ` (${a.reminder_count} so far)`}</>
+                      )}
+                      {a.reminded_at && a.sessions_ended_at && ' · '}
+                      {a.sessions_ended_at && (
+                        <>Signed out everywhere {sinceLabel(a.sessions_ended_at)}{a.sessions_ended_by_email && ` by ${a.sessions_ended_by_email}`}</>
+                      )}
+                    </p>
+                  )}
+                  {!a.is_resolved && a.subject_ref && ACTIONABLE.has(a.alert_type) && (
+                    confirmSignOut === a.id ? (
+                      <div className="mt-3 rounded-lg border border-danger/40 bg-danger/5 p-3 space-y-2">
+                        <p className="text-sm">
+                          This ends every session for <span className="font-mono font-semibold">{a.subject_ref}</span> and
+                          forgets their remembered devices. They'll have to set up two-step sign-in to get back in.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" onClick={() => setConfirmSignOut(null)}
+                                  className="btn-ghost text-sm px-3 py-2 min-h-11">Cancel</button>
+                          <button type="button" onClick={() => actOnAccount(a.id, 'sign-out')}
+                                  disabled={acting === a.id}
+                                  className="btn-danger text-sm px-3 py-2 min-h-11 disabled:opacity-50">
+                            {acting === a.id ? 'Signing out…' : 'Sign them out now'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => actOnAccount(a.id, 'remind')}
+                                disabled={acting === a.id}
+                                className="btn-secondary text-sm px-3 py-2 min-h-11 flex items-center gap-1.5 disabled:opacity-50">
+                          <Mail className="w-4 h-4" aria-hidden="true" />
+                          {acting === a.id ? 'Sending…' : 'Email a reminder'}
+                        </button>
+                        <button type="button" onClick={() => setConfirmSignOut(a.id)}
+                                className="btn-ghost text-sm px-3 py-2 min-h-11 flex items-center gap-1.5 text-danger">
+                          <LogOut className="w-4 h-4" aria-hidden="true" />
+                          Sign them out
+                        </button>
+                      </div>
+                    )
+                  )}
 
                   <p className="text-xs text-muted-foreground mt-2">
-                    {/* Scope first: "every tenant" vs "one company" changes the response. */}
-                    <span className="font-medium">
-                      {a.company_id
-                        ? (companies[a.company_id] ?? `Company ${a.company_id.slice(0, 8)}`)
-                        : 'All companies'}
-                    </span>
-                    {' · '}
+                    {/* Scope first: "every tenant" vs "one company" changes the
+                        response. An account alert already named its company
+                        (or "Platform staff") on the subject line. */}
+                    {!a.subject_kind && (
+                      <>
+                        <span className="font-medium">
+                          {a.company_id
+                            ? (companies[a.company_id] ?? `Company ${a.company_id.slice(0, 8)}`)
+                            : 'All companies'}
+                        </span>
+                        {' · '}
+                      </>
+                    )}
                     {/* occurrence_count and last_seen are what distinguish "still
                         failing" from "an alert exists" (ADR-335 D2). */}
                     {a.occurrence_count > 1 && `${a.occurrence_count} occurrences · `}

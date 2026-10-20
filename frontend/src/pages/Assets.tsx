@@ -13,6 +13,8 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import CompanyZoneMap from '../components/OperatingZoneMap';
 import { useConfirm } from '../hooks/useConfirm';
 import { roleLabel } from '../utils/roleLabels';
+import { RoleReviewDisclaimer, RoleSignOff, SetupWindowBanner, type SetupWindow } from '../components/SetupWindowNotice';
+import type { RoleTransitionRequest } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,11 +99,16 @@ const ROLES = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management
 // hired. This list used to offer 'driver' -- as the default -- which the server
 // refuses once a company is past onboarding, and it never offered
 // driver_trainee or field_supervisor.
-const CREATABLE_ROLES = ['trainee', 'driver_trainee', 'field_supervisor', 'dispatch', 'management', 'admin'];
+// ADR-538 D2: field_supervisor is earned now (promoted from driver).
+const CREATABLE_ROLES = ['trainee', 'driver_trainee', 'dispatch', 'management', 'admin'];
 const MANAGEMENT_CREATABLE_ROLES = ['trainee', 'driver_trainee', 'dispatch'];
 // ADR-532 D3. Edit corrects an existing employee's role, so it is wider than
 // invite -- but a manager may never grant a role at or above their own.
-const MANAGEMENT_NEVER_GRANTS = ['management', 'admin', 'field_supervisor'];
+const MANAGEMENT_NEVER_GRANTS = ['management', 'admin'];
+// ADR-537 D1: training is an Amazon requirement, so a manager cannot edit someone
+// straight into an earned role. Admins can (genuine corrections). Mirrors
+// EARNED_ROLES on the server; test_adr537 holds them equal.
+const EARNED_ROLES = ['walker', 'trainer', 'driver', 'captain', 'field_supervisor'];
 const PROTECTED_ROLES = ['management', 'admin'];
 
 const ROLE_CREATION_NOTICES: Partial<Record<string, string>> = {
@@ -179,9 +186,11 @@ type EmployeeFormProps = {
   onClose: () => void;
   isCreate: boolean;
   allowedRoles?: string[];
+  /** ADR-538: the company's setup window is open — a window-only role needs sign-off. */
+  setupWindowOpen?: boolean;
 };
 
-function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles = ROLES }: EmployeeFormProps) {
+function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles = ROLES, setupWindowOpen = false }: EmployeeFormProps) {
   const defaultRole = allowedRoles[0] ?? 'trainee';
   const [form, setForm] = useState({
     name:         initial.name         ?? '',
@@ -190,7 +199,10 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
     role:         initial.role         ?? defaultRole,
     phone_number: initial.phone_number ?? '',
   });
-  const [step,        setStep]        = useState<'form' | 'review'>('form');
+  const [step,        setStep]        = useState<'form' | 'signoff' | 'review'>('form');
+  const [signedOff,   setSignedOff]   = useState(false);
+  // ADR-538 D4: a role allowed only because the setup window is open.
+  const needsSignOff = isCreate && setupWindowOpen && EARNED_ROLES.includes(form.role);
   const [saving,      setSaving]      = useState(false);
   const [error,       setError]       = useState('');
   const [phoneError,  setPhoneError]  = useState('');
@@ -222,7 +234,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
       setDiscordError('Must be a numeric snowflake ID (17-20 digits)');
       return;
     }
-    if (isCreate) { setStep('review'); return; }
+    if (isCreate) { setStep(needsSignOff && !signedOff ? 'signoff' : 'review'); return; }
     handleSave();
   };
 
@@ -233,6 +245,8 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
       await onSave({
         ...form,
         phone_number: form.phone_number ? toE164Phone(form.phone_number) : '',
+        // ADR-538 D4: the server refuses a window-only grant without this.
+        ...(needsSignOff && signedOff ? { roles_reviewed: 'true' } : {}),
       });
     } catch (err: unknown) {
       setError(errorText(err, 'Something went wrong.'));
@@ -346,7 +360,12 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                       never able to fire. */}
                   <SelectMenu
                     value={form.role}
-                    options={allowedRoles.map(r => ({ value: r, label: roleLabel(r) }))}
+                    /* ADR-537: always show the employee's CURRENT role, even when
+                       this caller can't assign it (a manager editing a walker's
+                       phone) -- otherwise the dropdown renders blank. Leaving it
+                       unchanged is not a grant, so the server allows the save. */
+                    options={[...new Set([...(form.role && !allowedRoles.includes(form.role) ? [form.role] : []), ...allowedRoles])]
+                      .map(r => ({ value: r, label: roleLabel(r) }))}
                     placeholder="Select a role"
                     ariaLabel="Role"
                     /* portal: the rounded field wrapper above is
@@ -395,8 +414,14 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
         )}
 
         {/* ── STEP 2: Review (create only) ── */}
+        {step === 'signoff' && (
+          <RoleSignOff what="invite" onBack={() => setStep('form')}
+                       onConfirm={() => { setSignedOff(true); setStep('review'); }} />
+        )}
+
         {step === 'review' && (
           <div className="p-6 space-y-5">
+            {setupWindowOpen && <RoleReviewDisclaimer />}
             {error && (
               <div className="flex items-start gap-2 text-sm text-danger bg-danger/10 border border-danger/20 rounded-xl px-3 py-2.5">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -602,9 +627,21 @@ function PeopleTab() {
   const isAdmin                       = groups.includes('admin');
   const isManagement                  = groups.includes('management') && !isAdmin;
   const canImport                     = groups.includes('management') || isAdmin;
-  const allowedRoles                  = isManagement ? MANAGEMENT_CREATABLE_ROLES : CREATABLE_ROLES;
+  // ADR-538: the company setup window decides how wide the role lists are.
+  // The server re-checks every grant; this only decides what to offer.
+  const [setupWin, setSetupWin]       = useState<SetupWindow | null>(null);
+  useEffect(() => {
+    axiosClient.get<SetupWindow>('/employees/setup-window')
+      .then(r => setSetupWin(r.data))
+      .catch(() => setSetupWin(null));   // unknown → treat as closed (narrow lists)
+  }, []);
+  const windowOpen                    = !!setupWin?.open;
+  const belowManager                  = ROLES.filter(r => !MANAGEMENT_NEVER_GRANTS.includes(r));
+  const allowedRoles                  = windowOpen
+    ? (isManagement ? belowManager : ROLES)
+    : (isManagement ? MANAGEMENT_CREATABLE_ROLES : CREATABLE_ROLES);
   const editableRoles                 = isManagement
-    ? ROLES.filter(r => !MANAGEMENT_NEVER_GRANTS.includes(r))
+    ? (windowOpen ? belowManager : belowManager.filter(r => !EARNED_ROLES.includes(r)))
     : ROLES;
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
@@ -703,8 +740,10 @@ function PeopleTab() {
   useEffect(() => { load(); }, []);
 
   const handleCreate = async (data: Record<string, string>) => {
-    const payload: Record<string, string | null> = { ...data };
+    const { roles_reviewed, ...rest } = data;
+    const payload: Record<string, string | boolean | null> = { ...rest };
     if (!payload.phone_number) payload.phone_number = null;
+    if (roles_reviewed === 'true') payload.roles_reviewed = true;   // ADR-538 D4
     const res = await axiosClient.post('/employees/', payload);
     setEmployees(prev => [...prev, res.data]);
     setShowModal(false);
@@ -893,21 +932,27 @@ function PeopleTab() {
     walker:  ['trainer', 'captain'],
     trainer: ['captain', 'walker'],
     captain: ['trainer', 'walker'],
+    // ADR-537 D2: the driver promotion the server has allowed since 2026-08-22 but
+    // no client could reach (the request schema rejected "driver").
+    driver_trainee: ['driver'],
+    // ADR-538 D2: field supervisor, one notch above driver.
+    driver: ['field_supervisor'],
+    field_supervisor: ['driver'],
   };
-  const ROLE_RANK: Record<string, number> = { walker: 0, trainer: 1, captain: 2 };
+  const ROLE_RANK: Record<string, number> = { walker: 0, trainer: 1, captain: 2, driver_trainee: 0, driver: 1, field_supervisor: 2 };
 
   const handleTransition = async (emp: Employee, newRole: string) => {
     const isPromotion = (ROLE_RANK[newRole] ?? 0) > (ROLE_RANK[emp.role] ?? 0);
-    const label = newRole.charAt(0).toUpperCase() + newRole.slice(1);
+    const label = roleLabel(newRole);
 
     const ok = await confirm({
       title: isPromotion ? `Promote to ${label}` : `Change to ${label}`,
       message: isPromotion
-        ? `Promote ${emp.name} from ${emp.role} to ${newRole}?` +
+        ? `Promote ${emp.name} from ${roleLabel(emp.role)} to ${roleLabel(newRole)}?` +
           (newRole === 'captain'
             ? ' They will start truck familiarisation on their next dispatch.'
             : '')
-        : `Change ${emp.name} from ${emp.role} to ${newRole}? ` +
+        : `Change ${emp.name} from ${roleLabel(emp.role)} to ${roleLabel(newRole)}? ` +
           `They will lose ${emp.role} permissions on their next login.` +
           (emp.role === 'captain' ? ' Any truck pin they hold will be cleared.' : ''),
       confirmLabel: isPromotion ? 'Promote' : 'Change Role',
@@ -918,9 +963,30 @@ function PeopleTab() {
     setPromotingId(emp.id);
     setPromoteMsg(null);
     try {
-      const res = await axiosClient.post(`/employees/${emp.id}/transition`, {
-        new_role: newRole,
-      });
+      let res;
+      try {
+        res = await axiosClient.post(`/employees/${emp.id}/transition`,
+          { new_role: newRole } as RoleTransitionRequest);
+      } catch (err: unknown) {
+        // ADR-537 D3: a driver trainee with phases left. The server names them;
+        // management/admin may promote anyway, but only after seeing which.
+        const detail = (err as { response?: { status?: number; data?: { detail?: { code?: string; remaining_phases?: number[] } } } })
+          ?.response;
+        const phases = detail?.status === 409 && detail.data?.detail?.code === 'phases_incomplete'
+          ? detail.data.detail.remaining_phases ?? [] : null;
+        if (!phases) throw err;
+        const override = await confirm({
+          title: 'Driver training not complete',
+          message: `${emp.name} has not completed phase${phases.length === 1 ? '' : 's'} ` +
+            `${phases.join(', ')} of driver training. Training is an Amazon requirement. ` +
+            'Promote to driver anyway? This is recorded in the audit log.',
+          confirmLabel: 'Promote anyway',
+          variant: 'danger',
+        });
+        if (!override) return;
+        res = await axiosClient.post(`/employees/${emp.id}/transition`,
+          { new_role: newRole, confirm_incomplete: true } as RoleTransitionRequest);
+      }
       setEmployees(prev => prev.map(e => (e.id === emp.id ? res.data : e)));
       setPromoteMsg({
         id: emp.id,
@@ -978,6 +1044,9 @@ function PeopleTab() {
   return (
     <div className="space-y-5">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+
+      {/* ADR-538: while the setup window is open, the first thing on the page. */}
+      {setupWin?.open && <SetupWindowBanner w={setupWin} />}
 
       {/* KPI summary */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -1632,6 +1701,7 @@ function PeopleTab() {
           onSave={handleCreate}
           onClose={() => setShowModal(false)}
           allowedRoles={allowedRoles}
+          setupWindowOpen={windowOpen}
         />
       )}
       {editTarget && (
@@ -1647,6 +1717,7 @@ function PeopleTab() {
         <BulkImportModal
           onClose={() => setShowImport(false)}
           onComplete={() => { setShowImport(false); load(); }}
+          setupWindowOpen={windowOpen}
         />
       )}
     </div>

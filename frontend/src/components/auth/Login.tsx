@@ -16,8 +16,16 @@ export default function Login() {
   /* Written by useSessionTimeout on the way out (ADR-463). Read once: a
      reload should not keep re-announcing an old sign-out. */
   const [sessionEnded] = useState<string | null>(() => {
-    const v = new URLSearchParams(window.location.search).get('ended');
-    return v === 'idle' || v === 'absolute' ? v : null;
+    // The URL, or the reason axiosClient stored before signing out (it can lose
+    // the race to App's plain <Navigate to="/login">). Read once, then cleared.
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem('asheflow_session_ended');
+      sessionStorage.removeItem('asheflow_session_ended');
+    } catch { /* private mode */ }
+    const v = new URLSearchParams(window.location.search).get('ended') ?? stored;
+    return v === 'idle' || v === 'absolute' || v === 'credentials'
+      || v === 'password' || v === 'email' ? v : null;
   });
   /* ADR-362 — the step sign-in stopped on, if any.
      This was a single `isNewPasswordRequired` boolean plus a catch-all that
@@ -251,11 +259,23 @@ export default function Login() {
           {/* ADR-529 D3: hidden once a challenge is up -- it explains the LAST
               session, and in red over a code field it reads as this attempt
               failing. */}
-          {sessionEnded && !challengeStep && (
+          {/* ADR-541: 'password' / 'email' are this person's own change, so
+              they read as a success; 'credentials' is another device's change
+              ending this session, which the person needs to notice. */}
+          {sessionEnded && !challengeStep && (sessionEnded === 'password' || sessionEnded === 'email') && (
+            <div className="bg-success/5 text-success px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-success/20">
+              {sessionEnded === 'password'
+                ? 'Password changed. You were signed out everywhere. Sign in with your new password.'
+                : 'Email updated. You were signed out everywhere. Sign in to continue.'}
+            </div>
+          )}
+          {sessionEnded && !challengeStep && sessionEnded !== 'password' && sessionEnded !== 'email' && (
             <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">
               {sessionEnded === 'idle'
                 ? 'You were signed out after a period of inactivity. Sign in to continue.'
-                : 'Your session reached its time limit. Sign in to continue.'}
+                : sessionEnded === 'credentials'
+                  ? "You were signed out because this account's password or email was changed. If that wasn't you, tell your manager straight away."
+                  : 'Your session reached its time limit. Sign in to continue.'}
             </div>
           )}
 

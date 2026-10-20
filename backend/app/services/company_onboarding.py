@@ -38,41 +38,62 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func
+
 from app.models.employee import Employee
 
 logger = logging.getLogger(__name__)
 
-# Roles that mean "this company is operating". Deliberately NOT
-# constants.FIELD_ROLES: that tuple has no importers and is shadowed by a
-# different set in employees.py, so depending on it would tie this rule to a
-# constant nobody maintains. Listed here with the reason instead.
-#
-# `driver_trainee` and `trainee` COUNT. A company that has started training
-# someone is operating — its next hire is a hire, not a migration.
-OPERATING_ROLES: frozenset[str] = frozenset({
-    "driver", "walker", "trainer", "trainee", "captain", "driver_trainee",
-    "field_supervisor",
-})
+# ADR-538. The setup window: a new company may add its EXISTING, already-trained
+# staff at their real roles. Owner, 2026-10-18: open while 10 or fewer people
+# have a sign-in account AND the company is within 30 days of creation.
+SETUP_WINDOW_MAX_ACCOUNTS = 10
+SETUP_WINDOW_DAYS = 30
+
+
+def setup_window(db: Session, company_id: UUID) -> dict:
+    """The window's state, for the gate and for the People page banner.
+
+    `registered` counts employees with a sign-in account (cognito_sub set), ANY
+    status -- deactivated included -- so the count only rises and the window
+    never reopens. Not `is_active`: seed scripts write rows active with no
+    account (dsp-test: 132 active, 14 accounts), which would close the window
+    before a real person had joined.
+    """
+    from app.models.company import Company  # local: avoid a models import cycle at module load
+    registered = (
+        db.query(func.count(Employee.id))
+        .filter(Employee.company_id == company_id, Employee.cognito_sub.isnot(None))
+        .scalar()
+    ) or 0
+    created = db.query(Company.created_at).filter(Company.id == company_id).scalar()
+    now = datetime.now(timezone.utc)
+    if created is None:
+        # Fail CLOSED: an unknown company is not in a setup window. (The first
+        # draft set closes_at = now and then tested now <= closes_at -- true --
+        # so a missing company read as OPEN. Caught by the ADR-537 tests.)
+        return {"open": False, "registered": registered, "limit": SETUP_WINDOW_MAX_ACCOUNTS,
+                "days_left": 0, "closes_at": None}
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    closes_at = created + timedelta(days=SETUP_WINDOW_DAYS)
+    remaining = closes_at - now
+    days_left = max(0, remaining.days + (1 if remaining.seconds else 0)) if remaining.total_seconds() > 0 else 0
+    open_ = registered <= SETUP_WINDOW_MAX_ACCOUNTS and now <= closes_at
+    return {"open": open_, "registered": registered, "limit": SETUP_WINDOW_MAX_ACCOUNTS,
+            "days_left": days_left if open_ else 0, "closes_at": closes_at}
 
 
 def is_onboarding(db: Session, company_id: UUID) -> bool:
-    """True when this company has no active field staff yet.
+    """True while the company is in its setup window (ADR-538).
 
-    `is_active` is the test, not row existence: employees are created
-    `is_active=False` and pending_verification, so a company mid-import — rows
-    written, nobody registered — is still onboarding. Otherwise the first
-    imported row would close the window on the second.
+    Was (ADR-285): "no active field staff". That closed the window on the first
+    imported worker to sign in -- a second import batch was refused -- and was
+    fooled by seeded rows marked active with no account.
     """
-    exists = (
-        db.query(Employee.id)
-        .filter(
-            Employee.company_id == company_id,
-            Employee.is_active == True,
-            Employee.role.in_(tuple(OPERATING_ROLES)),
-        )
-        .first()
-    )
-    return exists is None
+    return setup_window(db, company_id)["open"]
 
 
 def onboarding_note(db: Session, company_id: UUID) -> str | None:
@@ -85,6 +106,6 @@ def onboarding_note(db: Session, company_id: UUID) -> str | None:
     if not is_onboarding(db, company_id):
         return None
     return (
-        "created during the company onboarding window (no active field staff); "
-        "earned-role restrictions did not apply"
+        "created during the company setup window (10 or fewer sign-ups, first 30 days; "
+        "ADR-538); earned-role restrictions did not apply"
     )

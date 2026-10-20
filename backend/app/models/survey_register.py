@@ -60,7 +60,8 @@ AREA_KINDS = ("nta", "cd")              # 2020 Neighborhood Tabulation Area, Com
 CLAIM_HOURS = 48                        # D3: a claim lapses back to open after this
 MAX_ACTIVE_CLAIMS = 3                   # D3: per writer, so no one hoards an area
 REVISIT_DAYS = 180                      # D4: a done block re-opens after this
-CLAIM_RELEASE_REASONS = ("released", "walk_closed", "area_closed")
+# "staff_released": platform staff freed a stuck claim, with a reason (ADR-545 D4).
+CLAIM_RELEASE_REASONS = ("released", "walk_closed", "area_closed", "staff_released")
 BOROUGHS = ("1", "2", "3", "4", "5")    # AddressPoint boroughcode: MN BX BK QN SI
 
 

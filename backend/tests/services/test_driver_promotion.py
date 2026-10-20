@@ -41,10 +41,12 @@ class TestVerdictClassification:
         assert "still needs to complete the documentation" in w["message"]
 
     def test_every_verdict_asks_for_the_same_action(self):
-        """All three end in 'promote them' — the decision surface is one place."""
+        """All three end in the same action — the decision surface is one place.
+        ADR-537 D5: the action names who can take it (management or an admin),
+        because dispatch, who sees this warning, cannot promote."""
         for v in ("passed", "failed", "unrecorded"):
             w = promotion_warning({"employee_id": "e", "employee_name": "A", "verdict": v})
-            assert "Promote them to driver from the employee page." in w["message"]
+            assert "Management or an admin promotes them to driver from the employee page." in w["message"]
 
 
 class TestReadiness:

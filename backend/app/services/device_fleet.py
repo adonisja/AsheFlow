@@ -40,20 +40,33 @@ logger = logging.getLogger(__name__)
 MAX_REMEMBERED_DEVICES = 3
 
 # How long a remembered device may skip the MFA challenge before it is forgotten
-# and the next sign-in re-challenges (ADR-385).
+# and the next sign-in re-challenges (ADR-385; privileged rule ADR-540).
 #
 # These bound how LONG one device stays trusted; MAX_REMEMBERED_DEVICES bounds
 # how MANY are trusted at once. Neither subsumes the other: without the age
 # bound, a single daily-driver device is remembered forever; without the count
 # cap, a user accumulates unbounded trusted devices.
 #
-# 24h for privileged matches NIST SP 800-63B's AAL2 reauthentication ceiling.
-# 7d for field is deliberately below Duo's 30-day default -- the trend is
-# downward against MFA-targeting attacks -- while staying far from the
-# per-session challenge a field user cannot tolerate: their app backgrounds and
-# drops sessions constantly on unreliable mobile networks.
-PRIVILEGED_DEVICE_TTL = timedelta(hours=24)
-FIELD_DEVICE_TTL = timedelta(days=7)
+# Privileged: 12h since the device last PASSED MFA (its DeviceCreateDate --
+# forgetting deletes the record, so the next challenged sign-in creates a new
+# one). Not since last USE: ADR-385 shipped an idle rule, and a laptop used
+# every morning was never re-challenged at all (ADR-540). 12h is the owner's
+# choice: an 8-hour shift plus a buffer. It is STRICTER than NIST SP 800-63B-4
+# AAL2 ("SHOULD be no more than 24 hours") and equal to AAL3 (12h). The 12h
+# AAL2 figure is from the withdrawn 800-63-3 -- see the ADR-463 lesson, which
+# ADR-540 nearly repeated.
+#
+# Field: 7 days since the last MFA too (owner, 2026-10-18). It was 7 days IDLE,
+# which gave a phone in daily use no overall bound at all -- and 800-63B-4's one
+# SHALL at every level is that an overall reauthentication timeout exists (AAL1
+# SHOULD be <= 30 days). 7 days stays far from the per-session challenge a field
+# user cannot tolerate: their app backgrounds and drops sessions constantly.
+#
+# Both tiers now measure from the last MFA, so the idle device rule (ADR-385's
+# select_stale) is gone. "Last use" survives only in the COUNT rule below,
+# where it correctly picks which device to evict first.
+PRIVILEGED_CHALLENGE_TTL = timedelta(hours=12)   # since DeviceCreateDate
+FIELD_DEVICE_TTL = timedelta(days=7)             # since DeviceCreateDate
 
 # Cognito's own ceiling for one AdminListDevices page. A user at the cap has
 # ~3 devices, so one page is always enough -- but ask for the max so a user who
@@ -66,6 +79,14 @@ class Device:
     key: str
     last_auth: Optional[datetime]
     remembered: bool
+    # When the device last passed MFA (ADR-540). Defaulted so the count rule's
+    # callers, which never needed it, are unchanged.
+    created: Optional[datetime] = None
+
+    @property
+    def created_key(self) -> datetime:
+        """Missing creation date sorts OLDEST: an unproven device is not trusted."""
+        return self.created or datetime.min.replace(tzinfo=timezone.utc)
 
     @property
     def sort_key(self) -> datetime:
@@ -86,6 +107,7 @@ def parse_devices(raw: list[dict]) -> list[Device]:
         out.append(Device(
             key=d["DeviceKey"],
             last_auth=d.get("DeviceLastAuthenticatedDate"),
+            created=d.get("DeviceCreateDate"),
             # Only remembered devices skip the challenge, so only they count
             # against the cap. A "not_remembered" row is inert.
             remembered=attrs.get("dev:device_remembered_status") == "remembered",
@@ -118,30 +140,28 @@ def select_for_eviction(devices: list[Device], cap: int = MAX_REMEMBERED_DEVICES
     return remembered[: len(remembered) - cap]
 
 
-def select_stale(devices: list[Device], ttl: timedelta,
-                 now: Optional[datetime] = None) -> list[Device]:
-    """Which remembered devices have not been used within `ttl`.
+def select_unchallenged(devices: list[Device], max_age: timedelta,
+                        now: Optional[datetime] = None) -> list[Device]:
+    """Which remembered devices last passed MFA more than `max_age` ago (ADR-540).
 
-    Distinct from select_for_eviction, which sorts by COUNT to a cap. This is
-    the AGE rule (ADR-385) and the two are not interchangeable.
+    The age rule for both tiers. USE does not extend it: a device signed in on
+    every hour is still forgotten `max_age` after its challenge -- ADR-385's
+    idle rule never re-challenged a device in daily use (ADR-540).
 
-    Only remembered devices are returned: a device already marked
-    `not_remembered` is inert -- it is challenged on every sign-in already, and
-    forgetting it would be a wasted API call.
-
-    A device with no DeviceLastAuthenticatedDate is treated as INFINITELY OLD,
-    matching Device.sort_key. It has never completed an auth, so it has no claim
-    to be trusted; the alternative -- treating a missing timestamp as "now" --
-    would make an unproven device permanently un-forgettable.
+    Only remembered devices are returned: a `not_remembered` device is already
+    challenged on every sign-in. Strictly past: a device challenged exactly
+    `max_age` ago survives that tick.
     """
     now = now or datetime.now(timezone.utc)
-    cutoff = now - ttl
-    return [d for d in devices if d.remembered and d.sort_key < cutoff]
+    cutoff = now - max_age
+    return [d for d in devices if d.remembered and d.created_key < cutoff]
 
 
 def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
                  now: Optional[datetime] = None) -> int:
-    """Forget this user's remembered devices unused within `ttl`. Returns count.
+    """Forget this user's remembered devices that passed MFA more than `ttl` ago.
+
+    Returns the count (ADR-385; age measured from the last MFA since ADR-540).
 
     Never raises, for the same reason enforce_cap does not: this runs unattended
     on a schedule, and one user's AWS hiccup must not abort the sweep for
@@ -159,7 +179,7 @@ def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
         logger.warning("device_fleet: could not list devices: %s", type(exc).__name__)
         return 0
 
-    doomed = select_stale(parse_devices(resp.get("Devices", [])), ttl, now)
+    doomed = select_unchallenged(parse_devices(resp.get("Devices", [])), ttl, now)
     forgotten = 0
     for d in doomed:
         try:

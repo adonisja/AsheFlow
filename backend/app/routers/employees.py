@@ -6,10 +6,10 @@ from typing import List, Union
 from uuid import UUID
 from botocore.exceptions import ClientError
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (RoleChecker, Pagination, get_caller_employee,
@@ -18,6 +18,8 @@ from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
+from app.models.employee import VALID_ROLES as Employee_VALID_ROLES
+from app.services import account_security
 from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
 from app.schemas.employee import (
@@ -29,7 +31,7 @@ from app.schemas.employee import (
 from app.services.audit import write_audit
 from app.api.ratelimit import limiter
 from app.services import mfa_containment
-from app.services.company_onboarding import is_onboarding
+from app.services.company_onboarding import is_onboarding, setup_window
 from app.services.email import send_invite_email
 from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
@@ -208,6 +210,10 @@ def create_employee(
     refusal = _grant_refusal(caller.role, employee.role, onboarding)
     if refusal:
         raise HTTPException(status_code=refusal[0], detail=refusal[1])
+    # ADR-538 D4: a role allowed only because the setup window is open needs the
+    # caller's sign-off that every role was reviewed.
+    if onboarding and employee.role in EARNED_ROLES and not employee.roles_reviewed:
+        raise HTTPException(status_code=400, detail=WINDOW_SIGNOFF_REQUIRED)
 
     if employee.email and db.query(Employee).filter(
         Employee.company_id == caller.company_id,
@@ -217,7 +223,7 @@ def create_employee(
 
     now = datetime.now(timezone.utc)
     db_employee = Employee(
-        **employee.model_dump(),
+        **employee.model_dump(exclude={"roles_reviewed"}),
         company_id=caller.company_id,
         is_active=False,
         account_status="pending_verification",
@@ -247,7 +253,7 @@ def create_employee(
                 "email": db_employee.email,
                 # ADR-285: without this, a later reader sees a captain who never
                 # earned it and no record of why they were allowed.
-                **({"onboarding_window": True}
+                **({"onboarding_window": True, "window_signoff": True}
                    if onboarding and db_employee.role in EARNED_ROLES else {}),
             },
         )
@@ -303,6 +309,7 @@ def create_employee(
 @router.post("/bulk", response_model=List[BulkImportResult], status_code=status.HTTP_200_OK)
 def bulk_import_employees(
     rows: List[BulkImportRow],
+    roles_reviewed: bool = Query(False, description="ADR-538 D4: the caller's sign-off that every role was reviewed"),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
     db: Session = Depends(get_db),
@@ -342,7 +349,12 @@ def bulk_import_employees(
             ))
             continue
 
-        if db.query(Employee).filter(
+        # ADR-538 D7: only when the row HAS one. `Employee.discord_id == None`
+        # compiles to `IS NULL`, so a row without a Discord ID "matched" every
+        # employee without one -- the first such row imported and every later one
+        # was skipped as "Discord ID already exists", while the invite form calls
+        # the field optional.
+        if row.discord_id and db.query(Employee).filter(
             Employee.company_id == caller.company_id,
             Employee.discord_id == row.discord_id,
         ).first():
@@ -364,6 +376,8 @@ def bulk_import_employees(
         # granting -- a manager's CSV row with role=admin was created, and that
         # person was an admin the moment they registered.
         refusal = _grant_refusal(caller.role, row.role, onboarding)
+        if not refusal and onboarding and row.role in EARNED_ROLES and not roles_reviewed:
+            refusal = (400, WINDOW_SIGNOFF_REQUIRED)   # ADR-538 D4
         if refusal:
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
@@ -421,7 +435,8 @@ def bulk_import_employees(
                 "name": row.name, "role": row.role, "email": str(row.email), "row": i,
                 # ADR-285 — same trace as the single-create path. A migrated
                 # captain and a wrongly-created one look identical without it.
-                **({"onboarding_window": True} if onboarding and row.role in EARNED_ROLES else {}),
+                **({"onboarding_window": True, "window_signoff": True}
+                   if onboarding and row.role in EARNED_ROLES else {}),
             },
         )
 
@@ -476,6 +491,13 @@ PROTECTED_ROLES   = {"management", "admin"}
 ESCALATION_ROLES  = ("admin", "management")
 
 
+# ADR-538 D4. The refusal when a setup-window grant arrives without the sign-off.
+WINDOW_SIGNOFF_REQUIRED = (
+    "This company is in its setup window, so this role can be granted directly -- but "
+    "only after you review and sign off on every role: new hires start as Trainee or "
+    "Driver Trainee; experienced staff keep their current role."
+)
+
 # ADR-532. Who may GRANT which role, on every path that sets one (create, bulk
 # import, edit). Owner's rule, 2026-10-17: admins hire any hiring role; managers
 # hire trainees, driver trainees and dispatchers; nobody else hires at all
@@ -487,13 +509,15 @@ ESCALATION_ROLES  = ("admin", "management")
 # frontend/src/pages/Assets.tsx; tests/routers/test_adr532_role_grants.py holds
 # the two equal.
 ROLE_GRANTS: dict[str, frozenset[str]] = {
-    "admin": frozenset({"trainee", "driver_trainee", "field_supervisor",
-                        "dispatch", "management", "admin"}),
+    # ADR-538 D2: field_supervisor moved to EARNED_ROLES (promoted from driver).
+    "admin": frozenset({"trainee", "driver_trainee", "dispatch", "management", "admin"}),
     "management": frozenset({"trainee", "driver_trainee", "dispatch"}),
 }
 
 # What management may never grant, on any path, onboarding or not.
-_MANAGEMENT_NEVER_GRANTS = frozenset({"management", "admin", "field_supervisor"})
+# ADR-538 D2: field_supervisor is a field role now (one notch below manager),
+# granted by a manager inside the setup window, by promotion outside it.
+_MANAGEMENT_NEVER_GRANTS = frozenset({"management", "admin"})
 
 
 def _grant_refusal(caller_role: str, role: str, onboarding: bool):
@@ -504,7 +528,7 @@ def _grant_refusal(caller_role: str, role: str, onboarding: bool):
     """
     if caller_role == "management" and role in _MANAGEMENT_NEVER_GRANTS:
         return (status.HTTP_403_FORBIDDEN,
-                "Managers can invite trainees, driver trainees and dispatchers.")
+                "Managers cannot invite managers or admins.")
     if role in EARNED_ROLES:
         if onboarding:
             return None  # ADR-285: migrating existing staff is not hiring
@@ -517,7 +541,7 @@ def _grant_refusal(caller_role: str, role: str, onboarding: bool):
     return None
 
 
-def _edit_grant_refusal(caller_role: str, new_role: str):
+def _edit_grant_refusal(caller_role: str, new_role: str, onboarding: bool = False):
     """(status, detail) if `caller_role` may not CHANGE someone to `new_role`.
 
     Wider than create on purpose (ADR-532 D3): edit is where an existing
@@ -526,10 +550,19 @@ def _edit_grant_refusal(caller_role: str, new_role: str):
     """
     if caller_role == "admin":
         return None
+    # ADR-537 D1: training is an Amazon requirement. A manager cannot edit someone
+    # straight into an earned role (walker/trainer/driver/captain); those are
+    # reached by the graduation quiz, the driver promotion, or the promote buttons.
+    # Admins keep it for genuine corrections (owner, 2026-10-18).
+    # ADR-538 D3: inside the setup window a manager may set them (existing staff).
+    if caller_role == "management" and new_role in EARNED_ROLES and not onboarding:
+        return (status.HTTP_403_FORBIDDEN,
+                "Only admins can set walker, trainer, driver, captain or field supervisor "
+                "directly. Use the promote buttons, or let training and the graduation quiz do it.")
     if caller_role == "management" and new_role not in _MANAGEMENT_NEVER_GRANTS:
         return None
     return (status.HTTP_403_FORBIDDEN,
-            "Only admins can give someone a management, admin or field supervisor role.")
+            "Only admins can give someone a management or admin role.")
 
 
 def _assert_not_protected(caller_groups: set, target_role: str) -> None:
@@ -539,6 +572,20 @@ def _assert_not_protected(caller_groups: set, target_role: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can modify management or admin accounts.",
         )
+
+
+@router.get("/setup-window")
+def get_setup_window(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """The company's setup window (ADR-538): open while 10 or fewer people have a
+    sign-in account and the company is within 30 days of creation. Feeds the
+    People page banner, the widened role lists and the sign-off dialog. The
+    server re-checks on every grant; this only decides what to show."""
+    w = setup_window(db, caller.company_id)
+    return {**w, "closes_at": w["closes_at"].isoformat() if w["closes_at"] else None}
 
 
 @router.get(
@@ -1075,7 +1122,8 @@ def update_employee(
     # role being granted, so a manager could edit any driver to role=admin and
     # the Cognito group sync below made it real.
     if new_role and new_role != old_role:
-        refusal = _edit_grant_refusal(caller.role, new_role)
+        refusal = _edit_grant_refusal(caller.role, new_role,
+                                      onboarding=is_onboarding(db, caller.company_id))
         if refusal:
             raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
@@ -1675,12 +1723,18 @@ EARNED_ROLES: dict[str, str] = {
     # creatable at hire was an omission, not a decision: it let a new hire
     # hold a truck's route lead with no record of having run one.
     #
-    # field_supervisor is deliberately NOT here. Nothing promotes into it,
-    # so making it earned would leave it unreachable.
+    # field_supervisor WAS deliberately not here ("nothing promotes into it").
+    # ADR-538 D2: drivers are now promoted to it (ROLE_TRANSITIONS below), so it
+    # is earned like the others -- reachable, and not hireable outside the
+    # setup window.
     "captain": (
         "Captains are promoted from walkers or trainers once they have run a "
         "truck (ADR-256). Create them as a trainee, or promote an existing "
         "walker or trainer."
+    ),
+    "field_supervisor": (
+        "Field supervisors are promoted from drivers (ADR-538). Create them as a "
+        "driver trainee, or promote an existing driver."
     ),
 }
 
@@ -1698,6 +1752,9 @@ ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
     # supervising driver assigned to observe again, which is a dispatch action,
     # not a role change.
     "driver_trainee": ("driver",),
+    # ADR-538 D2: field supervisor sits one notch above driver.
+    "driver": ("field_supervisor",),
+    "field_supervisor": ("driver",),
 }
 
 # Which direction the change is, for the audit trail and the wording of the notice.
@@ -1706,7 +1763,7 @@ ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
 # walker ladder (ADR-264 D2), so the ranks do not interleave with it.
 _ROLE_RANK: dict[str, int] = {
     "walker": 0, "trainer": 1, "captain": 2,
-    "driver_trainee": 0, "driver": 1,
+    "driver_trainee": 0, "driver": 1, "field_supervisor": 2,
 }
 
 
@@ -1735,6 +1792,7 @@ def _apply_role_transition(
     db_employee: Employee,
     new_role: str,
     caller: Employee,
+    confirm_incomplete: bool = False,
 ) -> Employee:
     """Move an employee between field roles, with every side effect that implies.
 
@@ -1758,6 +1816,25 @@ def _apply_role_transition(
                 f"Allowed: {', '.join(allowed)}."
             ),
         )
+
+    # ADR-537 D3: a driver promotion with training phases left warns -- 409 with the
+    # phases -- and goes ahead only when the caller confirms. Server-side, so no
+    # client can skip the warning by omission.
+    remaining_phases: list[int] = []
+    if old_role == "driver_trainee" and new_role == "driver":
+        from app.services.driver_promotion import driver_phases_remaining
+        remaining_phases = driver_phases_remaining(db, db_employee)
+        if remaining_phases and not confirm_incomplete:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "phases_incomplete",
+                    "remaining_phases": remaining_phases,
+                    "message": ("Driver training is not complete: phase(s) "
+                                + ", ".join(str(p) for p in remaining_phases)
+                                + " remain. Confirm to promote anyway."),
+                },
+            )
 
     is_promotion = _ROLE_RANK.get(new_role, 0) > _ROLE_RANK.get(old_role, 0)
 
@@ -1841,7 +1918,10 @@ def _apply_role_transition(
         target_table="employees",
         target_id=str(db_employee.id),
         before={"role": old_role},
-        after={"role": new_role, "captain_pins_cleared": pins_cleared},
+        after={"role": new_role, "captain_pins_cleared": pins_cleared,
+               # ADR-537 D4: an override is on the record, with what it skipped.
+               **({"incomplete_override": True, "remaining_phases": remaining_phases}
+                  if remaining_phases else {})},
     )
     db.commit()
     db.refresh(db_employee)
@@ -1899,7 +1979,8 @@ def transition_employee_role(
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    return _apply_role_transition(db, db_employee, payload.new_role, caller)
+    return _apply_role_transition(db, db_employee, payload.new_role, caller,
+                                  confirm_incomplete=payload.confirm_incomplete)
 
 
 @router.post("/{employee_id}/promote", response_model=EmployeeResponse)
@@ -1995,9 +2076,136 @@ def set_injury_status(
     return employee
 
 
+# ── Credential changes (ADR-541) ─────────────────────────────────────────────
+#
+# Password and email changes are confirmed OUT OF BAND (a code to the verified
+# inbox) and END EVERY SESSION. Neither flow calls Cognito's USER-level APIs
+# (ChangePassword, UpdateUserAttributes, VerifyUserAttribute): ADR-541 D4 reads
+# those, seen in CloudTrail, as someone going around the app. The password code
+# is Cognito's own ForgotPassword code; the email codes are held by
+# services/account_security.py. Every role changes its own credentials, so the
+# gate is the full role list.
+
+_allow_self = RoleChecker(list(Employee_VALID_ROLES))
+
+_NO_EMAIL = (
+    "Your account has no email address yet. Ask your manager or an admin to add "
+    "it from the People page, then try again."
+)
+
+
+def _username_or_409(caller) -> str:
+    username = cognito_username_for(caller)
+    if not username:
+        raise HTTPException(status_code=409, detail="Your account isn't set up to sign in yet.")
+    return username
+
+
+class _PasswordConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(..., min_length=4, max_length=10)
+    new_password: str = Field(..., min_length=8, max_length=256)
+
+
+@router.get("/me/session", status_code=status.HTTP_200_OK)
+def check_session(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_self),
+):
+    """ADR-541 D2 amendment — the cheapest request that still runs the full
+    caller check, so an open tab learns within a minute (or on focus) that its
+    session was ended by a password or email change elsewhere. Reaching this
+    body means the session is still good; the refusal is get_caller_employee's
+    coded 401, which both clients already route on."""
+    return {"ok": True}
+
+
+@router.post("/me/password/request-code", status_code=status.HTTP_200_OK)
+def request_password_code(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_self),
+):
+    """Step 1 of a password change: email a code to the verified address.
+
+    Cognito's ForgotPassword sends it (branded by CustomMessage_ForgotPassword).
+    No current-password check -- ADR-541 R1: it would cost a real sign-in, and
+    the inbox is the barrier either way.
+    """
+    if not (caller.email or "").strip():
+        raise HTTPException(status_code=409, detail=_NO_EMAIL)
+    username = _username_or_409(caller)
+    if not account_security.allow_request(caller.id, "password"):
+        raise HTTPException(status_code=429, detail="Too many code requests. Try again in an hour.")
+    try:
+        _cognito_client().forgot_password(
+            ClientId=settings.aws_cognito_app_client_id, Username=username,
+        )
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "InvalidParameterException":
+            # Cognito's "no registered/verified email" -- an address in our DB
+            # that Cognito never verified.
+            raise HTTPException(status_code=409, detail=_NO_EMAIL)
+        if code in ("LimitExceededException", "TooManyRequestsException"):
+            raise HTTPException(status_code=429, detail="Too many code requests. Try again later.")
+        logger.error("forgot_password failed for %s: %s", caller.id, code)
+        raise HTTPException(status_code=500, detail="Couldn't send the code. Try again.")
+    return {"detail": "Code sent.", "sent_to": account_security.mask_email(caller.email)}
+
+
+@router.post("/me/password/confirm", status_code=status.HTTP_200_OK)
+def confirm_password_change(
+    payload: _PasswordConfirmRequest,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
+):
+    """Step 2: the code and the new password. Then every session ends (D2)."""
+    username = _username_or_409(caller)
+    try:
+        _cognito_client().confirm_forgot_password(
+            ClientId=settings.aws_cognito_app_client_id,
+            Username=username,
+            ConfirmationCode=payload.code.strip(),
+            Password=payload.new_password,
+        )
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "CodeMismatchException":
+            raise HTTPException(status_code=400, detail="That code isn't right. Check the email and try again.")
+        if code == "ExpiredCodeException":
+            raise HTTPException(status_code=400, detail="That code has expired. Send a new one.")
+        if code == "InvalidPasswordException":
+            raise HTTPException(
+                status_code=400,
+                detail="That password doesn't meet the rules: at least 8 characters, with upper and lower case letters, a number and a symbol.",
+            )
+        if code in ("LimitExceededException", "TooManyFailedAttemptsException", "TooManyRequestsException"):
+            raise HTTPException(status_code=429, detail="Too many attempts. Wait a few minutes and try again.")
+        logger.error("confirm_forgot_password failed for %s: %s", caller.id, code)
+        raise HTTPException(status_code=500, detail="Couldn't change your password. Try again.")
+
+    signed_out = account_security.end_all_sessions(caller, username)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="account.password_changed",
+        target_table="employees",
+        target_id=str(caller.id),
+        detail={"confirmed_by": "email_code", "signed_out_everywhere": signed_out},
+    )
+    db.commit()
+    return {"detail": "Password changed. Sign in with your new password.", "signed_out": True}
+
+
 class _EmailChangeRequest(BaseModel):
-    access_token: str
+    model_config = ConfigDict(extra="forbid")
     new_email: EmailStr
+
+
+_PENDING_EMAIL_KEY = "acctsec:pending_email:{}"
 
 
 @router.post("/me/email/request-change", status_code=status.HTTP_200_OK)
@@ -2005,44 +2213,59 @@ def request_email_change(
     payload: _EmailChangeRequest,
     caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
-    _: dict = Depends(RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])),
+    _: dict = Depends(_allow_self),
 ):
-    """Step 1: Request an email address change.
+    """Step 1 of an email change: a code to the CURRENT address and one to the NEW.
 
-    Calls Cognito UpdateUserAttributes with the user's own access token.
-    Cognito sends a verification code to the new email address.
+    ADR-541 R2. The current-address code proves the account owner (OWASP's
+    confirm-through-the-current-address step); the new-address code proves the
+    new inbox. A first email for an account with none is set by an admin (R3):
+    with no current address there is nothing to confirm against.
     """
+    current = (caller.email or "").strip().lower()
+    if not current:
+        raise HTTPException(status_code=409, detail=_NO_EMAIL)
     new_email = payload.new_email.strip().lower()
+    if new_email == current:
+        raise HTTPException(status_code=400, detail="That's already your email address.")
 
     existing = db.query(Employee).filter(
         Employee.email == new_email,
         Employee.company_id == caller.company_id,
         Employee.id != caller.id,
     ).first()
-
     if existing:
         raise HTTPException(status_code=409, detail="That email is already in use by another account.")
 
-    cognito = _cognito_client()
-    try:
-        cognito.update_user_attributes(
-            AccessToken=payload.access_token,
-            UserAttributes=[{"Name": "email", "Value": new_email}],
-        )
-    except ClientError as e:
-        code = e.response["Error"]["Code"]
-        if code == "NotAuthorizedException":
-            raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
-        logger.error("update_user_attributes failed for %s: %s", caller.id, e.response["Error"]["Code"])
-        raise HTTPException(status_code=500, detail="Failed to update email. Please try again.")
+    if not account_security.allow_request(caller.id, "email"):
+        raise HTTPException(status_code=429, detail="Too many code requests. Try again in an hour.")
 
-    return {"detail": "Verification code sent to the new email address."}
+    current_code = account_security.issue_code(caller.id, "email_current")
+    new_code = account_security.issue_code(caller.id, "email_new")
+    _get_redis().setex(_PENDING_EMAIL_KEY.format(caller.id), account_security.CODE_TTL_SECONDS, new_email)
+
+    from app.services.email import send_email_change_code
+    masked_new = account_security.mask_email(new_email)
+    try:
+        send_email_change_code(to_email=current, employee_name=caller.name, code=current_code,
+                               which="current", new_email_masked=masked_new, account_ref=str(caller.id))
+        send_email_change_code(to_email=new_email, employee_name=caller.name, code=new_code,
+                               which="new", new_email_masked=masked_new, account_ref=str(caller.id))
+    except ClientError:
+        account_security.discard_codes(caller.id, "email_current", "email_new")
+        raise HTTPException(status_code=502, detail="Couldn't send the codes. Try again.")
+
+    return {
+        "detail": "Codes sent.",
+        "current_masked": account_security.mask_email(current),
+        "new_masked": masked_new,
+    }
 
 
 class _EmailConfirmRequest(BaseModel):
-    access_token: str
-    code: str = Field(..., min_length=4, max_length=10)
-    new_email: EmailStr
+    model_config = ConfigDict(extra="forbid")
+    current_code: str = Field(..., min_length=4, max_length=10)
+    new_code: str = Field(..., min_length=4, max_length=10)
 
 
 @router.post("/me/email/confirm-change", status_code=status.HTTP_200_OK)
@@ -2050,40 +2273,75 @@ def confirm_email_change(
     payload: _EmailConfirmRequest,
     caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
 ):
-    """Step 2: Confirm the email change with the verification code.
+    """Step 2: both codes. Then the address changes, the old one is told, and
+    every session ends (D2/D3)."""
+    raw = _get_redis().get(_PENDING_EMAIL_KEY.format(caller.id))
+    if raw is None:
+        raise HTTPException(status_code=400, detail="Those codes have expired. Start the change again.")
+    new_email = raw.decode() if isinstance(raw, bytes) else raw
 
-    Calls Cognito VerifyUserAttribute, then updates the employee DB record.
-    """
-    new_email = payload.new_email.strip().lower()
-    code      = payload.code.strip()
+    for purpose, given, where in (("email_current", payload.current_code, "your current email"),
+                                  ("email_new", payload.new_code, "your new email")):
+        verdict = account_security.check_code(caller.id, purpose, given)
+        if verdict == "expired":
+            account_security.discard_codes(caller.id, "email_current", "email_new")
+            raise HTTPException(status_code=400, detail="Those codes have expired. Start the change again.")
+        if verdict == "wrong":
+            raise HTTPException(status_code=400, detail=f"The code sent to {where} isn't right.")
 
-    cognito = _cognito_client()
+    username = _username_or_409(caller)
     try:
-        cognito.verify_user_attribute(
-            AccessToken=payload.access_token,
-            AttributeName="email",
-            Code=code,
+        _cognito_client().admin_update_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=username,
+            UserAttributes=[
+                {"Name": "email", "Value": new_email},
+                {"Name": "email_verified", "Value": "true"},
+            ],
         )
     except ClientError as e:
-        code_name = e.response["Error"]["Code"]
-        if code_name == "CodeMismatchException":
-            raise HTTPException(status_code=400, detail="Incorrect verification code.")
-        if code_name == "ExpiredCodeException":
-            raise HTTPException(status_code=400, detail="Verification code has expired. Request a new one.")
-        if code_name == "NotAuthorizedException":
-            raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
-        logger.error("verify_user_attribute failed for %s: %s", caller.id, e.response["Error"]["Code"])
-        raise HTTPException(status_code=500, detail="Failed to verify email. Please try again.")
+        logger.error("admin_update_user_attributes failed for %s: %s", caller.id, e.response["Error"]["Code"])
+        raise HTTPException(status_code=500, detail="Couldn't update your email. Try again.")
 
-    # Cognito confirmed — sync to our DB
+    old_email = caller.email
     caller.email = new_email
     # ADR-445 D4 — a new address has not bounced.
     caller.email_bounced_at = None
     caller.email_bounce_type = None
+    signed_out = account_security.end_all_sessions(caller, username)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="account.email_changed",
+        target_table="employees",
+        target_id=str(caller.id),
+        detail={
+            "from": account_security.mask_email(old_email),
+            "to": account_security.mask_email(new_email),
+            "confirmed_by": "codes_to_both_addresses",
+            "signed_out_everywhere": signed_out,
+        },
+    )
     db.commit()
+    _get_redis().delete(_PENDING_EMAIL_KEY.format(caller.id))
 
-    return {"detail": "Email updated successfully.", "email": new_email}
+    # After the commit: the change stands even if the notice cannot be sent.
+    from app.services.email import send_email_changed_notice
+    try:
+        send_email_changed_notice(
+            to_email=old_email, employee_name=caller.name,
+            new_email_masked=account_security.mask_email(new_email),
+            when=datetime.now(timezone.utc).strftime("%d %B %Y at %H:%M UTC"),
+            account_ref=str(caller.id),
+        )
+    except ClientError:
+        pass  # logged by the sender with the account id
+
+    return {"detail": "Email updated. Sign in again.", "email": new_email, "signed_out": True}
 
 
 # ── Discord account linking (ADR-270) ────────────────────────────────────────
