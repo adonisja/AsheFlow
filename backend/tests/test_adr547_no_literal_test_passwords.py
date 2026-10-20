@@ -93,25 +93,35 @@ def _test_files():
 
 # ---------------------------------------------------------------- the planted samples
 
+def _plant(src: str) -> str:
+    """Fill each <PW> with a fresh generated password.
+
+    Planted samples are test code too, and a scanner reads the SOURCE, string
+    contents included: the first draft's typed samples were flagged twice, once
+    by this guard (Case 4) and once by GitGuardian (incident 38439881, the JS
+    sample sitting in a Python string). <PW> is the one placeholder EMBEDDED
+    accepts."""
+    while "<PW>" in src:
+        src = src.replace("<PW>", make_test_password(), 1)
+    return src
+
+
 def test_the_detectors_still_catch_what_they_exist_for():
-    # The shaped sample is generated: a planted literal here would be the
-    # very thing this file bans, and the scanner would flag it (first draft did).
-    shaped = make_test_password()
-    planted = '''
-f(password="x1")
-f(new_password="a" + "b" + "c")
-f(temp_password=f"x{'y'}")
-kw2 = {"passcode": f"pw-{1}"}
-kw = {"old_password": "x"}
-SEED_PASSWORD = "plain"
-pw_hash: str = "x"
-Login(user, "SHAPED")
-'''.replace("SHAPED", shaped)
+    positional = make_test_password()
+    planted = _plant('''
+f(password="<PW>")
+f(new_password="<PW>" + "<PW>")
+f(temp_password=f"x{'<PW>'}")
+kw = {"old_password": "<PW>"}
+SEED_PASSWORD = "<PW>"
+kw2 = {"passcode": f"<PW>-{1}"}
+pw_hash: str = "<PW>"
+''') + f'Login(user, "{positional}")\n'
     tree = ast.parse(planted)
     names = {n for _, n in named_literals(tree)}
     assert names == {"password", "new_password", "temp_password", "old_password",
                      "SEED_PASSWORD", "passcode"}, names
-    assert [v for _, v in shaped_constants(tree)] == [shaped]
+    assert positional in [v for _, v in shaped_constants(tree)]
 
 
 def test_the_detectors_leave_generated_and_non_password_values_alone():
@@ -158,8 +168,11 @@ def test_no_test_holds_a_password_shaped_string():
         "not itself a leak:\n  " + "\n  ".join(offenders))
 
 
-JS_NAMED = re.compile(
-    r"""\b\w*(?:pass(?:word|wd|phrase|code)|pwd)\w*['"]?\s*[:=]\s*(['"`])(?!\1)""", re.I)
+# A password-named key or variable followed by a non-empty quoted value, in any
+# language's syntax. <PW> (see _plant) is the only value it accepts.
+EMBEDDED = re.compile(
+    r"""\b\w*(?:pass(?:word|wd|phrase|code)|pwd)\w*['"]?\s*[:=]\s*(['"`])(?!\1)(?!<PW>)""", re.I)
+JS_NAMED = EMBEDDED
 
 
 def _js_test_files():
@@ -174,8 +187,9 @@ def _js_test_files():
 
 
 def test_js_detector_catches_its_planted_sample():
-    assert JS_NAMED.search("const newPassword = 'abc123';")
-    assert JS_NAMED.search('login({ password: "x" })')
+    assert JS_NAMED.search(_plant("const newPassword = '<PW>';"))
+    assert JS_NAMED.search(_plant('login({ password: "<PW>" })'))
+    assert not JS_NAMED.search("const newPassword = '<PW>';")
     assert not JS_NAMED.search("login({ password: makeTestPassword() })")
     assert not JS_NAMED.search('const password = "";')
 
@@ -188,3 +202,21 @@ def test_no_js_test_writes_a_password():
                  for i, line in enumerate(p.read_text().splitlines(), 1)
                  if JS_NAMED.search(line)]
     assert not offenders, "A password literal in a JS test (ADR-547):\n  " + "\n  ".join(offenders)
+
+
+def test_no_test_embeds_password_code_in_a_string():
+    """Code inside a string is still code to a scanner: GitGuardian flagged
+    this file's own JS sample, a newPassword assignment held in a Python
+    string (incident 38439881). Quoting the line in this docstring tripped
+    the rule too, so it is described, not quoted."""
+    planted = ast.parse(_plant('''x = "login({ password: '<PW>' })"\n'''))
+    assert any(EMBEDDED.search(n.value) for n in ast.walk(planted)
+               if isinstance(n, ast.Constant) and isinstance(n.value, str))
+    offenders = [f"{p.relative_to(ROOT)}:{n.lineno}"
+                 for p in _test_files()
+                 for n in ast.walk(ast.parse(p.read_text()))
+                 if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                 and EMBEDDED.search(n.value)]
+    assert not offenders, (
+        "Password-assigning code inside a test string (ADR-547). Plant it with "
+        "_plant() and a <PW> placeholder:\n  " + "\n  ".join(offenders))
