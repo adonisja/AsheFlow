@@ -23,6 +23,12 @@ from typing import Optional
 # daily, and hold the access worth protecting.
 MFA_PRIVILEGED_ROLES = frozenset({
     "super_admin", "admin", "management", "dispatch", "platform_support",
+    # ADR-549 D1. "Privileged" in THIS set means "enrols before first use": no
+    # grace period, walled until enrolled, refused by the API. It does not set
+    # session or device timings -- a surveyor keeps the field session (no idle
+    # clock) and a 7-day device re-challenge (device_sweep.SURVEYOR_GROUP).
+    # Supersedes ADR-509 D1.5 ("surveyor is not MFA-privileged").
+    "surveyor",
 })
 
 # Nudged from first sign-in, blocked when the window closes.

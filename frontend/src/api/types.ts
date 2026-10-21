@@ -116,6 +116,16 @@ export interface MfaEnrolmentRow {
   pass_spent: boolean;
   enrolled: boolean | null;
   account_status: string;
+  /** ADR-551 D3: they asked for a two-factor reset (pending, last 7 days). */
+  reset_requested_at?: string | null;
+}
+
+/** ADR-551 D3. GET /employees/mfa-reset-requests — admin/management. */
+export interface MfaResetRequestRow {
+  employee_id: string;
+  name: string;
+  role: string;
+  requested_at: string;
 }
 
 export interface EscalationContact {
@@ -3031,6 +3041,22 @@ export interface Separation {
  *  the preference flag this reads, so an account can be protected while this
  *  says enrolled=false.
  */
+/** ADR-549 D4. GET /platform/me — a platform account's own profile, from
+ *  Cognito (super_admin, platform_support and surveyor have no Employee row). */
+export interface PlatformMe {
+  /** ADR-550 D1: the account's permanent ID (Cognito sub). */
+  account_id: string;
+  /** ADR-550 D1: the surveyor ID (contributor row), for surveyors only. */
+  surveyor_id: string | null;
+  username: string;
+  name: string | null;
+  email: string | null;
+  email_verified: boolean;
+  groups: string[];
+  role_label: string;
+  mfa_enrolled: boolean | null;
+}
+
 export interface MfaStatus {
   required: boolean;
   enrolled: boolean | null;
@@ -3775,6 +3801,8 @@ export interface SurveyContributorHealth {
   /** null = could not tell. */
   in_surveyor_group: boolean | null;
   last_walk_at: string | null;
+  /** ADR-551 D3: asked for a two-factor reset (pending, last 7 days). */
+  reset_requested_at?: string | null;
 }
 
 export interface SurveyActivityClaim {
@@ -3821,4 +3849,13 @@ export interface SurveyStaffReleaseRequest {
 /** ADR-546 D4: whether the holder's notice was actually sent. */
 export interface SurveyStaffReleaseResult extends SurveyActivityClaim {
   holder_emailed: boolean;
+}
+
+/** ADR-550 D2. POST /survey/contributors/{surveyor_id}/reset-mfa. */
+export interface SurveyMfaResetResult {
+  contributor_id: string;
+  signed_out: boolean;
+  factor_cleared: boolean;
+  devices_forgotten: number;
+  surveyor_emailed: boolean;
 }

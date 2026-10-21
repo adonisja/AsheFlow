@@ -9,6 +9,7 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 import { classifySignInError } from './signInError';
+import ResetRequest from './ResetRequest';
 
 export default function LoginScreen() {
   const c = useColors();
@@ -227,6 +228,10 @@ export default function LoginScreen() {
               >
                 <Text style={[s.showHide, { color: c.mutedForeground }]}>Start over</Text>
               </TouchableOpacity>
+
+              {/* ADR-551 D1: the way out for someone who can't produce the code. */}
+              {(challenge.name === 'SOFTWARE_TOKEN_MFA' || challenge.name === 'EMAIL_OTP') &&
+                <ResetRequest username={username.trim()} />}
             </>
           ) : (
           <>
@@ -284,11 +289,13 @@ export default function LoginScreen() {
               </Text>
               <Text style={[s.noticeBody, { color: c.mutedForeground }]}>
                 <Text style={{ color: c.foreground, fontWeight: fontWeight.semibold }}>What to do: </Text>
-                ask an administrator to reset your two-factor setup. Then sign in
-                again and you will go straight to setup.
+                request a reset below. Once someone resets it, sign in again and
+                you will go straight to setup.
               </Text>
             </View>
           )}
+          {/* ADR-551 D1: and for someone whose setup window closed. */}
+          {mfaSetupClosed && <ResetRequest username={username.trim()} />}
 
           {/* Error */}
           {error && (

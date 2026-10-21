@@ -47,7 +47,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_platform_staff, get_super_admin
+from app.api.deps import get_platform_staff, get_platform_user, get_super_admin
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
@@ -58,10 +58,10 @@ from app.models.survey_register import (
     SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
 )
 from app.schemas.building_taxonomy import BUILDING_TYPES
-from app.services import survey_blocks, survey_progress
+from app.services import account_security, mfa_containment, mfa_reset_requests, survey_blocks, survey_progress
 from app.services.address_inventory import AddressSourceUnavailable
 from app.services.audit import super_admin_identity, write_audit
-from app.services.email import send_claim_released_notice, send_credentials_email
+from app.services.email import send_claim_released_notice, send_credentials_email, send_surveyor_mfa_reset_notice
 from app.services.note_scrub import scrub_note
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ def _assert_not_excluded(db: Session, sub: str) -> None:
         )
 
 
-def get_writer(current_user: dict = Depends(get_current_user),
+def get_writer(current_user: dict = Depends(get_platform_user),
                db: Session = Depends(get_db)) -> Writer:
     sub = current_user.get("id")
     if not sub:
@@ -945,7 +945,7 @@ class AreaViewer:
     writer: Optional[Writer]            # None for platform support: it reads areas, never walks
 
 
-def get_area_viewer(current_user: dict = Depends(get_current_user),
+def get_area_viewer(current_user: dict = Depends(get_platform_user),
                     db: Session = Depends(get_db)) -> AreaViewer:
     groups = current_user.get("cognito_groups", [])
     if "platform_support" in groups and "super_admin" not in groups:
@@ -1272,6 +1272,8 @@ class ContributorHealthOut(BaseModel):
     account_status: str
     in_surveyor_group: Optional[bool] = None    # None = could not tell
     last_walk_at: Optional[datetime] = None
+    # ADR-551 D3: the surveyor asked for a two-factor reset (pending, last 7 days).
+    reset_requested_at: Optional[datetime] = None
 
 
 class ActivityClaimOut(BaseModel):
@@ -1352,6 +1354,7 @@ def survey_activity(staff: dict = Depends(get_platform_staff), db: Session = Dep
 
     client = _cognito()
     health = []
+    requested = mfa_reset_requests.pending_since(db, [c.cognito_sub for c in contributors])
     for c in contributors:
         status_, in_group = _account_state(client, c.cognito_username)
         health.append(ContributorHealthOut(
@@ -1359,6 +1362,7 @@ def survey_activity(staff: dict = Depends(get_platform_staff), db: Session = Dep
             agreement_version=c.agreement_version, agreement_signed_on=c.agreement_signed_on,
             revoked_at=c.revoked_at, account_status=status_, in_surveyor_group=in_group,
             last_walk_at=last_walk.get(c.cognito_sub),
+            reset_requested_at=requested.get(c.cognito_sub),
         ))
 
     claims = []
@@ -1497,6 +1501,119 @@ def readmit_contributor(contributor_id: UUID, body: ReadmitIn, staff: dict = Dep
         # missing group, and Restore access fixes it.
         logger.warning("survey readmit: group add failed: %s", type(exc).__name__)
     return c
+
+
+# ── ADR-550 D2: support resets a surveyor's two-factor, by surveyor ID ─────
+
+# Not _CODE_WORDS: that keeps building access codes out of survey records, and
+# it refuses "lost their phone and cannot get codes" -- the most likely reason
+# anyone writes here. The risk in THIS text is a real one-time code or a
+# password pasted in, so refuse digit runs that could be one.
+_SECRET_LIKE = re.compile(r"\d{4,}")
+_STAFF_GROUPS = {"super_admin", "platform_support"}
+
+
+class ResetMfaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=10, max_length=200)
+
+
+class ResetMfaOut(BaseModel):
+    contributor_id: UUID
+    signed_out: bool
+    factor_cleared: bool
+    devices_forgotten: int
+    surveyor_emailed: bool
+
+
+def _surveyor_only_account(client, db: Session, c: SurveyContributor) -> str:
+    """The Cognito username behind contributor `c`, IF it is only a surveyor.
+
+    Resolved by the SUB on the row, which never changes -- not the stored
+    username or a typed name. Refuses (409) anything that is more than a
+    surveyor: a staff group, or a tenant Employee behind the same sub. That is
+    what keeps support's reset from ever reaching a staff or tenant account.
+    """
+    try:
+        sub = str(UUID(c.cognito_sub))           # validated: safe inside the filter
+    except ValueError:
+        raise HTTPException(status_code=409, detail="This contributor's account ID isn't valid.")
+    pool = settings.aws_cognito_user_pool_id
+    try:
+        users = client.list_users(UserPoolId=pool, Filter=f'sub = "{sub}"', Limit=1).get("Users", [])
+        if not users:
+            raise HTTPException(status_code=409, detail="This contributor has no sign-in account.")
+        username = users[0]["Username"]
+        groups = {g["GroupName"] for g in client.admin_list_groups_for_user(
+            UserPoolId=pool, Username=username, Limit=60).get("Groups", [])}
+    except (ClientError, BotoCoreError) as exc:
+        logger.error("survey mfa reset: could not read the account: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not look up the account. Try again.")
+    if "surveyor" not in groups:
+        raise HTTPException(status_code=409, detail="This account doesn't hold surveyor access.")
+    if groups & _STAFF_GROUPS:
+        raise HTTPException(status_code=409, detail=(
+            "This account is also platform staff. Only a super admin can reset it, from Platform staff."))
+    if db.query(Employee.id).filter(Employee.cognito_sub == sub).first() is not None:
+        raise HTTPException(status_code=409, detail=(
+            "This account belongs to a company employee. Their own admin resets it."))
+    return username
+
+
+@router.post("/contributors/{contributor_id}/reset-mfa", response_model=ResetMfaOut)
+def reset_contributor_mfa(contributor_id: UUID, body: ResetMfaIn,
+                          staff: dict = Depends(get_platform_staff),
+                          db: Session = Depends(get_db)):
+    """ADR-550 D2 — clear a locked-out surveyor's two-factor, by surveyor ID.
+
+    Support's way to rescue someone who lost their phone, without a super
+    admin. Bounded like ADR-545's actions: it can only reach an account that is
+    a surveyor and nothing more (_surveyor_only_account). Ends every session --
+    at Cognito and here -- restarts the 24-hour setup window (ADR-466 D1),
+    audits against the surveyor ID, and emails the surveyor.
+    """
+    if _SECRET_LIKE.search(body.reason):
+        raise HTTPException(status_code=422, detail="A reason can't include codes or long numbers.")
+    reason, _flags = scrub_note(body.reason.strip())
+    reason = reason or ""
+    if len(reason) < 10:
+        raise HTTPException(status_code=422, detail="Give a reason of at least 10 characters.")
+
+    c = db.query(SurveyContributor).filter(SurveyContributor.id == contributor_id).first()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Contributor not found.")
+    if c.revoked_at is not None:
+        raise HTTPException(status_code=409, detail="This contributor is revoked. Re-admit them first.")
+
+    username = _surveyor_only_account(_cognito(), db, c)
+    result = mfa_containment.contain(username=username, pool_id=settings.aws_cognito_user_pool_id,
+                                     region=settings.aws_region, clear_factor=True)
+    account_security.mark_sessions_ended(db, c.cognito_sub)
+    # ADR-551 D4: the reset answers the surveyor's request, if they made one.
+    mfa_reset_requests.resolve_for(db, c.cognito_sub, by_kind=_staff_identity(staff)["actor_kind"],
+                                   by_ref=staff.get("id"))
+    db.flush()
+    write_audit(db, action_type="survey.contributor.mfa_reset", target_table="survey_contributors",
+                target_id=str(c.id), actor_id=None, company_id=None,
+                detail={**_staff_identity(staff), "reason": reason,
+                        "signed_out": result.signed_out, "factor_cleared": result.factor_cleared,
+                        "devices_forgotten": result.devices_forgotten, "errors": result.errors})
+    db.commit()
+
+    emailed = False
+    if c.email:
+        try:
+            send_surveyor_mfa_reset_notice(to_email=c.email, name=c.display_name, reason=reason,
+                                           account_ref=str(c.id))
+            emailed = True
+        except Exception as exc:
+            logger.warning("survey mfa reset: notice failed: %s", type(exc).__name__)
+
+    if not result.fully_contained:
+        raise HTTPException(status_code=502, detail="The reset did not fully complete. Please try again.")
+    return ResetMfaOut(contributor_id=c.id, signed_out=result.signed_out,
+                       factor_cleared=result.factor_cleared,
+                       devices_forgotten=result.devices_forgotten, surveyor_emailed=emailed)
 
 
 class StaffReleaseIn(BaseModel):

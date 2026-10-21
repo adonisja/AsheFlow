@@ -294,7 +294,8 @@ class TestTheCountsMatchTheApprovedRegistry:
         # INSTANCES are data.
         # 87 since ADR-512: stolen_package_review asks a driver or captain to sign.
         # 88: stolen_package_reopened (ADR-512 D20).
-        assert len(SPEC) == 88
+        # 89: mfa_reset_requested (ADR-551): a locked-out employee asks an admin.
+        assert len(SPEC) == 89
         assert len(RETIRED) == 4
 
     def test_severity_distribution(self):
@@ -309,7 +310,9 @@ class TestTheCountsMatchTheApprovedRegistry:
         # ADR-512 adds stolen_package_review, ACTION (30->31): a report waits on
         # this reader's signature.
         # ADR-512 D20 adds stolen_package_reopened, INFO (51->52).
-        assert counts == {"urgent": 4, "action": 31, "notice": 1, "info": 52}, counts
+        # ADR-551 adds mfa_reset_requested, ACTION (31->32): an admin must reset
+        # someone who cannot sign in until they do.
+        assert counts == {"urgent": 4, "action": 32, "notice": 1, "info": 52}, counts
 
     def test_only_two_types_gate(self):
         """ADR-494 D1 narrowed GATE from four types to two.

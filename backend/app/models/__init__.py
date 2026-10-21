@@ -74,3 +74,5 @@ from app.models.pi_erasure_ledger import PiErasureLedger  # ADR-493
 from app.models.survey_register import SurveyContributor, SurveyWalk, SurveyObservation  # ADR-504: the independent survey register
 from app.models.survey_register import SurveyDeliveryPoint, SurveyReceivesFor  # ADR-504 D8
 from app.models.stolen_package_report import StolenPackageReport, ReportVersion  # noqa: F401  ADR-512
+from app.models.platform_session import PlatformSessionStamp  # ADR-549
+from app.models.mfa_reset_request import MfaResetRequest  # ADR-551

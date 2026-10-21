@@ -210,6 +210,8 @@ class EmployeeMfaEnrolmentResponse(BaseModel):
     # and nothing was set up in it. Inside the window it stays False.
     pass_spent: bool
     enrolled: Optional[bool] = None
+    # ADR-551 D3: they asked for a two-factor reset (pending, last 7 days).
+    reset_requested_at: Optional[datetime] = None
     # The lifecycle the roster shows, so the client does not recompute it from a
     # second source and drift. 'registered' here is the crash case.
     account_status: str

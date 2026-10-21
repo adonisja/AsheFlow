@@ -150,6 +150,19 @@ def _issued_before_revocation(employee, current_user: dict) -> bool:
     stamp = getattr(employee, "tokens_valid_after", None)
     if employee is None or stamp is None:
         return False
+    return _signed_in_before(stamp, current_user)
+
+
+def _signed_in_before(stamp, current_user: dict) -> bool:
+    """The comparison both stamps share (ADR-541 D2, ADR-549 D3).
+
+    A naive stamp is read as UTC: SQLite hands timestamptz back without tzinfo,
+    and .timestamp() on a naive value would apply the HOST's local offset --
+    a revocation that holds in UTC and leaks hours of old sessions elsewhere.
+    """
+    from datetime import timezone as _tz
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=_tz.utc)
     signed_in = current_user.get("auth_time")
     if not isinstance(signed_in, (int, float)):
         return True
@@ -410,7 +423,33 @@ class Pagination:
         return query.offset(self.skip).limit(self.limit)
 
 
-def get_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
+# Every Cognito group whose members have no Employee row (ADR-394, ADR-509).
+PLATFORM_ACCOUNT_GROUPS = frozenset({"super_admin", "platform_support", "surveyor"})
+
+
+def get_platform_user(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """`get_current_user`, plus the session stamp for platform accounts (ADR-549 D3).
+
+    Tenant callers are checked by get_caller_employee against their Employee
+    row. Platform accounts have no row, so before this NOTHING ended their
+    sessions here: a password change revoked refresh tokens at Cognito, and the
+    access token kept working until it expired. One PK lookup, and only for a
+    caller in a platform group -- a tenant request never touches the table.
+    """
+    from app.models.platform_session import PlatformSessionStamp
+    groups = set(current_user.get("cognito_groups", []))
+    sub = current_user.get("id")
+    if sub and groups & PLATFORM_ACCOUNT_GROUPS:
+        row = db.get(PlatformSessionStamp, sub)
+        if row is not None and _signed_in_before(row.tokens_valid_after, current_user):
+            raise _SESSION_ENDED
+    return current_user
+
+
+def get_super_admin(current_user: dict = Depends(get_platform_user)) -> dict:
     """Dependency for super-admin-only endpoints.
 
     Reads the JWT groups and returns the claims dict if the caller belongs to
@@ -430,7 +469,7 @@ def get_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
 PLATFORM_GROUPS = frozenset({"super_admin", "platform_support"})
 
 
-def get_platform_staff(current_user: dict = Depends(get_current_user)) -> dict:
+def get_platform_staff(current_user: dict = Depends(get_platform_user)) -> dict:
     """Dependency for platform endpoints that only READ (ADR-343 D1).
 
     Accepts `super_admin` OR `platform_support`. Use it for anything that lets

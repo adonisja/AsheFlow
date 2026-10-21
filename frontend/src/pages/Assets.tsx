@@ -6,7 +6,7 @@ import {
   AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow } from '../api/types';
+import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow, MfaResetRequestRow } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -658,6 +658,18 @@ function PeopleTab() {
   const [resendingId, setResendingId]     = useState<string | null>(null);
   const [resendMsg, setResendMsg]         = useState<{ id: string; ok: boolean; text: string } | null>(null);
   const [resettingMfaId, setResettingMfaId] = useState<string | null>(null);
+  // ADR-551 D3: people who asked for a two-factor reset. Any role -- the
+  // Sign-in protection list covers only privileged ones, and a walker who lost
+  // their phone needs to be seen too.
+  const [resetRequests, setResetRequests] = useState<MfaResetRequestRow[]>([]);
+  const loadResetRequests = useCallback(async () => {
+    if (!(groups.includes('admin') || groups.includes('management'))) return;
+    try {
+      const r = await axiosClient.get<MfaResetRequestRow[]>('/employees/mfa-reset-requests');
+      setResetRequests(r.data);
+    } catch { /* the list is a convenience; the notification already told them */ }
+  }, [groups]);
+  useEffect(() => { void loadResetRequests(); }, [loadResetRequests]);
   const [resetMfaMsg, setResetMfaMsg]       = useState<{ id: string; ok: boolean; text: string } | null>(null);
   const [promotingId, setPromotingId]     = useState<string | null>(null);
   const [promoteMsg, setPromoteMsg]       = useState<{ id: string; ok: boolean; text: string } | null>(null);
@@ -1195,6 +1207,34 @@ function PeopleTab() {
             ))}
           </ul>
         </div>
+      )}
+
+      {/* ADR-551 D3. Shown only when someone is waiting: a permanent empty
+          block is noise. The reset button is the same one each row has. */}
+      {resetRequests.length > 0 && (
+        <section className="card p-4 space-y-3 border-warning/30" aria-labelledby="rr-h">
+          <h2 id="rr-h" className="text-sm font-semibold flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-warning" aria-hidden="true" /> Reset requests
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            These people can't sign in without a two-factor reset. Each one confirmed the request from their own email.
+          </p>
+          <ul className="divide-y divide-border">
+            {resetRequests.map(r => (
+              <li key={r.employee_id} className="flex flex-wrap items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">{r.name}</p>
+                  <p className="text-xs text-muted-foreground capitalize">{r.role.replace('_', ' ')} · asked {formatDate(r.requested_at)}</p>
+                </div>
+                <button type="button" disabled={resettingMfaId !== null}
+                        onClick={async () => { await handleResetMfa({ id: r.employee_id, name: r.name }); void loadResetRequests(); }}
+                        className="btn-primary text-sm px-3 py-2 min-h-11 disabled:opacity-50">
+                  {resettingMfaId === r.employee_id ? 'Resetting…' : 'Reset two-factor'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {enrolmentOpen && (

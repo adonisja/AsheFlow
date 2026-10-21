@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
 import { classifySignInError } from '../../utils/signInError';
+import ResetRequest from './ResetRequest';
 import QRCode from 'qrcode';
 import logoFull from '../../assets/logo-full.svg';
 import logoFullLight from '../../assets/logo-full-light.svg';
@@ -271,8 +272,8 @@ export default function Login() {
                 </p>
                 <p className="text-muted-foreground">
                   <span className="font-medium text-foreground">What to do: </span>
-                  ask an administrator to reset your two-factor setup. Then sign
-                  in again and you will go straight to setup.
+                  request a reset below. Once someone resets it, sign in again
+                  and you will go straight to setup.
                 </p>
               </div>
             </div>
@@ -464,6 +465,12 @@ export default function Login() {
               </button>
             )}
           </form>
+
+          {/* ADR-551 D1: the way out for someone who can't produce a code, or
+              whose setup window closed. */}
+          {(challengeStep === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE'
+            || challengeStep === 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE'
+            || mfaSetupClosed) && <ResetRequest username={username} />}
 
           {/* Federation — for employees whose Cognito account is linked to Discord/Google */}
           {!challengeStep && (

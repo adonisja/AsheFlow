@@ -17,13 +17,13 @@ import re
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_super_admin, get_platform_staff
 from app.core.config import settings
 from app.models.platform_alert import PlatformAlert
-from app.services import mfa_containment
+from app.services import account_security, mfa_containment, mfa_reset_requests
 from app.services.audit import write_audit, super_admin_identity
 from app.services.email import send_credentials_email
 
@@ -92,15 +92,56 @@ def list_platform_alerts(
 
 
 class MfaResetRequest(BaseModel):
-    """Who to reset. A Cognito Username, not an employee id.
+    """Who to reset: an account ID (preferred) or a Cognito Username (ADR-550 D3).
 
-    Deliberately NOT an Employee UUID: the accounts this endpoint exists to
-    rescue may have no Employee row at all (a super admin never does), and
-    requiring one would rebuild the exact circular dependency this endpoint
-    breaks.
+    Never an Employee UUID: the accounts this endpoint exists to rescue may
+    have no Employee row (a super admin never does), and requiring one would
+    rebuild the circular dependency it breaks.
+
+    `account_id` is the Cognito sub -- the permanent ID shown on Platform staff.
+    A name typed into a reset box is how the wrong account gets reset, so the
+    page resets staff by ID. `username` stays for rescuing a tenant admin by
+    name, the case ADR-389 built this for. Exactly one.
     """
     model_config = ConfigDict(extra="forbid")
-    username: str = Field(min_length=1, max_length=128)
+    account_id: Optional[UUID] = None
+    username: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def _exactly_one(self):
+        if (self.account_id is None) == (self.username is None):
+            raise ValueError("Give exactly one of account_id or username.")
+        return self
+
+
+def _resolve_account(client, *, account_id: Optional[UUID], username: Optional[str]) -> tuple[str, str]:
+    """(username, sub) for the account to reset; 404 if Cognito has none.
+
+    By sub, via list_users -- `account_id` is a validated UUID, so the filter
+    string cannot be injected into. By username, via admin_get_user."""
+    pool = settings.aws_cognito_user_pool_id
+    try:
+        if account_id is not None:
+            users = client.list_users(UserPoolId=pool, Filter=f'sub = "{account_id}"', Limit=1).get("Users", [])
+            if not users:
+                raise HTTPException(status_code=404, detail="No account has that ID.")
+            return users[0]["Username"], str(account_id)
+        u = client.admin_get_user(UserPoolId=pool, Username=username)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
+            raise HTTPException(status_code=404, detail="No account has that username.")
+        logger.error("mfa reset: could not resolve account: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not look up the account. Try again.")
+    except BotoCoreError as exc:
+        logger.error("mfa reset: could not resolve account: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not look up the account. Try again.")
+    # The `sub` USER ATTRIBUTE from Cognito -- not a JWT claim (get_current_user
+    # exposes the claim as "id"; the claim-key guard in test_audit_coverage
+    # rightly flags .get("sub") on a claims dict, so read it by name here).
+    sub = next((a.get("Value") for a in u.get("UserAttributes", []) if a.get("Name") == "sub"), None)
+    if not sub:
+        raise HTTPException(status_code=502, detail="Could not look up the account. Try again.")
+    return u["Username"], sub
 
 
 @router.post("/mfa/reset", status_code=status.HTTP_200_OK)
@@ -127,12 +168,18 @@ def platform_reset_mfa(
     in-product self-rescue for the highest-privilege account is a backdoor by
     construction. See the break-glass runbook.
     """
+    username, sub = _resolve_account(boto3.client("cognito-idp", region_name=settings.aws_region),
+                                     account_id=body.account_id, username=body.username)
     result = mfa_containment.contain(
-        username=body.username,
+        username=username,
         pool_id=settings.aws_cognito_user_pool_id,
         region=settings.aws_region,
         clear_factor=True,
     )
+    # ADR-550 D4: end sessions here too, not only at Cognito.
+    kind = account_security.mark_sessions_ended(db, sub)
+    # ADR-551 D4: closes the account's reset request, if any.
+    mfa_reset_requests.resolve_for(db, sub, by_kind="super_admin", by_ref=_super.get("id"))
 
     write_audit(
         db=db,
@@ -140,9 +187,14 @@ def platform_reset_mfa(
         actor_id=None,  # super admin has no Employee row; identity goes in detail
         action_type="platform.mfa_reset",
         target_table="cognito_users",
-        target_id=body.username,
+        # The SUB, never the username: write_audit drops a non-UUID target, and
+        # passing the username meant no platform reset was ever recorded
+        # (ADR-550; prod had 0 platform.mfa_reset rows).
+        target_id=sub,
         detail={
             "actor": super_admin_identity(_super),
+            "target_username": username,
+            "account_kind": kind,
             "devices_forgotten": result.devices_forgotten,
             "signed_out": result.signed_out,
             "factor_cleared": result.factor_cleared,
@@ -157,7 +209,8 @@ def platform_reset_mfa(
             detail="The reset did not fully complete. Please try again.",
         )
     return {
-        "username": body.username,
+        "username": username,
+        "account_id": sub,
         "devices_forgotten": result.devices_forgotten,
         "signed_out": result.signed_out,
         "factor_cleared": result.factor_cleared,
@@ -227,6 +280,11 @@ class PlatformStaffCreate(BaseModel):
 
 
 class PlatformStaffOut(BaseModel):
+    # ADR-550 D1: the staff member's account ID -- the Cognito sub, permanent
+    # and unique. Names repeat and emails change; this does not.
+    account_id: str = ""
+    # ADR-551 D3: they asked for a two-factor reset (pending, last 7 days).
+    reset_requested_at: Optional[datetime] = None
     username: str
     email: str
     # The person's actual name. Captured on create and, until ADR-396, never read
@@ -252,7 +310,12 @@ class PlatformStaffOut(BaseModel):
 @router.get("/staff", status_code=status.HTTP_200_OK)
 def list_platform_staff(
     _staff: dict = Depends(get_platform_staff),
+    db: Session = Depends(get_db),
 ) -> list[PlatformStaffOut]:
+    return _with_reset_requests(_list_platform_staff(), db)
+
+
+def _list_platform_staff() -> list[PlatformStaffOut]:
     """Who holds platform access (ADR-394).
 
     A READ, so `get_platform_staff` — a support engineer diagnosing an issue
@@ -272,6 +335,7 @@ def list_platform_staff(
         for u in resp.get("Users", []):
             attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
             out.append(PlatformStaffOut(
+                account_id=attrs.get("sub", ""),
                 username=u["Username"],
                 email=attrs.get("email", ""),
                 name=attrs.get("name", ""),
@@ -298,6 +362,7 @@ def list_platform_staff(
             if not pending_group:
                 continue
             out.append(PlatformStaffOut(
+                account_id=attrs.get("sub", ""),
                 username=u["Username"],
                 email=attrs.get("email", ""),
                 name=attrs.get("name", ""),
@@ -311,6 +376,14 @@ def list_platform_staff(
         logger.error("could not list pending staff: %s", type(exc).__name__)
 
     return out
+
+
+def _with_reset_requests(rows: list[PlatformStaffOut], db: Session) -> list[PlatformStaffOut]:
+    """ADR-551 D3: mark the staff rows whose owner asked for a reset."""
+    requested = mfa_reset_requests.pending_since(db, [r.account_id for r in rows if r.account_id])
+    for r in rows:
+        r.reset_requested_at = requested.get(r.account_id)
+    return rows
 
 
 @router.post("/staff", status_code=status.HTTP_201_CREATED)

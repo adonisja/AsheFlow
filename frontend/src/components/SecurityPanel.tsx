@@ -146,8 +146,9 @@ export default function SecurityPanel() {
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 mb-5">
           <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
           <p className="text-xs text-foreground leading-relaxed">
-            No second factor is set up. Admin, management and dispatch accounts
-            need one to sign in.
+            {/* Owner, 2026-10-20: the person reading this needs the rule that
+                applies to THEM, not the list of every role it applies to. */}
+            No second factor is set up. You need MFA enrolled to sign in.
           </p>
         </div>
       )}
@@ -268,7 +269,7 @@ export default function SecurityPanel() {
       </div>
 
       <p className="text-[11px] text-muted-foreground mt-4">
-        Lost your phone? An admin can reset your second factor.
+        Lost your phone? You can request a reset from the sign-in screen.
       </p>
     </div>
   );

@@ -153,7 +153,11 @@ def write_audit(
     try:
         target_uuid = _UUID(str(target_id))
     except (ValueError, AttributeError):
-        return  # Silently skip if target_id is not a valid UUID
+        # Still never raises (an audit typo must not fail a production write),
+        # but no longer SILENT: /platform/mfa/reset passed a username here from
+        # ADR-389 on and not one of its resets was ever recorded (ADR-550 D5).
+        logger.warning("write_audit: dropped %s -- target_id is not a UUID", action_type)
+        return
 
     db.add(AuditLog(
         actor_id=actor_uuid,

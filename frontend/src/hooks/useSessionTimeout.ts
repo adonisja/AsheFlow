@@ -87,13 +87,16 @@ export function useSessionTimeout(
      requests, so without this it stayed up until the next click. One cheap
      request on focus and every 60s while visible; the 401 it gets is handled
      by axiosClient (records the reason, signs out). Platform accounts have no
-     Employee row, so the check would 403 for them -- they're skipped. */
+     Employee row: they poll /platform/me/session, which checks their own
+     session stamp (ADR-549 D3). They used to be skipped, so a platform
+     account's other tabs never learned of a password change. */
   const isPlatform = groups.some(g => g === 'super_admin' || g === 'platform_support' || g === 'surveyor');
   useEffect(() => {
-    if (!enabled || isPlatform) return;
+    if (!enabled) return;
+    const path = isPlatform ? '/platform/me/session' : '/employees/me/session';
     const check = () => {
       if (document.hidden) return;
-      axiosClient.get('/employees/me/session').catch(() => { /* 401 handled by the interceptor */ });
+      axiosClient.get(path).catch(() => { /* 401 handled by the interceptor */ });
     };
     const onVisible = () => { if (!document.hidden) check(); };
     document.addEventListener('visibilitychange', onVisible);

@@ -44,7 +44,12 @@ def test_the_privileged_set_matches_the_preauth_trigger():
     listed = set(re.findall(r"'([a-z_]+)'", array))
     trigger = (ROOT / "infra/lambda/cognito-pre-auth/handler.py").read_text()
     expected = set(re.findall(r'"([a-z_]+)",', trigger.split("PRIVILEGED_GROUPS = {")[1].split("}")[0]))
-    assert listed == expected, f"client {listed} != trigger {expected}"
+    # ADR-549 D1: the ONE deliberate difference. A surveyor enrols at first
+    # sign-in (trigger) but keeps the field session -- no idle clock -- because
+    # a 30-minute idle sign-out would end an outdoor walk mid-block.
+    SIGN_IN_GATE_ONLY = {"surveyor"}
+    assert SIGN_IN_GATE_ONLY <= expected, "surveyor must stay gated at sign-in"
+    assert listed == expected - SIGN_IN_GATE_ONLY, f"client {listed} != trigger {expected} - {SIGN_IN_GATE_ONLY}"
 
 
 def test_the_absolute_clock_is_anchored_to_auth_time():
