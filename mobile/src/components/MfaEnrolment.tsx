@@ -98,6 +98,16 @@ export default function MfaEnrolment({ onEnrolled }: Props) {
     return (
       <ScrollView contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
         <Text style={s.heading}>Add AsheFlow to your authenticator app</Text>
+        {/* The way back to email codes sits up here, not under the code field:
+            at the bottom the taller key block and the keyboard pushed it out of
+            view, and it read as removed (owner, 2026-10-21). Email is the
+            option for anyone who doesn't want an authenticator app. */}
+        <TouchableOpacity onPress={() => { setSecret(null); setCode(''); }}
+                          accessibilityRole="button" style={s.switchRow}>
+          <Text style={s.switchText}>
+            Rather not use an app? <Text style={s.switchLink}>Use email codes instead</Text>
+          </Text>
+        </TouchableOpacity>
         {/* ADR-557: opened in the app or copied, never retyped. */}
         <SetupKey secret={secret} account={account} />
         <Text style={s.hint}>Then type the 6-digit code it shows.</Text>
@@ -109,7 +119,8 @@ export default function MfaEnrolment({ onEnrolled }: Props) {
           placeholderTextColor={c.placeholder}
           keyboardType="number-pad"
           maxLength={6}
-          autoFocus
+          // No autoFocus: there's no code to type until the key is in the
+          // authenticator, and an open keyboard hid half this screen.
         />
         <TouchableOpacity
           style={[s.primaryBtn, code.trim().length !== 6 && s.disabled]}
@@ -117,9 +128,6 @@ export default function MfaEnrolment({ onEnrolled }: Props) {
           onPress={confirmTotp}
         >
           <Text style={s.primaryBtnText}>Confirm</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => { setSecret(null); setCode(''); }}>
-          <Text style={s.link}>Use a different method</Text>
         </TouchableOpacity>
       </ScrollView>
     );
@@ -162,5 +170,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   secondaryBtnText: { color: c.foreground, fontWeight: fontWeight.medium, fontSize: fontSize.md },
   disabled: { opacity: 0.5 },
-  link:     { color: c.primary, textAlign: 'center', fontSize: fontSize.sm },
+  switchRow:  { paddingVertical: spacing.xs },
+  switchText: { fontSize: fontSize.sm, color: c.mutedForeground },
+  switchLink: { color: c.primary, fontWeight: fontWeight.semibold },
 });

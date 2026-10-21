@@ -69,3 +69,19 @@ def test_the_wall_points_at_the_request_not_an_administrator(path):
     src = path.read_text()
     assert "an administrator will need to reset your setup" not in src
     assert src.count("request a reset from the sign-in screen") == 2
+
+
+def test_email_codes_stay_reachable_from_the_authenticator_screen():
+    """Owner, 2026-10-21: "it removed the 'Email me a code' option". It hadn't:
+    the way back was a link under the code field, and the taller key block plus
+    an auto-focused keyboard pushed it out of view. Email is the option for
+    anyone who doesn't want an authenticator app, so it must stay visible."""
+    src = (ROOT / "mobile/src/components/MfaEnrolment.tsx").read_text()
+    key_view = src[src.index("if (secret) {"): src.index("</ScrollView>", src.index("if (secret) {"))]
+    assert "Use email codes instead" in key_view
+    assert key_view.index("Use email codes instead") < key_view.index("<SetupKey"), \
+        "the switch sits above the key block, where nothing can push it off screen"
+    assert "autoFocus" not in key_view.replace("No autoFocus", ""), \
+        "no code exists until the key is added; an open keyboard hid the screen"
+    # And the choice screen still leads with email.
+    assert src.index("Email me a code each sign-in") > src.index("</ScrollView>", src.index("if (secret) {"))

@@ -93,7 +93,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
                  backgroundColor: c.accent, borderRadius: radius.md, paddingLeft: spacing.md,
                  paddingVertical: spacing.xs, paddingRight: spacing.xs },
   key:         { flex: 1, fontFamily: mono, fontSize: fontSize.sm + 1, color: c.foreground, lineHeight: 22 },
-  copy:        { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm,
+  // Compact (owner, 2026-10-21: "too big"): a small pill, not a second button.
+  copy:        { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999,
                  borderWidth: 1, borderColor: c.border, backgroundColor: c.background },
-  copyText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.primary },
+  copyText:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.primary },
 });
