@@ -31,7 +31,8 @@ def _platform_alerts_table(db):
 
 
 FN_FOR = {"trail": "_check_trail", "responder": "_check_rule_and_lambda", "topic": "_check_topic",
-          "containment": "_check_containment_permissions", "pool_triggers": "_check_pool_triggers"}
+          "containment": "_check_containment_permissions", "pool_triggers": "_check_pool_triggers",
+          "client_write_attributes": "_check_client_write_attributes"}   # ADR-558
 
 
 def _run(db, crash=(), **failing):
@@ -131,7 +132,8 @@ def test_the_legacy_shared_alert_is_closed_on_the_first_run(db):
 
 def test_the_result_names_each_check(db):
     r = _run(db, topic=["no subscribers"])
-    assert set(r["checks"]) == {"trail", "responder", "topic", "containment", "pool_triggers"}
+    assert set(r["checks"]) == {"trail", "responder", "topic", "containment", "pool_triggers",
+                                "client_write_attributes"}   # ADR-558
     assert r["checks"]["topic"] == ["no subscribers"] and r["healthy"] is False
 
 
