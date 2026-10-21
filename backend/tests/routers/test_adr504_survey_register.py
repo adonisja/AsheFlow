@@ -17,6 +17,7 @@ from app.models.audit_log import AuditLog
 from app.models.survey_register import (
     SurveyArea, SurveyAreaBlock, SurveyBlockClaim, SurveyContributor, SurveyDeliveryPoint,
     SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
+    SurveyObservationWithdrawal, SurveyWithdrawal,
 )
 from app.routers import survey_register as R
 from app.services import survey_blocks
@@ -29,7 +30,8 @@ BLOCK = "W_32_St_400"
 @pytest.fixture(autouse=True)
 def _tables(db):
     for m in (SurveyContributor, SurveyArea, SurveyAreaBlock, SurveyWalk, SurveyObservation,
-              SurveyDeliveryPoint, SurveyReceivesFor, SurveyBlockClaim, SurveyDoorUnlock, AuditLog):
+              SurveyDeliveryPoint, SurveyReceivesFor, SurveyBlockClaim, SurveyDoorUnlock,
+              SurveyWithdrawal, SurveyObservationWithdrawal, AuditLog):   # ADR-555
         sqlite_mirror_with_defaults(m.__table__).create(db.get_bind(), checkfirst=True)
 
 
@@ -90,7 +92,9 @@ def _walk(db, writer, **over):
 def _obs(db, writer, walk_id, **over):
     body = dict(address_index=1, source="mailroom", building_type="freight")
     body.update(over)
-    return R.record_observation(walk_id, R.ObservationIn(**body), writer=writer, db=db)
+    # ADR-555: past slowapi's decorator (needs a live Request; the handler never reads it).
+    return R.record_observation.__wrapped__(request=None, walk_id=walk_id, body=R.ObservationIn(**body),
+                                            writer=writer, db=db)
 
 
 OWNER_W = R.Writer(sub="owner-sub-0001", owner=True)
@@ -362,7 +366,8 @@ class TestLocate:
         import app.tasks.enrich_manifest as EM
         monkeypatch.setattr(EM, "_geoclient_normalise", lambda a, borough="manhattan": None)
         with pytest.raises(HTTPException) as e:
-            R.survey_locate(address="999 Nowhere St", borough="manhattan", writer=OWNER_W)
+            R.survey_locate.__wrapped__(request=None, address="999 Nowhere St", borough="manhattan",
+                                        writer=OWNER_W)
         assert e.value.status_code == 404
 
 

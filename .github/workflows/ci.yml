@@ -49,6 +49,33 @@ env:
   # blank in a build, look here first -- not at the secrets store.
 
 jobs:
+  # ── 0. WORKFLOW LINT (ADR-554) ─────────────────────────────────────────────
+  # actionlint on every push and PR. Found, the first time anyone ran it, a
+  # branch name interpolated straight into a shell script in a job holding the
+  # private deploy key. Pinned version AND checksum: a linter fetched as
+  # "latest" or unverified is itself a way into the job. Both deploys need it.
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      # sha256 of actionlint_1.7.12_linux_amd64.tar.gz, checked against the
+      # release's published checksums on 2026-10-21.
+      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the workflows
+        run: |
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o /tmp/actionlint.tgz "$url"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
+
   # ── 0. DESIGN TOKENS ───────────────────────────────────────────────────────
   # Pure stdlib, ~60ms, no services and no pip install — so it has no `needs`
   # and fails in seconds rather than after the dependency audit.
@@ -258,6 +285,11 @@ jobs:
       - name: Check the base's private branch is not behind
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+          # ADR-554 D1: branch names are chosen by whoever pushes them, and
+          # ${{ }} is substituted into the script TEXT before bash parses it.
+          # Through env they arrive as data, quoted, never as code.
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           # Same key handling as the pull step in the test job: written verbatim
           # with a guaranteed trailing newline, never passed as an argument.
@@ -271,8 +303,7 @@ jobs:
           fi
           ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
           export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
-          bash scripts/check_private_branch_ready.sh \
-            "${{ github.base_ref }}" "${{ github.head_ref }}"
+          bash scripts/check_private_branch_ready.sh "$BASE_REF" "$HEAD_REF"
           rm -f "$KEY_FILE"
 
   # ── 2. BACKEND TESTS ───────────────────────────────────────────────────────
@@ -280,6 +311,11 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
     needs: audit
+    # ADR-552 D5: the reuse lookup reads Actions artifacts. Declared here so it
+    # does not depend on the repository's default token setting.
+    permissions:
+      contents: read
+      actions: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -346,6 +382,10 @@ jobs:
           if [ -d /tmp/asheflow-private/backend/tests/services ]; then
             cp /tmp/asheflow-private/backend/tests/services/*.py backend/tests/services/ 2>/dev/null || true
           fi
+          # ADR-552 D1: the private code's own fingerprint, captured before the
+          # clone is deleted. The TREE, not the branch: identical code on
+          # private main and staging matches; different code never does.
+          echo "PRIVATE_TREE=$(git -C /tmp/asheflow-private rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
           rm -rf /tmp/asheflow-private ~/.ssh/asheflow_private_deploy
           echo "Proprietary source + tests pulled from AsheFlow-private ($PRIV_BRANCH)."
 
@@ -481,7 +521,25 @@ jobs:
             exit 1
           fi
 
+      # ADR-552. Same public tree, same private tree, same Python, passed in the
+      # last 24 h in a run that ACTUALLY ran the tests: reuse that result.
+      # continue-on-error: a crash here must cost time, never skip the tests
+      # (an empty `hit` is not 'true', so the tests run). Install, the private
+      # pull, the drift check and the MIN_TESTS floor above have all run.
+      - name: Look for an identical passing run (ADR-552)
+        id: reuse
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PUBLIC_TREE="$(git rev-parse 'HEAD^{tree}')"; export PUBLIC_TREE
+          PYTHON_VERSION="$(python --version 2>&1)"; export PYTHON_VERSION
+          FP="$(python scripts/ci_reuse_tests.py fingerprint)"
+          echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
+          python scripts/ci_reuse_tests.py lookup "$FP"
+
       - name: Run tests
+        if: steps.reuse.outputs.hit != 'true'
         working-directory: backend
         run: python -m pytest tests/ -v --tb=short
         env:
@@ -493,6 +551,20 @@ jobs:
           AWS_COGNITO_APP_CLIENT_ID: test-client-id
           INTERNAL_SECRET: ci-test-secret-not-real
           CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
+
+      # ADR-552 D2: only a run that ACTUALLY ran the tests vouches for this code,
+      # so a reuse can never be reused. Kept 2 days; the lookup accepts 24 h.
+      - name: Record that this exact code passed (ADR-552)
+        if: success() && steps.reuse.outputs.hit != 'true' && steps.reuse.outputs.fingerprint != '' && !startsWith(steps.reuse.outputs.fingerprint, 'none')
+        run: echo "${{ steps.reuse.outputs.fingerprint }}" > backend-tests-passed.txt
+
+      - name: Upload the pass marker (ADR-552)
+        if: success() && steps.reuse.outputs.hit != 'true' && steps.reuse.outputs.fingerprint != '' && !startsWith(steps.reuse.outputs.fingerprint, 'none')
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-tests-passed-${{ steps.reuse.outputs.fingerprint }}
+          path: backend-tests-passed.txt
+          retention-days: 2
 
   # ── 3. FRESH-DATABASE MIGRATIONS ───────────────────────────────────────────
   # `alembic upgrade head` had NEVER worked from an empty database (ADR-248):
@@ -590,7 +662,7 @@ jobs:
           print(' '.join(ScriptDirectory.from_config(Config('alembic.ini')).get_heads()))
           ")
           echo "heads: $HEADS"
-          [ "$(echo $HEADS | wc -w)" -eq 1 ] || { echo "ERROR: expected exactly one head"; exit 1; }
+          [ "$(echo "$HEADS" | wc -w)" -eq 1 ] || { echo "ERROR: expected exactly one head"; exit 1; }
 
 
   # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
@@ -600,7 +672,7 @@ jobs:
   deploy-staging:
     name: Deploy → STAGING
     runs-on: ubuntu-latest
-    needs: [test, migrations, design-tokens]
+    needs: [test, migrations, design-tokens, workflow-lint]
     if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
     environment: staging
     env:
@@ -728,7 +800,7 @@ jobs:
         run: |
           poll() {
             local CMD_ID=$1 INSTANCE=$2 MAX=$3
-            for i in $(seq 1 $MAX); do
+            for i in $(seq 1 "$MAX"); do
               STATUS=$(aws ssm get-command-invocation \
                 --region us-east-2 --command-id "$CMD_ID" --instance-id "$INSTANCE" \
                 --query "Status" --output text 2>/dev/null || echo "Pending")
@@ -754,6 +826,7 @@ jobs:
           # Step 1: pull public repo, pull private repo (key from SSM), copy proprietary files, build + start
           # The deploy key is stored in SSM at /asheflow/staging/PRIVATE_REPO_DEPLOY_KEY.
           # boto3 pulls it onto the EC2 — the key value never passes through CI or CLI args.
+          # shellcheck disable=SC2016  # the $ in these SSM commands must expand ON THE INSTANCE, not here
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
@@ -782,6 +855,7 @@ jobs:
           poll "$CID" "$INSTANCE" 36 || exit 1
 
           # Step 1b: dump backend logs so startup crashes are visible in CI
+          # shellcheck disable=SC2016  # the $ in these SSM commands must expand ON THE INSTANCE, not here
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
@@ -796,6 +870,7 @@ jobs:
           poll "$CID" "$INSTANCE" 6 || true
 
           # Step 2: run migrations (separate command — longer polling window for first-run backfills)
+          # shellcheck disable=SC2016  # the $ in these SSM commands must expand ON THE INSTANCE, not here
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
@@ -891,7 +966,7 @@ jobs:
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
-    needs: [test, migrations, design-tokens]
+    needs: [test, migrations, design-tokens, workflow-lint]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
     env:
@@ -1007,7 +1082,7 @@ jobs:
         run: |
           poll() {
             local CMD_ID=$1 INSTANCE=$2 MAX=$3
-            for i in $(seq 1 $MAX); do
+            for i in $(seq 1 "$MAX"); do
               STATUS=$(aws ssm get-command-invocation \
                 --region us-east-2 --command-id "$CMD_ID" --instance-id "$INSTANCE" \
                 --query "Status" --output text 2>/dev/null || echo "Pending")
@@ -1032,6 +1107,7 @@ jobs:
 
           # Step 1: pull public repo, pull private repo (key from SSM), copy proprietary files, build + start
           # Deploy key stored in SSM at /asheflow/prod/PRIVATE_REPO_DEPLOY_KEY
+          # shellcheck disable=SC2016  # the $ in these SSM commands must expand ON THE INSTANCE, not here
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
@@ -1061,6 +1137,7 @@ jobs:
           poll "$CID" "$INSTANCE" 36 || exit 1
 
           # Step 2: run migrations (separate command — longer polling window)
+          # shellcheck disable=SC2016  # the $ in these SSM commands must expand ON THE INSTANCE, not here
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[

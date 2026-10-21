@@ -51,10 +51,16 @@ class TestTheGuardIsWiredIn:
         assert "if: github.event_name == 'pull_request'" in block
 
     def test_it_compares_base_against_head(self):
+        """ADR-554 moved the refs out of the script and into the step's env:
+        (an attacker names the head branch, so it must never be spliced into
+        bash). The guard reads them as quoted variables, and the same step
+        must still map those variables to the base and head refs."""
         text = _CI.read_text()
-        i = text.index("check_private_branch_ready.sh")
-        block = text[i : i + 200]
-        assert "github.base_ref" in block and "github.head_ref" in block
+        call = text.index("check_private_branch_ready.sh")
+        step = text[text.rindex("- name:", 0, call) : call + 200]
+        assert 'check_private_branch_ready.sh "$BASE_REF" "$HEAD_REF"' in step
+        assert "BASE_REF: ${{ github.base_ref }}" in step
+        assert "HEAD_REF: ${{ github.head_ref }}" in step
 
     def test_the_guard_script_is_executable(self):
         import os, stat

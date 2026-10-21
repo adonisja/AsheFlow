@@ -10,6 +10,15 @@ import { clearTokens, getValidIdToken, touchLastActive } from './tokenRefresh';
    Routed on the code, never the text (ADR-465 D3). */
 type Listener = () => void;
 const credentialsChangedListeners = new Set<Listener>();
+/* ADR-556 D2 (web: ADR-465's interceptor). The server refuses every gated
+   call from an account that must enrol first. The status read can fail and
+   let the app open (ADR-377: a failed read never blocks); this is what then
+   sends the person to the wall instead of a shell where everything errors. */
+const mfaEnrolmentRequiredListeners = new Set<Listener>();
+export function onMfaEnrolmentRequired(fn: Listener): () => void {
+  mfaEnrolmentRequiredListeners.add(fn);
+  return () => { mfaEnrolmentRequiredListeners.delete(fn); };
+}
 export function onCredentialsChanged(fn: Listener): () => void {
   credentialsChangedListeners.add(fn);
   return () => { credentialsChangedListeners.delete(fn); };
@@ -63,6 +72,10 @@ apiClient.interceptors.response.use(
     if (err.response?.status === 401 && err.response?.data?.detail?.code === 'credentials_changed') {
       await clearTokens();
       credentialsChangedListeners.forEach(fn => fn());
+      return Promise.reject(err);
+    }
+    if (err.response?.status === 403 && err.response?.data?.detail?.code === 'mfa_enrolment_required') {
+      mfaEnrolmentRequiredListeners.forEach(fn => fn());
       return Promise.reject(err);
     }
     if (err.response?.status === 401 && original && !original._retried) {

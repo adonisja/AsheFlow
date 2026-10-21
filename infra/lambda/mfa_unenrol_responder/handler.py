@@ -36,6 +36,17 @@ logger.setLevel(logging.INFO)
 POOL_IDS = [p for p in os.environ.get("USER_POOL_IDS", "").split(",") if p]
 ALERT_TOPIC_ARN = os.environ.get("ALERT_TOPIC_ARN", "")
 
+# ADR-553 D1. The IAM roles whose disables are OUR OWN audited resets (the
+# tenant, staff and surveyor resets all call mfa_containment.contain with
+# clear_factor=True, after writing an audit row). Exact role ARNs, compared
+# with the event's sessionContext.sessionIssuer.arn -- never a session name,
+# user agent or IP, all of which a caller chooses or which change. Empty or
+# unset trusts NOTHING, so a missing variable restores the old (noisy)
+# behaviour rather than silencing the alarm.
+TRUSTED_RESET_ROLE_ARNS = frozenset(
+    a.strip() for a in os.environ.get("TRUSTED_RESET_ROLE_ARNS", "").split(",") if a.strip()
+)
+
 
 def _alert(subject: str, detail: dict) -> None:
     """Best-effort operator alert. Never raises: a failed alert must not stop
@@ -65,6 +76,21 @@ def _is_disable(params: dict) -> bool:
         if isinstance(block, dict) and block.get("enabled") is False:
             return True
     return False
+
+
+def _our_reset(detail: dict) -> str | None:
+    """The trusted role ARN if OUR backend made this call (ADR-553), else None.
+
+    Measured on the reset that set this off (eventID 78f17f43-...):
+      userIdentity.type  AssumedRole
+      sessionContext.sessionIssuer.arn  arn:aws:iam::...:role/asheflow-ec2-role-staging
+    A user's own SetUserMFAPreference is {"type": "Unknown", "principalId":
+    "Anonymous"} and never matches."""
+    ident = detail.get("userIdentity") or {}
+    if ident.get("type") != "AssumedRole":
+        return None
+    issuer = ((ident.get("sessionContext") or {}).get("sessionIssuer") or {}).get("arn")
+    return issuer if issuer and issuer in TRUSTED_RESET_ROLE_ARNS else None
 
 
 def _username_for_sub(client, pool_id: str, sub: str) -> str | None:
@@ -166,6 +192,16 @@ def handler(event, context):
         return {"action": "ignored", "reason": "not_a_disable"}
 
     sub = (detail.get("additionalEventData") or {}).get("sub")
+
+    # ADR-553. Our own reset already contained the account, ended its sessions
+    # in the API, and wrote the audit row. A second containment and an email
+    # turn every legitimate reset into an incident. Logged, never dropped.
+    trusted = _our_reset(detail)
+    if trusted:
+        logger.info("ignoring %s: our own audited reset (role %s, sub %s)",
+                    event_name, trusted, sub)
+        return {"action": "ignored", "reason": "our_reset", "role": trusted}
+
     if not sub:
         # The ONLY identifier is missing. Alert -- this is both the case a human
         # most needs, and the signal that the payload shape changed.

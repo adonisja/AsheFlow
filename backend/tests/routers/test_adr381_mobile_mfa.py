@@ -146,7 +146,10 @@ class TestEnrolment:
         """The authenticator app is on the SAME phone, so there is no second
         screen to scan from."""
         src = ENROL.read_text()
-        assert "selectable" in src
+        # ADR-557: the key is opened in the app or copied by SetupKey, which
+        # keeps it selectable too.
+        assert "<SetupKey secret=" in src
+        assert "selectable" in (ENROL.parent / "SetupKey.tsx").read_text()
         assert "QRCode" not in src
 
     def test_errors_do_not_surface_cognito_internals(self):

@@ -380,7 +380,7 @@ function MainShell() {
 
 // ── Root navigator ────────────────────────────────────────────────────────────
 export default function RootNavigator() {
-  const { isAuthenticated, isLoading, mfaStatus, hasRole } = useAuth();
+  const { isAuthenticated, isLoading, mfaStatus, mfaResolved, hasRole } = useAuth();
 
   /* ADR-381 D2 — a blocked user gets a screen INSTEAD OF the app, not a modal
      over it. Same idiom as the isAuthenticated swap below: the tab shell is
@@ -393,7 +393,12 @@ export default function RootNavigator() {
   const mfaBlocked = Boolean(mfaStatus?.blocked);
   const c = useColors();
 
-  if (isLoading) {
+  /* ADR-556: hold on the spinner until the MFA question is ANSWERED. Without
+     this, `blocked` was undefined for the length of the request and the app
+     rendered, then got swapped for MfaRequiredScreen -- a visible flash of the
+     app an unenrolled account must not reach. A failed read resolves too
+     (mfaStatus null, not blocked), so this never strands anyone. */
+  if (isLoading || (isAuthenticated && !mfaResolved)) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: c.background }}>
         <ActivityIndicator size="large" color={c.primary} />

@@ -15,6 +15,7 @@ from app.models.survey_register import (
     CLAIM_HOURS, MAX_ACTIVE_CLAIMS, REVISIT_DAYS,
     SurveyArea, SurveyAreaBlock, SurveyBlockClaim, SurveyContributor, SurveyDeliveryPoint,
     SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
+    SurveyObservationWithdrawal, SurveyWithdrawal,
 )
 from app.routers import survey_register as R
 from app.services import survey_blocks, survey_progress
@@ -40,7 +41,8 @@ BK_W32 = survey_blocks.Block("W_32_St_400", "W 32 ST", _doors("W 32 ST", [401, 4
 @pytest.fixture(autouse=True)
 def _tables(db):
     for m in (SurveyContributor, SurveyArea, SurveyAreaBlock, SurveyWalk, SurveyObservation,
-              SurveyDeliveryPoint, SurveyReceivesFor, SurveyBlockClaim, SurveyDoorUnlock, AuditLog):
+              SurveyDeliveryPoint, SurveyReceivesFor, SurveyBlockClaim, SurveyDoorUnlock,
+              SurveyWithdrawal, SurveyObservationWithdrawal, AuditLog):   # ADR-555
         sqlite_mirror_with_defaults(m.__table__).create(db.get_bind(), checkfirst=True)
 
 
@@ -87,7 +89,10 @@ def _claim_and_walk(db, writer, area, key="W_32_St_400"):
 
 def _record(db, writer, walk, index, **over):
     body = {"address_index": index, "building_type": "freight", **over}
-    return R.record_observation(walk.id, R.ObservationIn(**body), writer=writer, db=db)
+    # ADR-555: past slowapi's decorator, which needs a live Request; the
+    # handler itself never reads it.
+    return R.record_observation.__wrapped__(request=None, walk_id=walk.id, body=R.ObservationIn(**body),
+                                            writer=writer, db=db)
 
 
 # ── the replay: pure, so every rule is pinned without a database ───────────

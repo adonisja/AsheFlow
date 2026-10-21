@@ -270,7 +270,9 @@ def test_no_sign_in_catch_shows_the_raw_message(login):
 def test_the_wall_states_the_deadline(wall):
     src = wall.read_text()
     assert "setup_window_ends_at" in src
-    assert "administrator will need to reset" in src
+    # ADR-557: after the deadline the way out is the reset REQUEST (ADR-551),
+    # not "an administrator", whom a surveyor doesn't have.
+    assert "request a reset from the sign-in screen" in src
 
 
 def test_the_web_wall_no_longer_promises_a_free_sign_out_to_privileged_accounts():

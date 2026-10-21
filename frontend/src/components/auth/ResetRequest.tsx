@@ -6,21 +6,47 @@
  * a code to the account's verified email (that proves the inbox owner is
  * asking), then the request goes to whoever can reset this account. It never
  * resets anything itself; a person does that.
+ *
+ * ADR-556 D3: while open this IS the sign-in card's content, not a box under
+ * a live code field. Login owns open/closed; on success it returns to the
+ * username/password form (username kept) and shows the server's next step.
  */
 import { useState } from 'react';
-import { KeyRound } from 'lucide-react';
 
 import axiosClient from '../../api/axiosClient';
 import { errorText } from '../../utils/errorText';
 
-type Step = 'closed' | 'start' | 'code' | 'done';
+type Step = 'start' | 'code';
 
 /** `username` is the one the person just typed to reach this screen. They
  *  are not asked again (owner, 2026-10-20). The server resolves it to the
  *  account's permanent ID (Cognito sub, then the employee or contributor
  *  record) and keeps the request by that ID; nothing downstream uses the name. */
-export default function ResetRequest({ username }: { username: string }) {
-  const [step, setStep] = useState<Step>('closed');
+/** The way in: under the code step, or under the setup-closed notice. */
+export function ResetRequestLink({ onOpen }: { onOpen: () => void }) {
+  return (
+    /* Two lines (owner, 2026-10-21): the question muted, the action in the
+       action colour so it reads as something to click. One button, one label. */
+    <button type="button" onClick={onOpen}
+            className="group w-full mt-3 flex flex-col items-center gap-0.5 text-sm rounded-lg py-1.5">
+      <span className="text-muted-foreground">Can't use your authenticator?</span>
+      <span className="font-semibold text-primary group-hover:underline">Request a reset</span>
+    </button>
+  );
+}
+
+type Props = {
+  username: string;
+  /** Back to wherever the person was. */
+  onCancel: () => void;
+  /** Who it went to and the server's next step (ADR-556 D4/D5). */
+  onSent: (result: ResetSent) => void;
+};
+
+export type ResetSent = { sentTo: string; nextStep: string };
+
+export default function ResetRequest({ username, onCancel, onSent }: Props) {
+  const [step, setStep] = useState<Step>('start');
   const name = username;
   const [code, setCode] = useState('');
   // ADR-551 D2b: the server's ticket from step 1. Unreadable here; it is what
@@ -28,7 +54,6 @@ export default function ResetRequest({ username }: { username: string }) {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState('');
 
   const send = async () => {
     setBusy(true); setError('');
@@ -44,30 +69,17 @@ export default function ResetRequest({ username }: { username: string }) {
   const confirm = async () => {
     setBusy(true); setError('');
     try {
-      const { data } = await axiosClient.post<{ detail: string }>('/auth/mfa-reset/confirm',
-        { request_token: token, code: code.trim() });
-      setResult(data.detail);
-      setStep('done');
+      const { data } = await axiosClient.post<{ detail: string; sent_to: string; next_step?: string }>(
+        '/auth/mfa-reset/confirm', { request_token: token, code: code.trim() });
+      // next_step is new (ADR-556 D5); an older server only sends detail.
+      onSent({ sentTo: data.sent_to, nextStep: data.next_step ?? data.detail });
     } catch (err) {
       setError(errorText(err, 'Could not send the request. Try again.'));
     } finally { setBusy(false); }
   };
 
-  if (step === 'closed') {
-    return (
-      <button type="button" onClick={() => setStep('start')}
-              className="w-full text-sm text-primary hover:underline mt-3">
-        Can't use your authenticator? Request a reset
-      </button>
-    );
-  }
-
   return (
-    <div className="mt-4 rounded-xl border border-border bg-surface-muted/40 p-4 space-y-3 text-sm" aria-live="polite">
-      <p className="flex items-center gap-2 font-semibold text-foreground">
-        <KeyRound className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
-        Request a two-factor reset
-      </p>
+    <div className="space-y-4 text-sm" aria-live="polite">
 
       {step === 'start' && (
         <>
@@ -80,7 +92,7 @@ export default function ResetRequest({ username }: { username: string }) {
           </p>
           {error && <p className="text-xs text-danger">{error}</p>}
           <div className="flex gap-2">
-            <button type="button" onClick={() => setStep('closed')} className="btn-ghost text-sm px-3 py-2">Cancel</button>
+            <button type="button" onClick={onCancel} className="btn-ghost text-sm px-3 py-2">Cancel</button>
             <button type="button" onClick={send} disabled={busy || !name.trim()}
                     className="btn-primary text-sm px-4 py-2 disabled:opacity-50">
               {busy ? 'Sending…' : 'Email me a code'}
@@ -109,7 +121,6 @@ export default function ResetRequest({ username }: { username: string }) {
         </>
       )}
 
-      {step === 'done' && <p className="text-foreground">{result}</p>}
     </div>
   );
 }

@@ -41,7 +41,7 @@ from uuid import UUID
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -55,7 +55,8 @@ from app.models.survey_register import (
     AREA_KINDS, CLAIM_HOURS, DAY_STATUS, DELIVERY_MODES, DELIVERY_POINTS, MAX_ACTIVE_CLAIMS,
     MAX_DELIVERY_POINTS, REVISIT_DAYS, SOURCES, TRISTATE,
     SurveyArea, SurveyAreaBlock, SurveyBlockClaim, SurveyContributor, SurveyDeliveryPoint,
-    SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
+    SurveyDoorUnlock, SurveyObservation, SurveyObservationWithdrawal, SurveyReceivesFor, SurveyWalk,
+    SurveyWithdrawal, live_observations,
 )
 from app.schemas.building_taxonomy import BUILDING_TYPES
 from app.services import account_security, mfa_containment, mfa_reset_requests, survey_blocks, survey_progress
@@ -65,6 +66,35 @@ from app.services.email import send_claim_released_notice, send_credentials_emai
 from app.services.note_scrub import scrub_note
 
 logger = logging.getLogger(__name__)
+
+from app.api.ratelimit import limiter  # noqa: E402  (ADR-555 D1)
+
+# ADR-555 D1. /locate is the one survey call that spends the city's GeoClient
+# quota, which every tenant's dispatch enrichment shares. Per IP (slowapi, real
+# client IP) AND per account per day, so one account on rotating mobile IPs is
+# still bounded. A real day of surveying is a few dozen lookups.
+LOCATE_PER_DAY = 300
+# ADR-555 D3. Real walking is about a door a minute at best.
+VOLUME_WINDOW = timedelta(minutes=10)
+VOLUME_ALERT_AT = 40
+
+
+def _account_daily_ok(sub: str, what: str, limit: int) -> bool:
+    """Count one `what` for this account today; False past `limit`.
+
+    Fails OPEN on a Redis error: the per-IP limit still holds, and a cache blip
+    must not stop a walk in progress. Logged so a broken counter is visible."""
+    try:
+        from app.core.security import _get_redis
+        r = _get_redis()
+        key = f"survey:{what}:{sub}:{datetime.now(timezone.utc).date().isoformat()}"
+        n = r.incr(key)
+        if n == 1:
+            r.expire(key, 2 * 86400)
+        return n <= limit
+    except Exception as exc:  # any Redis/connection failure
+        logger.warning("survey %s cap: counter unavailable (%s); allowing", what, type(exc).__name__)
+        return True
 router = APIRouter(prefix="/survey", tags=["survey-register"])
 
 ATTESTATION = "Made outside any carrier's services, per ADR-504 D2."
@@ -353,7 +383,7 @@ def _addresses(walk: SurveyWalk) -> list[AddressOut]:
 def _walk_out(db: Session, walk: SurveyWalk) -> WalkOut:
     if walk.borough is None:
         done = {a for (a,) in db.query(SurveyObservation.address)
-                .filter(SurveyObservation.walk_id == walk.id).all()}
+                .filter(SurveyObservation.walk_id == walk.id, live_observations()).all()}
         state = "in_progress" if done else "open"
     else:
         p = survey_progress.progress_for(db, walk.borough, walk.block_key, [], _now())
@@ -436,7 +466,9 @@ class PointOut(BaseModel):
 
 
 @router.get("/locate", response_model=PointOut)
+@limiter.limit("20/minute")
 def survey_locate(
+    request: Request,
     address: str = Query(..., min_length=3, max_length=200),
     borough: Literal["manhattan", "brooklyn", "queens", "bronx", "staten island"] = "manhattan",
     writer: Writer = Depends(get_writer),
@@ -447,6 +479,9 @@ def survey_locate(
     consults the PlaceType Library first and writes back into it, and the
     register must neither read nor write tenant-derived data (ADR-504 D6).
     """
+    if not _account_daily_ok(writer.sub, "locate", LOCATE_PER_DAY):
+        raise HTTPException(status_code=429, detail=(
+            "That's the address-search limit for today. Use your location, or try again tomorrow."))
     from app.tasks.enrich_manifest import _geoclient_normalise
     try:
         geo = _geoclient_normalise(address, borough=borough)
@@ -537,7 +572,8 @@ def get_walk(walk_id: UUID, writer: Writer = Depends(get_writer), db: Session = 
 
 @router.post("/walks/{walk_id}/observations", response_model=ObservationOut,
              status_code=status.HTTP_201_CREATED)
-def record_observation(walk_id: UUID, body: ObservationIn,
+@limiter.limit("60/minute")
+def record_observation(request: Request, walk_id: UUID, body: ObservationIn,
                        writer: Writer = Depends(get_writer), db: Session = Depends(get_db)):
     """One door from the walk's list. The address and BIN come from the snapshot,
     never from the request."""
@@ -556,7 +592,8 @@ def record_observation(walk_id: UUID, body: ObservationIn,
     door = walk.addresses[body.address_index]
     already = (db.query(SurveyObservation.id)
                .filter(SurveyObservation.walk_id == walk.id,
-                       SurveyObservation.address == door["address"]).first())
+                       SurveyObservation.address == door["address"],
+                       live_observations()).first())
     if already is not None:
         raise HTTPException(status_code=409, detail="Already recorded on this walk.")
     # ADR-513 D6: done on ANY walk of this block in the current cycle is locked.
@@ -605,7 +642,40 @@ def record_observation(walk_id: UUID, body: ObservationIn,
                         "writer": "owner" if writer.owner else "contributor"})
     db.commit()
     db.refresh(obs)
+    _flag_unusual_volume(db, writer)
     return _obs_out(db, obs, writer)
+
+
+def _flag_unusual_volume(db: Session, writer: Writer) -> None:
+    """ADR-555 D3: a script or a takeover writes far faster than a person walks.
+
+    Raises one open platform alert per account (the alert table dedups on the
+    subject). Never fails the write that triggered it: the observation is
+    already committed, and an alerting error is logged, not raised."""
+    if writer.owner:
+        return
+    from sqlalchemy import func as sa_func
+    try:
+        since = _now() - VOLUME_WINDOW
+        n = (db.query(sa_func.count(SurveyObservation.id))
+             .filter(SurveyObservation.writer_sub == writer.sub,
+                     SurveyObservation.observed_at >= since, live_observations()).scalar())
+        if (n or 0) < VOLUME_ALERT_AT:
+            return
+        c = db.query(SurveyContributor).filter(SurveyContributor.cognito_sub == writer.sub).first()
+        from app.services.integration_alerts import raise_platform_alert
+        raise_platform_alert(
+            db, alert_type="survey.volume_unusual", company_id=None,
+            subject_kind="platform", subject_ref=(c.cognito_username if c else writer.sub),
+            subject_role="surveyor",
+            message=(f"A surveyor recorded {n} doors in {int(VOLUME_WINDOW.total_seconds() // 60)} "
+                     "minutes. Check the account; withdraw its records if they are not genuine."),
+            severity="warning",
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("survey volume alert failed: %s", type(exc).__name__)
 
 
 @router.post("/walks/{walk_id}/close", response_model=WalkOut)
@@ -636,7 +706,8 @@ def list_observations(
     writer: Writer = Depends(get_writer), db: Session = Depends(get_db),
 ):
     """The owner reads everything; a contributor reads their own (D7)."""
-    q = db.query(SurveyObservation)
+    # ADR-555: withdrawn records are out of the record for every reader.
+    q = db.query(SurveyObservation).filter(live_observations())
     if not writer.owner:
         q = q.filter(SurveyObservation.writer_sub == writer.sub)
     if bin:
@@ -1380,7 +1451,7 @@ def survey_activity(staff: dict = Depends(get_platform_staff), db: Session = Dep
     for w in (db.query(SurveyWalk).filter(SurveyWalk.closed_at.is_(None))
               .order_by(SurveyWalk.started_at).all()):
         n, last = (db.query(sa_func.count(SurveyObservation.id), sa_func.max(SurveyObservation.observed_at))
-                   .filter(SurveyObservation.walk_id == w.id).one())
+                   .filter(SurveyObservation.walk_id == w.id, live_observations()).one())
         area = db.query(SurveyArea).filter(SurveyArea.id == w.area_id).first() if w.area_id else None
         walks.append(ActivityWalkOut(
             id=w.id, holder=holder(w.writer_sub), area_name=area.name if area else None,
@@ -1614,6 +1685,117 @@ def reset_contributor_mfa(contributor_id: UUID, body: ResetMfaIn,
     return ResetMfaOut(contributor_id=c.id, signed_out=result.signed_out,
                        factor_cleared=result.factor_cleared,
                        devices_forgotten=result.devices_forgotten, surveyor_emailed=emailed)
+
+
+# ── ADR-555 D2: withdrawing a contributor's records (super admin only) ───────
+
+MAX_WITHDRAW_DAYS = 366
+
+
+class WithdrawIn(BaseModel):
+    """Every scope required (CLAUDE.md D11): the contributor (path), both dates,
+    and the count the operator was shown. No default reaches "everything"."""
+    model_config = ConfigDict(extra="forbid")
+    from_date: date
+    to_date: date
+    reason: str = Field(min_length=10, max_length=200)
+    expected_count: int = Field(ge=1, le=100_000)
+
+    @model_validator(mode="after")
+    def _range(self):
+        if self.from_date > self.to_date:
+            raise ValueError("The start date must be on or before the end date.")
+        if (self.to_date - self.from_date).days > MAX_WITHDRAW_DAYS:
+            raise ValueError(f"Withdraw at most {MAX_WITHDRAW_DAYS} days at a time.")
+        return self
+
+
+class WithdrawPreviewOut(BaseModel):
+    contributor_id: UUID
+    from_date: date
+    to_date: date
+    count: int
+
+
+class WithdrawOut(BaseModel):
+    withdrawal_id: UUID
+    contributor_id: UUID
+    count: int
+    blocks_affected: int
+
+
+def _contributor(db: Session, contributor_id: UUID) -> SurveyContributor:
+    c = db.query(SurveyContributor).filter(SurveyContributor.id == contributor_id).first()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Contributor not found.")
+    return c
+
+
+def _live_in_range(db: Session, sub: str, from_date: date, to_date: date):
+    return (db.query(SurveyObservation)
+            .filter(SurveyObservation.writer_sub == sub,
+                    SurveyObservation.observed_on >= from_date,
+                    SurveyObservation.observed_on <= to_date,
+                    live_observations()))
+
+
+@router.get("/contributors/{contributor_id}/withdrawal-preview", response_model=WithdrawPreviewOut)
+def preview_withdrawal(contributor_id: UUID,
+                       from_date: date = Query(...), to_date: date = Query(...),
+                       _owner: dict = Depends(get_super_admin), db: Session = Depends(get_db)):
+    """How many live records a withdrawal over these days would take out (D2)."""
+    if from_date > to_date or (to_date - from_date).days > MAX_WITHDRAW_DAYS:
+        raise HTTPException(status_code=422, detail="Choose a range of up to a year, start before end.")
+    c = _contributor(db, contributor_id)
+    n = _live_in_range(db, c.cognito_sub, from_date, to_date).count()
+    return WithdrawPreviewOut(contributor_id=c.id, from_date=from_date, to_date=to_date, count=n)
+
+
+@router.post("/contributors/{contributor_id}/withdraw-records", response_model=WithdrawOut)
+def withdraw_records(contributor_id: UUID, body: WithdrawIn,
+                     owner: dict = Depends(get_super_admin), db: Session = Depends(get_db)):
+    """D2: take one contributor's records over a date range out of the record.
+
+    Append-only: no observation is changed. Each gets a withdrawal row beside it
+    and every reader stops counting it -- so the doors it locked re-open. The
+    rows, false attestations included, remain as the evidence.
+
+    Refused unless the live count still equals what the operator previewed, so
+    neither a stale preview nor a slip takes more than they saw.
+    """
+    reason, _flags = scrub_note(body.reason.strip())
+    reason = (reason or "").strip()
+    if len(reason) < 10:
+        raise HTTPException(status_code=422, detail="Give a reason of at least 10 characters.")
+    c = _contributor(db, contributor_id)
+    rows = _live_in_range(db, c.cognito_sub, body.from_date, body.to_date).all()
+    if len(rows) != body.expected_count:
+        raise HTTPException(status_code=409, detail=(
+            f"{len(rows)} records match now, not {body.expected_count}. Preview again before withdrawing."))
+    batch = SurveyWithdrawal(contributor_id=c.id, writer_sub=c.cognito_sub, from_date=body.from_date,
+                             to_date=body.to_date, reason=reason, count=len(rows),
+                             withdrawn_by=owner.get("id") or "", created_at=_now())
+    db.add(batch)
+    db.flush()
+    for r in rows:
+        db.add(SurveyObservationWithdrawal(observation_id=r.id, withdrawal_id=batch.id))
+    walk_ids = {r.walk_id for r in rows}
+    blocks = {(w.borough, w.block_key) for w in
+              db.query(SurveyWalk).filter(SurveyWalk.id.in_(walk_ids)).all()} if walk_ids else set()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Some of these were withdrawn a moment ago. Preview again.")
+    # ONE audit row per batch (D11): ids and counts, never addresses (ADR-493 D8).
+    write_audit(db, action_type="survey.records.withdraw", target_table="survey_withdrawals",
+                target_id=str(batch.id), actor_id=None, company_id=None,
+                detail={**super_admin_identity(owner), "contributor_id": str(c.id),
+                        "from_date": body.from_date.isoformat(), "to_date": body.to_date.isoformat(),
+                        "count": len(rows), "blocks_affected": len(blocks), "reason": reason})
+    db.commit()
+    return WithdrawOut(withdrawal_id=batch.id, contributor_id=c.id, count=len(rows),
+                       blocks_affected=len(blocks))
 
 
 class StaffReleaseIn(BaseModel):

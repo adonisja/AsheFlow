@@ -154,5 +154,14 @@ def confirm_reset_request(request: Request, body: _ConfirmIn, db: Session = Depe
     db.commit()
     who_text = {"employee": "your company's admins", "surveyor": "AsheFlow support",
                 "staff": "a super admin"}[kind]
-    return {"detail": f"Request sent to {who_text}. Once they reset it, sign in and set up two-factor again.",
-            "sent_to": who_text}
+    # ADR-556 D4: both clients show this as the next step, so it's written once,
+    # here, where the account kind is known. Only the surveyor reset emails the
+    # person (send_surveyor_mfa_reset_notice), so only it promises an email.
+    next_step = ("We'll email you when they've reset it. Then sign in and set up two-factor again."
+                 if kind == "surveyor" else
+                 "Once they've reset it, sign in and you'll set up two-factor again.")
+    # `next_step` apart from `detail` so a client can title its notice with
+    # who it went to and put only the next step underneath, without repeating
+    # "Request sent" twice (owner, 2026-10-21: "clunky").
+    return {"detail": f"Request sent to {who_text}. {next_step}", "sent_to": who_text,
+            "next_step": next_step}
