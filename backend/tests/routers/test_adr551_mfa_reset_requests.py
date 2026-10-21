@@ -121,6 +121,8 @@ def test_an_employee_request_reaches_their_admins_once(db, _no_broker):
     admin, mgmt, dispatch = _emp(db, "admin"), _emp(db, "management"), _emp(db, "dispatch")
     out = _confirm(db, _cognito_user(sub))
     assert out["sent_to"] == "your company's admins"
+    # ADR-556 D4: no reset email exists for employees, so none is promised.
+    assert "email" not in out["detail"] and "sign in" in out["detail"]
     req = db.query(MfaResetRequest).one()
     assert (req.account_kind, req.company_id, req.request_ip) == ("employee", SEED_COMPANY_ID, "203.0.113.7")
     told = {n.employee_id for n in db.query(Notification).filter(Notification.type == "mfa_reset_requested")}
@@ -138,6 +140,9 @@ def test_a_surveyor_request_is_for_support(db):
     db.add(c); db.commit()
     out = _confirm(db, _cognito_user(sub, groups=("surveyor",)))
     assert out["sent_to"] == "AsheFlow support"
+    # ADR-556 D4: the surveyor reset emails them (send_surveyor_mfa_reset_notice).
+    assert "email you" in out["detail"] and "set up two-factor again" in out["detail"]
+    assert out["detail"] == f"Request sent to AsheFlow support. {out['next_step']}"
     req = db.query(MfaResetRequest).one()
     assert (req.account_kind, req.contributor_id) == ("surveyor", c.id)
 
@@ -147,6 +152,7 @@ def test_a_staff_request_raises_a_platform_alert(db):
     out = _confirm(db, _cognito_user(str(uuid.uuid4()), username="test.support",
                                      groups=("platform_support",)), alert=alert)
     assert out["sent_to"] == "a super admin"
+    assert "email" not in out["detail"]                 # ADR-556 D4
     assert alert.call_args.kwargs["alert_type"] == "mfa.reset_requested"
     assert db.query(MfaResetRequest).one().account_kind == "staff"
 

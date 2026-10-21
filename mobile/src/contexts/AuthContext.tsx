@@ -4,12 +4,13 @@ import React, {
   useEffect,
   useState,
   useCallback,
+  useRef,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { unregisterFromPush } from '@api/pushRegistration';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
-import { Alert, AppState, Linking } from 'react-native';
-import { onCredentialsChanged } from '@api/client';
+import { AppState, Linking } from 'react-native';
+import { onCredentialsChanged, onMfaEnrolmentRequired } from '@api/client';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
 import {
@@ -121,6 +122,15 @@ type AuthContextType = {
   capabilities: Capabilities | null;
   /** null means "not known", not "no MFA required" (ADR-377). */
   mfaStatus: MfaStatus | null;
+  /** ADR-556 (web: ADR-469). `mfaStatus` null means BOTH "not asked yet" and
+   *  "the read failed"; routing must tell them apart. True once the first read
+   *  for this user has been ANSWERED, either way -- so the navigator can hold
+   *  while unknown, and a failed read still lets the shift start. */
+  mfaResolved: boolean;
+  /** ADR-556 D5. Why this device was signed out, for the sign-in card to say.
+   *  `audience` picks who to contact: a platform account has no manager. */
+  sessionNotice: { reason: 'credentials'; audience: 'platform' | 'employee' } | null;
+  clearSessionNotice: () => void;
   /** Re-fetch after enrolling, so the blocking screen can release. */
   refreshMfaStatus: () => Promise<void>;
   /** Fails OPEN when capabilities are unknown: a walker on a flaky van
@@ -138,6 +148,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   /* null means "not known", NOT "no MFA required" (ADR-377). */
   const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
+  const [mfaResolved, setMfaResolved] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState<AuthContextType['sessionNotice']>(null);
+  const clearSessionNotice = useCallback(() => setSessionNotice(null), []);
 
   useEffect(() => { restoreSession(); }, []);
 
@@ -168,14 +181,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { sub.remove(); if (timer) clearInterval(timer); };
   }, [user, isPlatform]);
 
+  /* ADR-556 D5. Shown on the sign-in card, not as a native Alert over it: the
+     Alert had to be dismissed before the form could be used, and named only
+     "password or email" when a two-factor reset ends sessions the same way
+     (one stamp, one `credentials_changed` code). Read the audience BEFORE
+     clearing the user. */
+  const userRef = useRef<AuthUser | null>(null);
+  userRef.current = user;
   useEffect(() => onCredentialsChanged(() => {
+    const groups = userRef.current?.groups ?? [];
+    const platform = groups.some(g => g === 'super_admin' || g === 'platform_support' || g === 'surveyor');
+    setSessionNotice({ reason: 'credentials', audience: platform ? 'platform' : 'employee' });
     setUser(null);
     setCapabilities(null);
-    Alert.alert(
-      'Signed out',
-      "This account's password or email was changed, so you were signed out everywhere. "
-        + "Sign in again. If you didn't make the change, tell your manager straight away.",
-    );
   }), []);
 
   const restoreSession = async () => {
@@ -395,19 +413,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      Same shape as the capabilities load above: keyed on `user`, cancellable,
      and a failure leaves null. `null` means "not known", NOT "no MFA required";
      a banner is worth nothing if failing to fetch it blocks a shift at 05:00. */
+  const userId = user?.id ?? null;
   useEffect(() => {
-    if (!user) { setMfaStatus(null); return; }
+    if (!userId) { setMfaStatus(null); setMfaResolved(false); return; }
     let cancelled = false;
+    /* ADR-556: the navigator now routes on this, so it must not render the app
+       while the answer is still in flight -- an unenrolled account saw the
+       survey register before the setup screen replaced it. The 05:00 property
+       is kept by the catch (a failure is an answer: null, not blocked) and by
+       apiClient's 10 s timeout (a hung read cannot hold the spinner forever). */
+    setMfaResolved(false);
     (async () => {
       try {
         const res = await apiClient.get<MfaStatus>('/employees/me/mfa-status');
         if (!cancelled) setMfaStatus(res.data);
       } catch {
         if (!cancelled) setMfaStatus(null);
+      } finally {
+        if (!cancelled) setMfaResolved(true);
       }
     })();
     return () => { cancelled = true; };
-  }, [user]);
+    /* Keyed on the account, not the object: sign-in sets `user` twice (base,
+       then firstName), and re-running on the second would flip mfaResolved
+       back to false and remount the whole app under the spinner. */
+  }, [userId]);
+
+  /* ADR-556 D2. The server just refused a call because this account must enrol.
+     Re-read the full status (MfaRequiredScreen words itself from `tier` and the
+     deadline); if that read fails too, the refusal itself is the answer, so mark
+     it blocked rather than leave the person in a shell where every call errors. */
+  useEffect(() => onMfaEnrolmentRequired(() => {
+    void (async () => {
+      try {
+        const res = await apiClient.get<MfaStatus>('/employees/me/mfa-status');
+        setMfaStatus({ ...res.data, blocked: true });
+      } catch {
+        setMfaStatus(prev => prev ? { ...prev, blocked: true } : {
+          required: true, enrolled: false, tier: 'privileged', grace_days_total: 0,
+          days_remaining: 0, setup_window_ends_at: null, blocked: true,
+        });
+      }
+      setMfaResolved(true);
+    })();
+  }), []);
 
   /* ADR-381 D2 — the blocking screen calls this after enrolling, so the app
      lets them through without a sign-out/sign-in round trip. Failure leaves the
@@ -436,7 +485,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={{
       user, isLoading, isAuthenticated: !!user,
       signIn, respondToChallenge, signInWithProvider, signOut, hasRole,
-      capabilities, hasFeature, mfaStatus, refreshMfaStatus,
+      capabilities, hasFeature, mfaStatus, mfaResolved, refreshMfaStatus,
+      sessionNotice, clearSessionNotice,
     }}>
       {children}
     </AuthContext.Provider>
@@ -450,6 +500,9 @@ const AUTH_FALLBACK: AuthContextType = {
   // null = "not known". Outside a provider nothing is known, which is the
   // honest value here (ADR-377).
   mfaStatus: null,
+  mfaResolved: false,
+  sessionNotice: null,
+  clearSessionNotice: () => {},
   refreshMfaStatus: async () => {},
   signIn: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   respondToChallenge: async () => { throw new Error('useAuth must be used inside AuthProvider'); },

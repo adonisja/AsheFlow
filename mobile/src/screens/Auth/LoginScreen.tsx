@@ -9,11 +9,12 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 import { classifySignInError } from './signInError';
-import ResetRequest from './ResetRequest';
+import ResetRequest, { ResetRequestLink, type ResetSent } from './ResetRequest';
+import SignInNotice, { NoticeText } from './SignInNotice';
 
 export default function LoginScreen() {
   const c = useColors();
-  const { signIn, respondToChallenge, signInWithProvider } = useAuth();
+  const { signIn, respondToChallenge, signInWithProvider, sessionNotice, clearSessionNotice } = useAuth();
 
   const [username,       setUsername]       = useState('');
   const [password,       setPassword]       = useState('');
@@ -23,6 +24,10 @@ export default function LoginScreen() {
   const [error,          setError]          = useState<string | null>(null);
   // ADR-548 D5: the enrolment-window refusal is a state, not an error.
   const [mfaSetupClosed, setMfaSetupClosed] = useState(false);
+  /* ADR-556 D3. The reset request is the card while it's open, and on success
+     the card returns to sign-in with the username kept and this next step. */
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetSent, setResetSent] = useState<ResetSent | null>(null);
 
   /** Every catch goes through here, so Cognito's trigger wrapper never shows. */
   const fail = (err: any, fallback: string) => {
@@ -47,6 +52,8 @@ export default function LoginScreen() {
     setLoading(true);
     setError(null);
     setMfaSetupClosed(false);
+    setResetSent(null);
+    clearSessionNotice();
     try {
       const next = await signIn(username.trim(), password);
       if (next) { setChallenge(next); setAnswer(''); }
@@ -140,8 +147,29 @@ export default function LoginScreen() {
 
         {/* ── Form card ───────────────────────────────────────── */}
         <View style={s.card}>
-          <Text style={s.cardTitle}>Sign in</Text>
-          <Text style={s.cardSub}>Use the credentials provided by your manager</Text>
+          <Text style={s.cardTitle}>{resetOpen ? 'Request a two-factor reset' : 'Sign in'}</Text>
+          <Text style={s.cardSub}>
+            {resetOpen ? "For when you can't use your authenticator" : 'Use the credentials provided by your manager'}
+          </Text>
+
+          {resetOpen ? (
+            <ResetRequest
+              username={username.trim()}
+              onCancel={() => setResetOpen(false)}
+              onSent={result => {
+                // Back to the username/password form; the username stays.
+                setResetOpen(false);
+                setChallenge(null);
+                setAnswer('');
+                setPassword('');
+                setError(null);
+                setMfaSetupClosed(false);
+                setResetSent(result);
+                clearSessionNotice();
+              }}
+            />
+          ) : (
+          <>
 
           {/* ── Challenge step ──────────────────────────────────
               Replaces the credential fields rather than appearing under them:
@@ -231,10 +259,31 @@ export default function LoginScreen() {
 
               {/* ADR-551 D1: the way out for someone who can't produce the code. */}
               {(challenge.name === 'SOFTWARE_TOKEN_MFA' || challenge.name === 'EMAIL_OTP') &&
-                <ResetRequest username={username.trim()} />}
+                <ResetRequestLink onPress={() => { setError(null); setResetOpen(true); }} />}
             </>
           ) : (
           <>
+          {/* ADR-556 D3: what happens next, after a reset request. */}
+          {resetSent && (
+            <SignInNotice tone="success" title={`Request sent to ${resetSent.sentTo}`}>
+              {resetSent.nextStep}
+            </SignInNotice>
+          )}
+          {/* ADR-556 D5: why this device was signed out. One stamp ends sessions
+              for a password change, an email change AND a two-factor reset, so
+              the wording names all three; who to contact depends on the account. */}
+          {sessionNotice && !resetSent && !mfaSetupClosed && (
+            <SignInNotice tone="warning" title="You were signed out on every device">
+              <NoticeText>
+                This account's password, email or two-factor sign-in was changed. Sign in again to continue.
+              </NoticeText>
+              <NoticeText strong="Didn't expect this?">
+                {sessionNotice.audience === 'platform'
+                  ? 'Contact AsheFlow support straight away.'
+                  : 'Tell your manager straight away.'}
+              </NoticeText>
+            </SignInNotice>
+          )}
           {/* Username */}
           <View style={s.fieldGroup}>
             <Text style={s.label}>Username</Text>
@@ -254,12 +303,7 @@ export default function LoginScreen() {
 
           {/* Password */}
           <View style={s.fieldGroup}>
-            <View style={s.labelRow}>
-              <Text style={s.label}>Password</Text>
-              <TouchableOpacity onPress={() => setShowPw(v => !v)} hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}>
-                <Text style={[s.showHide, { color: c.brandOutdoor }]}>{showPw ? 'Hide' : 'Show'}</Text>
-              </TouchableOpacity>
-            </View>
+            <Text style={s.label}>Password</Text>
             <TextInput
               ref={pwRef}
               style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
@@ -273,29 +317,37 @@ export default function LoginScreen() {
               onSubmitEditing={handleLogin}
               returnKeyType="go"
             />
+            {/* Under the field, not beside its label (owner, 2026-10-21): focus
+                then runs username -> password -> toggle, the order the eye reads
+                and the order a hardware Tab key walks. */}
+            <TouchableOpacity
+              onPress={() => setShowPw(v => !v)}
+              style={s.showRow}
+              hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: showPw }}
+              accessibilityLabel="Show password"
+            >
+              <Text style={[s.showHide, { color: c.brandOutdoor }]}>{showPw ? 'Hide password' : 'Show password'}</Text>
+            </TouchableOpacity>
           </View>
 
           {/* ADR-548 D5. Warning, not danger: nothing the person typed was
               wrong, and there is one way out. What happened, then what to do. */}
           {mfaSetupClosed && (
-            <View
-              accessibilityRole="alert"
-              style={[s.noticeBox, { backgroundColor: c.warning + '14', borderColor: c.warning + '40' }]}
-            >
-              <Text style={[s.noticeTitle, { color: c.foreground }]}>Two-factor setup needed</Text>
-              <Text style={[s.noticeBody, { color: c.mutedForeground }]}>
+            <SignInNotice tone="warning" title="Two-factor setup needed">
+              <NoticeText>
                 This account needs two-factor authentication, and the 24 hours to
                 set it up after your first sign-in have passed.
-              </Text>
-              <Text style={[s.noticeBody, { color: c.mutedForeground }]}>
-                <Text style={{ color: c.foreground, fontWeight: fontWeight.semibold }}>What to do: </Text>
+              </NoticeText>
+              <NoticeText strong="What to do:">
                 request a reset below. Once someone resets it, sign in again and
                 you will go straight to setup.
-              </Text>
-            </View>
+              </NoticeText>
+            </SignInNotice>
           )}
           {/* ADR-551 D1: and for someone whose setup window closed. */}
-          {mfaSetupClosed && <ResetRequest username={username.trim()} />}
+          {mfaSetupClosed && <ResetRequestLink onPress={() => setResetOpen(true)} />}
 
           {/* Error */}
           {error && (
@@ -350,6 +402,8 @@ export default function LoginScreen() {
             }
             <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Google</Text>
           </TouchableOpacity>
+          </>
+          )}
           </>
           )}
         </View>
@@ -423,7 +477,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   cardSub:    { fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: spacing.lg },
 
   fieldGroup: { marginBottom: spacing.md },
-  labelRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
+  showRow:    { alignSelf: 'flex-end', marginTop: spacing.xs, paddingVertical: 2 },
   label:      { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground },
   // brandOutdoor, not brand: `brand` is tuned against the BACKGROUND and only
   // reaches 4.10:1 on the lighter card, short of the 4.5 this small text needs.
@@ -439,9 +493,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   errorBox:  { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginBottom: spacing.sm },
   errorText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
-  noticeBox:   { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.xs },
-  noticeTitle: { fontSize: fontSize.md, fontWeight: fontWeight.semibold },
-  noticeBody:  { fontSize: fontSize.sm, lineHeight: 20 },
 
   btn: {
     marginTop: spacing.xs,

@@ -175,7 +175,10 @@ _SESSION_ENDED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail={
         "code": "credentials_changed",
-        "message": "Your session ended because your password or email changed. Sign in again.",
+        # ADR-556 D5: one stamp ends sessions for a password change, an email
+        # change AND a two-factor reset (account_security.mark_sessions_ended).
+        "message": ("Your session ended because this account's password, email or two-factor "
+                    "sign-in changed. Sign in again."),
     },
 )
 

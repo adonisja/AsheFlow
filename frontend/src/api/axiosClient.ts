@@ -44,6 +44,14 @@ axiosClient.interceptors.response.use(
       const credentialsChanged = error.response?.data?.detail?.code === 'credentials_changed';
       if (credentialsChanged) {
         try { sessionStorage.setItem('asheflow_session_ended', 'credentials'); } catch { /* private mode */ }
+        /* ADR-556 D5: who the sign-in card should tell them to contact. Read
+           now, while the tokens still exist; a platform account has no manager. */
+        try {
+          const groups = (await fetchAuthSession()).tokens?.idToken?.payload['cognito:groups'];
+          const platform = Array.isArray(groups)
+            && groups.some(g => g === 'super_admin' || g === 'platform_support' || g === 'surveyor');
+          sessionStorage.setItem('asheflow_session_ended_audience', platform ? 'platform' : 'employee');
+        } catch { /* no session or private mode: the card falls back to neutral wording */ }
       }
       // JWT expired or invalid — sign out and redirect to login so the user
       // gets a fresh token rather than seeing silent API failures.

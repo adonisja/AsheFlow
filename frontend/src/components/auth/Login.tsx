@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { signIn, signInWithRedirect, confirmSignIn } from 'aws-amplify/auth';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
 import { classifySignInError } from '../../utils/signInError';
-import ResetRequest from './ResetRequest';
+import ResetRequest, { ResetRequestLink, type ResetSent } from './ResetRequest';
+import SignInNotice from './SignInNotice';
 import QRCode from 'qrcode';
 import logoFull from '../../assets/logo-full.svg';
 import logoFullLight from '../../assets/logo-full-light.svg';
@@ -17,6 +18,10 @@ export default function Login() {
   // ADR-548 D5: the enrolment-window refusal is a state, not an error.
   const [mfaSetupClosed,         setMfaSetupClosed]         = useState(false);
   const [successMsg,             setSuccessMsg]             = useState('');
+  /* ADR-556 D3. The reset request is the card while it's open; on success the
+     card returns to sign-in with the username kept and this next step. */
+  const [resetOpen,              setResetOpen]              = useState(false);
+  const [resetSent,              setResetSent]              = useState<ResetSent | null>(null);
   /* Written by useSessionTimeout on the way out (ADR-463). Read once: a
      reload should not keep re-announcing an old sign-out. */
   const [sessionEnded] = useState<string | null>(() => {
@@ -30,6 +35,15 @@ export default function Login() {
     const v = new URLSearchParams(window.location.search).get('ended') ?? stored;
     return v === 'idle' || v === 'absolute' || v === 'credentials'
       || v === 'password' || v === 'email' ? v : null;
+  });
+  /* ADR-556 D5: who to contact after a forced sign-out. Written beside the
+     reason by axiosClient; a platform account has no manager. Null = unknown. */
+  const [endedAudience] = useState<'platform' | 'employee' | null>(() => {
+    try {
+      const a = sessionStorage.getItem('asheflow_session_ended_audience');
+      sessionStorage.removeItem('asheflow_session_ended_audience');
+      return a === 'platform' || a === 'employee' ? a : null;
+    } catch { return null; }
   });
   /* ADR-362 — the step sign-in stopped on, if any.
      This was a single `isNewPasswordRequired` boolean plus a catch-all that
@@ -80,6 +94,7 @@ export default function Login() {
     setError('');
     setMfaSetupClosed(false);
     setSuccessMsg('');
+    setResetSent(null);
 
     /* Read whatever step Amplify reports and put the matching field on screen.
        Amplify chains: choosing a factor resolves to the challenge for its code,
@@ -248,35 +263,51 @@ export default function Login() {
 
         <div className="card-elevated p-6 sm:p-8 2xl:p-10 backdrop-blur-sm bg-card/90">
           <h2 className="text-xl font-semibold text-center text-foreground mb-1">
-            {copy ? copy.heading : 'Welcome back'}
+            {resetOpen ? 'Request a two-factor reset' : copy ? copy.heading : 'Welcome back'}
           </h2>
           <p className="text-subtle text-center mb-8">
-            {copy ? copy.sub : 'Sign in to your AsheFlow account'}
+            {resetOpen ? "For when you can't use your authenticator"
+              : copy ? copy.sub : 'Sign in to your AsheFlow account'}
           </p>
+
+          {resetOpen ? (
+            <ResetRequest
+              username={username}
+              onCancel={() => setResetOpen(false)}
+              onSent={result => {
+                // Back to the username/password form. backToSignIn keeps the
+                // username, so the next attempt is one field away.
+                backToSignIn();
+                setMfaSetupClosed(false);
+                setResetOpen(false);
+                setResetSent(result);
+              }}
+            />
+          ) : (
+          <>
+          {/* ADR-556 D3: what happens next, after a reset request. */}
+          {resetSent && !challengeStep && (
+            <SignInNotice tone="success" title={`Request sent to ${resetSent.sentTo}`}>
+              <p>{resetSent.nextStep}</p>
+            </SignInNotice>
+          )}
 
           {/* ADR-548 D5. Not red: the person did nothing wrong, and there is one
               way out. Says what happened, then what to do, in that order. */}
+          {/* ADR-548 D5. Not red: the person did nothing wrong, and there is
+              one way out. What happened, then what to do. */}
           {mfaSetupClosed && (
-            /* The icon sits in the heading row, not in a column of its own: a
-               column indents every line of the body ~2rem past the form's
-               left edge, and the card reads as shifted right (owner, 2026-10-20). */
-            <div role="alert" className="bg-warning/10 border border-warning/30 rounded-xl px-4 py-4 mb-6">
-              <div className="space-y-1.5 text-sm">
-                <p className="flex items-center gap-2 font-semibold text-foreground">
-                  <ShieldAlert className="w-4 h-4 text-warning shrink-0" aria-hidden="true" />
-                  Two-factor setup needed
-                </p>
-                <p className="text-muted-foreground">
-                  This account needs two-factor authentication, and the 24 hours
-                  to set it up after your first sign-in have passed.
-                </p>
-                <p className="text-muted-foreground">
-                  <span className="font-medium text-foreground">What to do: </span>
-                  request a reset below. Once someone resets it, sign in again
-                  and you will go straight to setup.
-                </p>
-              </div>
-            </div>
+            <SignInNotice tone="warning" title="Two-factor setup needed">
+              <p>
+                This account needs two-factor authentication, and the 24 hours
+                to set it up after your first sign-in have passed.
+              </p>
+              <p>
+                <span className="font-medium text-foreground">What to do: </span>
+                request a reset below. Once someone resets it, sign in again
+                and you will go straight to setup.
+              </p>
+            </SignInNotice>
           )}
 
           {error && (
@@ -294,27 +325,40 @@ export default function Login() {
           {/* ADR-541: 'password' / 'email' are this person's own change, so
               they read as a success; 'credentials' is another device's change
               ending this session, which the person needs to notice. */}
-          {sessionEnded && !challengeStep && (sessionEnded === 'password' || sessionEnded === 'email') && (
-            <div className="bg-success/5 text-success px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-success/20">
-              {sessionEnded === 'password'
-                ? 'Password changed. You were signed out everywhere. Sign in with your new password.'
-                : 'Email updated. You were signed out everywhere. Sign in to continue.'}
-            </div>
-          )}
-          {sessionEnded && !challengeStep && sessionEnded !== 'password' && sessionEnded !== 'email' && (
-            <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">
-              {sessionEnded === 'idle'
-                ? 'You were signed out after a period of inactivity. Sign in to continue.'
-                : sessionEnded === 'credentials'
-                  ? "You were signed out because this account's password or email was changed. If that wasn't you, tell your manager straight away."
-                  : 'Your session reached its time limit. Sign in to continue.'}
-            </div>
+          {/* ADR-556 D5. One notice per reason. 'credentials' is ONE server code
+              for a password change, an email change and a two-factor reset (one
+              stamp ends them all), so its wording names all three. */}
+          {sessionEnded && !challengeStep && (
+            sessionEnded === 'password' ? (
+              <SignInNotice tone="success" title="Password changed">
+                <p>You were signed out everywhere. Sign in with your new password.</p>
+              </SignInNotice>
+            ) : sessionEnded === 'email' ? (
+              <SignInNotice tone="success" title="Email updated">
+                <p>You were signed out everywhere. Sign in to continue.</p>
+              </SignInNotice>
+            ) : sessionEnded === 'credentials' ? (
+              <SignInNotice tone="warning" title="You were signed out on every device">
+                <p>This account's password, email or two-factor sign-in was changed. Sign in again to continue.</p>
+                <p>
+                  <span className="font-medium text-foreground">Didn't expect this? </span>
+                  {endedAudience === 'platform' ? 'Contact AsheFlow support straight away.'
+                    : endedAudience === 'employee' ? 'Tell your manager straight away.'
+                    : 'Tell whoever manages your account straight away.'}
+                </p>
+              </SignInNotice>
+            ) : (
+              <SignInNotice tone="info" title={sessionEnded === 'idle' ? 'Signed out after inactivity' : 'Your session reached its time limit'}>
+                <p>Sign in to continue.</p>
+              </SignInNotice>
+            )
           )}
 
           {successMsg && (
-            <div className="bg-success/5 text-success px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-success/20">
-              {successMsg}
-            </div>
+            /* ADR-556 D5: a step's instruction, not a success -- it was a green
+               box over every challenge. Plain text under the heading now; the
+               card's one notice slot is for things that happened. */
+            <p className="text-sm text-muted-foreground text-center -mt-4 mb-6">{successMsg}</p>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -424,6 +468,8 @@ export default function Login() {
                     <button
                       type="button"
                       onClick={() => setShowPassword(v => !v)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
                       className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground hover:text-foreground transition-colors"
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -470,7 +516,7 @@ export default function Login() {
               whose setup window closed. */}
           {(challengeStep === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE'
             || challengeStep === 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE'
-            || mfaSetupClosed) && <ResetRequest username={username} />}
+            || mfaSetupClosed) && <ResetRequestLink onOpen={() => { setError(''); setResetOpen(true); }} />}
 
           {/* Federation — for employees whose Cognito account is linked to Discord/Google */}
           {!challengeStep && (
@@ -515,6 +561,8 @@ export default function Login() {
                 <span className="text-foreground font-medium">No self-signup.</span>
               </p>
             </div>
+          )}
+          </>
           )}
         </div>
       </div>
