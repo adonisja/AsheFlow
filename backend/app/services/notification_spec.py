@@ -243,6 +243,11 @@ SPEC: dict[str, Spec] = {
         'Email Delivery Failing', WARN, '📧'),   # Company admins
     "identity_revocation_failed": Spec(ACTION, BANNER,
         'Access Revocation Failed', BAD, '🛡️'),   # Company admins
+    # ADR-551: a locked-out employee proved their inbox and asked for a
+    # two-factor reset. Push too: they cannot work until someone acts.
+    # Discord too: every pushed type mirrors (ADR-487's invariant).
+    "mfa_reset_requested": Spec(ACTION, BANNER | PUSH | DISCORD,
+        '2FA Reset Requested', WARN, '🔐'),   # Company admins + management
     "inspection_failed": Spec(ACTION, BANNER | PUSH | DISCORD,
         'Inspection Failed', BAD, '🔧'),   # Oversight + the driver
     "quiz_issued": Spec(ACTION, BANNER | PUSH | DISCORD,
@@ -639,6 +644,7 @@ LINKS: dict[str, Link] = {
     "discord_integration_failed": _l("/dispatch"),
     "email_delivery_failed": _l("/dispatch"),
     "identity_revocation_failed": _l("/dispatch"),
+    "mfa_reset_requested": _l("/assets"),            # ADR-551: the Sign-in protection list
     "tenant_notice": _l("/notifications"),
 }
 

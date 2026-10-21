@@ -171,6 +171,9 @@ _NO_AUDIT = {
     # ADR-549: the platform twin of employees.py::request_password_code -- emails
     # a code and changes nothing; /platform/me/password/confirm audits the change.
     "platform_account.py::request_password_code",
+    # ADR-551: public step 1 only emails a code (Redis, no row);
+    # /auth/mfa-reset/confirm audits the request it records.
+    "auth_mfa_reset.py::request_reset_code",
 }
 
 # Follow-ups from D13 that D14 closed: truck CRUD, PlaceType Library

@@ -908,6 +908,32 @@ def send_mfa_setup_reminder(*, to_email: str, account_ref: str) -> None:
                          account_ref=account_ref)
 
 
+def send_mfa_reset_request_code(*, to_email: str, name: str, code: str, account_ref: str) -> None:
+    """The code that confirms a two-factor reset request (ADR-551 D2).
+
+    The requester has no session, so this is what proves the inbox owner is the
+    one asking. It is deliberately NOT a reset: entering the code only puts a
+    request in front of the people who can reset the account.
+    """
+    first, first_html = _greeting_name(name)
+    subject = "Confirm your two-factor reset request"
+    lead = ("Someone asked to reset the two-factor sign-in on your AsheFlow account. "
+            "Enter this code on the sign-in screen to send the request.")
+    warn = ("<p style=\"margin:0;font-size:14px;line-height:1.55;color:#8E1F1F;\"><strong>If this wasn't you,</strong> "
+            "don't share this code. Nothing changes without it, and nothing is reset until a person approves it.</p>")
+    warn_text = ("If this wasn't you, don't share this code. Nothing changes without it, "
+                 "and nothing is reset until a person approves it.")
+    body = (f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, {lead}</p>'
+            f"{_code_block(code)}"
+            '<p style="margin:0 0 16px;font-size:13px;color:#6B7280;">The code works once and expires in 10 minutes.</p>'
+            f"{warn}")
+    text = (f"Hi {first},\n\n{lead}\n\n    {code}\n\n"
+            f"The code works once and expires in 10 minutes.\n\n{warn_text}\n\n{_SECURITY_FOOTER_TEXT}")
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading="Confirm your reset request", body_html=body, label="Security"),
+                         account_ref=account_ref)
+
+
 def send_surveyor_mfa_reset_notice(*, to_email: str, name: str, reason: str,
                                    account_ref: str) -> None:
     """To a surveyor whose two-factor platform staff reset (ADR-550 D2).

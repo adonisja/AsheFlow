@@ -75,3 +75,4 @@ from app.models.survey_register import SurveyContributor, SurveyWalk, SurveyObse
 from app.models.survey_register import SurveyDeliveryPoint, SurveyReceivesFor  # ADR-504 D8
 from app.models.stolen_package_report import StolenPackageReport, ReportVersion  # noqa: F401  ADR-512
 from app.models.platform_session import PlatformSessionStamp  # ADR-549
+from app.models.mfa_reset_request import MfaResetRequest  # ADR-551

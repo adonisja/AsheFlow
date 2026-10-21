@@ -787,6 +787,40 @@ def get_mfa_deadline(
     return out
 
 
+class MfaResetRequestRow(BaseModel):
+    """One employee waiting for a two-factor reset (ADR-551 D3)."""
+    employee_id: UUID
+    name: str
+    role: str
+    requested_at: datetime
+
+
+@router.get("/mfa-reset-requests", response_model=List[MfaResetRequestRow])
+def list_mfa_reset_requests(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["admin", "management"])),
+    db: Session = Depends(get_db),
+):
+    """Who in this company asked for a two-factor reset (ADR-551 D3).
+
+    The same people who can do the reset (the /{id}/mfa/reset gate). The
+    ADR-467 list covers only privileged roles; a walker who lost their phone
+    needs to be seen too, so this lists any role. Company-scoped (D1).
+    """
+    from app.services import mfa_reset_requests
+    cutoff = datetime.now(timezone.utc) - mfa_reset_requests.SHOWN_FOR
+    from app.models.mfa_reset_request import MfaResetRequest
+    rows = (db.query(MfaResetRequest, Employee)
+            .join(Employee, Employee.cognito_sub == MfaResetRequest.cognito_sub)
+            .filter(MfaResetRequest.company_id == caller.company_id,
+                    Employee.company_id == caller.company_id,
+                    MfaResetRequest.status == "pending",
+                    MfaResetRequest.requested_at >= cutoff)
+            .order_by(MfaResetRequest.requested_at).all())
+    return [MfaResetRequestRow(employee_id=e.id, name=e.name, role=e.role, requested_at=r.requested_at)
+            for r, e in rows]
+
+
 @router.get("/mfa-enrolment", response_model=List[EmployeeMfaEnrolmentResponse])
 @limiter.limit("20/minute")
 def get_mfa_enrolment(
@@ -845,6 +879,10 @@ def get_mfa_enrolment(
         logger.warning("mfa enrolment: no cognito client: %s", type(exc).__name__)
         client = None
 
+    # ADR-551 D3: who on this list asked for a two-factor reset.
+    from app.services import mfa_reset_requests
+    requested = mfa_reset_requests.pending_since(db, [e.cognito_sub for e in rows if e.cognito_sub])
+
     rank = {"admin": 0, "management": 1, "dispatch": 2}
     rows.sort(key=lambda e: (rank.get(e.role, 9), (e.name or "").lower()))
 
@@ -885,6 +923,7 @@ def get_mfa_enrolment(
             id=emp.id, name=emp.name, role=emp.role,
             pass_spent=pass_spent, enrolled=enrolled,
             account_status=emp.account_status,
+            reset_requested_at=requested.get(emp.cognito_sub) if emp.cognito_sub else None,
         ))
 
     # Audited for the same reason ADR-458 D3 audits the escalation list: this
@@ -1475,6 +1514,10 @@ def reset_employee_mfa(
     # ADR-550 D4: Cognito's sign-out leaves access tokens working here for up
     # to an hour; the stamp ends them now. Written whatever Cognito said.
     target.tokens_valid_after = datetime.now(timezone.utc)
+    # ADR-551 D4: closes the employee's reset request, if any.
+    if target.cognito_sub:
+        from app.services import mfa_reset_requests
+        mfa_reset_requests.resolve_for(db, target.cognito_sub, by_kind="employee", by_ref=str(caller.id))
 
     write_audit(
         db=db,

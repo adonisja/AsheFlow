@@ -58,7 +58,7 @@ from app.models.survey_register import (
     SurveyDoorUnlock, SurveyObservation, SurveyReceivesFor, SurveyWalk,
 )
 from app.schemas.building_taxonomy import BUILDING_TYPES
-from app.services import account_security, mfa_containment, survey_blocks, survey_progress
+from app.services import account_security, mfa_containment, mfa_reset_requests, survey_blocks, survey_progress
 from app.services.address_inventory import AddressSourceUnavailable
 from app.services.audit import super_admin_identity, write_audit
 from app.services.email import send_claim_released_notice, send_credentials_email, send_surveyor_mfa_reset_notice
@@ -1272,6 +1272,8 @@ class ContributorHealthOut(BaseModel):
     account_status: str
     in_surveyor_group: Optional[bool] = None    # None = could not tell
     last_walk_at: Optional[datetime] = None
+    # ADR-551 D3: the surveyor asked for a two-factor reset (pending, last 7 days).
+    reset_requested_at: Optional[datetime] = None
 
 
 class ActivityClaimOut(BaseModel):
@@ -1352,6 +1354,7 @@ def survey_activity(staff: dict = Depends(get_platform_staff), db: Session = Dep
 
     client = _cognito()
     health = []
+    requested = mfa_reset_requests.pending_since(db, [c.cognito_sub for c in contributors])
     for c in contributors:
         status_, in_group = _account_state(client, c.cognito_username)
         health.append(ContributorHealthOut(
@@ -1359,6 +1362,7 @@ def survey_activity(staff: dict = Depends(get_platform_staff), db: Session = Dep
             agreement_version=c.agreement_version, agreement_signed_on=c.agreement_signed_on,
             revoked_at=c.revoked_at, account_status=status_, in_surveyor_group=in_group,
             last_walk_at=last_walk.get(c.cognito_sub),
+            reset_requested_at=requested.get(c.cognito_sub),
         ))
 
     claims = []
@@ -1585,6 +1589,9 @@ def reset_contributor_mfa(contributor_id: UUID, body: ResetMfaIn,
     result = mfa_containment.contain(username=username, pool_id=settings.aws_cognito_user_pool_id,
                                      region=settings.aws_region, clear_factor=True)
     account_security.mark_sessions_ended(db, c.cognito_sub)
+    # ADR-551 D4: the reset answers the surveyor's request, if they made one.
+    mfa_reset_requests.resolve_for(db, c.cognito_sub, by_kind=_staff_identity(staff)["actor_kind"],
+                                   by_ref=staff.get("id"))
     db.flush()
     write_audit(db, action_type="survey.contributor.mfa_reset", target_table="survey_contributors",
                 target_id=str(c.id), actor_id=None, company_id=None,

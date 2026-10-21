@@ -214,6 +214,9 @@ export default function SurveyActivityPage() {
                               ? <Chip className="bg-surface-muted text-muted-foreground">Revoked {formatDate(c.revoked_at)}</Chip>
                               : <Chip className={s.tone}>{s.label}</Chip>}
                             {needsGroup && <Chip className="bg-danger/10 text-danger">Missing surveyor access</Chip>}
+                            {/* ADR-551 D3: they asked for a reset from the sign-in screen. */}
+                            {c.reset_requested_at && !c.revoked_at &&
+                              <Chip className="bg-warning/15 text-warning">Reset requested {ago(c.reset_requested_at)}</Chip>}
                           </td>
                           <td className="py-2 pr-3 whitespace-nowrap">{ago(c.last_walk_at)}</td>
                           <td className="py-2 pr-3">{c.agreement_version}, {formatDate(c.agreement_signed_on)}</td>

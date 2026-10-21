@@ -26,6 +26,8 @@ import { useAuth } from '../../contexts/AuthContext';
 interface StaffRow {
   /** ADR-550 D1: the account ID (Cognito sub). Resets target THIS, never a name. */
   account_id: string;
+  /** ADR-551 D3: they asked for a two-factor reset (pending, last 7 days). */
+  reset_requested_at?: string | null;
   username: string;
   email: string;
   /** The person's actual name. Empty for accounts created outside this UI --
@@ -286,6 +288,11 @@ export default function PlatformStaff() {
                     </span>
                     {/* Super admin only (the endpoint is get_super_admin). A
                         pending account has no factor to reset. */}
+                    {r.reset_requested_at && (
+                      <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
+                        Reset requested
+                      </span>
+                    )}
                     {isSuperAdmin && !r.pending && r.account_id && (
                       <button type="button" disabled={resetting}
                               onClick={() => void doReset({ account_id: r.account_id }, r.name || r.username)}

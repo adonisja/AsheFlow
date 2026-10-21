@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db, get_super_admin, get_platform_staff
 from app.core.config import settings
 from app.models.platform_alert import PlatformAlert
-from app.services import account_security, mfa_containment
+from app.services import account_security, mfa_containment, mfa_reset_requests
 from app.services.audit import write_audit, super_admin_identity
 from app.services.email import send_credentials_email
 
@@ -178,6 +178,8 @@ def platform_reset_mfa(
     )
     # ADR-550 D4: end sessions here too, not only at Cognito.
     kind = account_security.mark_sessions_ended(db, sub)
+    # ADR-551 D4: closes the account's reset request, if any.
+    mfa_reset_requests.resolve_for(db, sub, by_kind="super_admin", by_ref=_super.get("id"))
 
     write_audit(
         db=db,
@@ -281,6 +283,8 @@ class PlatformStaffOut(BaseModel):
     # ADR-550 D1: the staff member's account ID -- the Cognito sub, permanent
     # and unique. Names repeat and emails change; this does not.
     account_id: str = ""
+    # ADR-551 D3: they asked for a two-factor reset (pending, last 7 days).
+    reset_requested_at: Optional[datetime] = None
     username: str
     email: str
     # The person's actual name. Captured on create and, until ADR-396, never read
@@ -306,7 +310,12 @@ class PlatformStaffOut(BaseModel):
 @router.get("/staff", status_code=status.HTTP_200_OK)
 def list_platform_staff(
     _staff: dict = Depends(get_platform_staff),
+    db: Session = Depends(get_db),
 ) -> list[PlatformStaffOut]:
+    return _with_reset_requests(_list_platform_staff(), db)
+
+
+def _list_platform_staff() -> list[PlatformStaffOut]:
     """Who holds platform access (ADR-394).
 
     A READ, so `get_platform_staff` — a support engineer diagnosing an issue
@@ -367,6 +376,14 @@ def list_platform_staff(
         logger.error("could not list pending staff: %s", type(exc).__name__)
 
     return out
+
+
+def _with_reset_requests(rows: list[PlatformStaffOut], db: Session) -> list[PlatformStaffOut]:
+    """ADR-551 D3: mark the staff rows whose owner asked for a reset."""
+    requested = mfa_reset_requests.pending_since(db, [r.account_id for r in rows if r.account_id])
+    for r in rows:
+        r.reset_requested_at = requested.get(r.account_id)
+    return rows
 
 
 @router.post("/staff", status_code=status.HTTP_201_CREATED)

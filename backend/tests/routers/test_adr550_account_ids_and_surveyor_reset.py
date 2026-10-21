@@ -162,7 +162,7 @@ def test_staff_rows_carry_their_account_id():
         "Attributes": [{"Name": "sub", "Value": SUB}, {"Name": "email", "Value": "a@x"}]}]}
     cog.list_users.return_value = {"Users": []}
     with patch.object(PA.boto3, "client", return_value=cog):
-        rows = PA.list_platform_staff(_staff={"cognito_groups": ["super_admin"]})
+        rows = PA._list_platform_staff()   # ADR-551 wraps it to add reset requests (needs a db)
     assert rows and all(r.account_id == SUB for r in rows)
 
 

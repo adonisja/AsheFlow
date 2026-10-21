@@ -37,6 +37,7 @@ from app.models.campaign import (  # ADR-485
 from app.models.base import Base
 from app.models.employee import Employee
 from app.models.platform_session import PlatformSessionStamp  # ADR-549
+from app.models.mfa_reset_request import MfaResetRequest  # ADR-551
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
@@ -194,6 +195,7 @@ DISPATCH_TABLES = [
     *_CAMPAIGN_TABLES_SQLITE,            # ADR-485
     # ADR-549 D3: get_platform_user reads it on every platform gate.
     PlatformSessionStamp.__table__,
+    MfaResetRequest.__table__,           # ADR-551
 ]
 
 

@@ -116,6 +116,16 @@ export interface MfaEnrolmentRow {
   pass_spent: boolean;
   enrolled: boolean | null;
   account_status: string;
+  /** ADR-551 D3: they asked for a two-factor reset (pending, last 7 days). */
+  reset_requested_at?: string | null;
+}
+
+/** ADR-551 D3. GET /employees/mfa-reset-requests — admin/management. */
+export interface MfaResetRequestRow {
+  employee_id: string;
+  name: string;
+  role: string;
+  requested_at: string;
 }
 
 export interface EscalationContact {
@@ -3791,6 +3801,8 @@ export interface SurveyContributorHealth {
   /** null = could not tell. */
   in_surveyor_group: boolean | null;
   last_walk_at: string | null;
+  /** ADR-551 D3: asked for a two-factor reset (pending, last 7 days). */
+  reset_requested_at?: string | null;
 }
 
 export interface SurveyActivityClaim {
