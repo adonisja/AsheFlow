@@ -25,6 +25,8 @@ import {
 
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import SetupKey from '@components/SetupKey';
+import { useAuth } from '@contexts/AuthContext';
 
 type Props = {
   /** Called once a factor is actually enrolled, so the caller can re-fetch. */
@@ -37,6 +39,7 @@ export default function MfaEnrolment({ onEnrolled }: Props) {
 
   const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
+  const account = useAuth().user?.username ?? '';
   const [code, setCode] = useState('');
 
   /* Email OTP needs no setup step -- the address is already verified, so
@@ -94,12 +97,10 @@ export default function MfaEnrolment({ onEnrolled }: Props) {
   if (secret) {
     return (
       <ScrollView contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
-        <Text style={s.heading}>Add this key to your authenticator app</Text>
-        <Text selectable style={s.secret}>{secret}</Text>
-        <Text style={s.hint}>
-          Tap and hold to copy. Open your authenticator app, add an account by
-          entering this key, then type the 6-digit code it shows.
-        </Text>
+        <Text style={s.heading}>Add AsheFlow to your authenticator app</Text>
+        {/* ADR-557: opened in the app or copied, never retyped. */}
+        <SetupKey secret={secret} account={account} />
+        <Text style={s.hint}>Then type the 6-digit code it shows.</Text>
         <TextInput
           style={s.input}
           value={code}
@@ -144,10 +145,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   centre:  { paddingVertical: spacing.xl * 2, alignItems: 'center' },
   body:    { gap: spacing.md, paddingVertical: spacing.md },
   heading: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold, color: c.foreground },
-  secret:  {
-    fontSize: fontSize.md, color: c.foreground, letterSpacing: 1,
-    backgroundColor: c.accent, padding: spacing.md, borderRadius: radius.md,
-  },
   hint:    { fontSize: fontSize.sm, color: c.mutedForeground },
   input:   {
     borderWidth: 1, borderColor: c.border, borderRadius: radius.md,

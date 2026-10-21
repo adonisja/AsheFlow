@@ -6,6 +6,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { classifySignInError } from '../../utils/signInError';
 import ResetRequest, { ResetRequestLink, type ResetSent } from './ResetRequest';
 import SignInNotice from './SignInNotice';
+import SetupKey from './SetupKey';
 import QRCode from 'qrcode';
 import logoFull from '../../assets/logo-full.svg';
 import logoFullLight from '../../assets/logo-full-light.svg';
@@ -401,12 +402,8 @@ export default function Login() {
                         its own screen, so the typed secret is the ONLY path for
                         anyone signing in from the device holding the
                         authenticator. */}
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Or enter this key manually:
-                    </p>
-                    <code className="block text-xs font-mono break-all mt-1 text-foreground">
-                      {totpSecret}
-                    </code>
+                    {/* ADR-557: open it in the app or copy it, never retype it. */}
+                    <div className="mt-3"><SetupKey secret={totpSecret} uri={totpSetupUri} /></div>
                   </div>
                 )}
                 <label className="block text-sm font-medium text-foreground mb-1.5">{copy!.label}</label>

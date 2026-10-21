@@ -19,6 +19,7 @@ import {
   getCurrentUser,
 } from 'aws-amplify/auth';
 import QRCode from 'qrcode';
+import SetupKey from './auth/SetupKey';
 import { ShieldCheck, Smartphone, Mail, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -196,14 +197,8 @@ export default function SecurityPanel() {
               {qrDataUrl && (
                 <img src={qrDataUrl} alt="Setup QR code" className="rounded-lg border border-border" />
               )}
-              <div>
-                <p className="text-[11px] text-muted-foreground mb-1">
-                  Cannot scan? Enter this key instead:
-                </p>
-                <code className="block text-xs bg-accent rounded-lg px-3 py-2 break-all">
-                  {setupSecret}
-                </code>
-              </div>
+              {/* ADR-557: open it in the app or copy it, never retype it. */}
+              <SetupKey secret={setupSecret} uri={setupUri} />
               <div className="flex items-center gap-2">
                 <input
                   value={code}

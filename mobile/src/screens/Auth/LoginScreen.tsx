@@ -11,6 +11,7 @@ import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 import { classifySignInError } from './signInError';
 import ResetRequest, { ResetRequestLink, type ResetSent } from './ResetRequest';
 import SignInNotice, { NoticeText } from './SignInNotice';
+import SetupKey from '@components/SetupKey';
 
 export default function LoginScreen() {
   const c = useColors();
@@ -178,30 +179,16 @@ export default function LoginScreen() {
           {challenge ? (
             <>
               <View style={s.fieldGroup}>
-                <Text style={s.label}>{CHALLENGE_COPY[challenge.name].label}</Text>
+                {/* No QR code, deliberately: this device IS the one holding the
+                    authenticator, so it can't scan its own screen. ADR-557: the
+                    key opens in the app or is copied, never retyped. Shown
+                    BEFORE the code field: there's no code until it's added. */}
                 {challenge.name === 'MFA_SETUP' && challenge.totpSecret ? (
-                  <View style={[s.input, {
-                    borderColor: c.border, minHeight: 0, paddingVertical: 12,
-                    marginBottom: 12, justifyContent: 'center',
-                  }]}>
-                    <Text style={{ color: c.mutedForeground, fontSize: 12 }}>
-                      Setup key
-                    </Text>
-                    {/* No QR code, deliberately: this device IS the one holding
-                        the authenticator, so it cannot scan its own screen. The
-                        typed key is the primary path here, not a fallback.
-                        selectable so it can be long-pressed and copied. */}
-                    <Text
-                      selectable
-                      style={{
-                        color: c.foreground, fontSize: 14, marginTop: 4,
-                        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
-                      }}
-                    >
-                      {challenge.totpSecret}
-                    </Text>
+                  <View style={{ marginBottom: spacing.md }}>
+                    <SetupKey secret={challenge.totpSecret} account={username.trim()} />
                   </View>
                 ) : null}
+                <Text style={s.label}>{CHALLENGE_COPY[challenge.name].label}</Text>
                 {challenge.name === 'SELECT_MFA_TYPE' ? (
                   <View>
                     {(challenge.options ?? []).map(opt => (

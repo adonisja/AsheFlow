@@ -31,10 +31,10 @@ function signOutDeadline(status: MfaStatus | null): string {
     const ends = new Date(status.setup_window_ends_at).toLocaleString(undefined, {
       weekday: 'short', hour: 'numeric', minute: '2-digit',
     });
-    return `You can come back to finish until ${ends}. After that, an administrator will need to reset your setup.`;
+    return `You can come back to finish until ${ends}. After that, you'll need to request a reset from the sign-in screen.`;
   }
   // Deadline unreadable: say the rule rather than a time we do not have.
-  return 'You can come back to finish within 24 hours of your first sign-in. After that, an administrator will need to reset your setup.';
+  return "You can come back to finish within 24 hours of your first sign-in. After that, you'll need to request a reset from the sign-in screen.";
 }
 
 export default function MfaRequired() {

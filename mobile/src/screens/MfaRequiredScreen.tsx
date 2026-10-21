@@ -42,8 +42,8 @@ export default function MfaRequiredScreen() {
     mfaStatus?.tier === 'field'
       ? 'You will return here next time you sign in.'
       : ends
-        ? `You can come back to finish until ${ends}. After that, an administrator will need to reset your setup.`
-        : 'You can come back to finish within 24 hours of your first sign-in. After that, an administrator will need to reset your setup.');
+        ? `You can come back to finish until ${ends}. After that, you'll need to request a reset from the sign-in screen.`
+        : "You can come back to finish within 24 hours of your first sign-in. After that, you'll need to request a reset from the sign-in screen.");
 
   return (
     <SafeAreaView style={s.safe}>
