@@ -33,7 +33,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.survey_register import (
-    REVISIT_DAYS, SurveyDoorUnlock, SurveyObservation, SurveyWalk,
+    REVISIT_DAYS, SurveyDoorUnlock, SurveyObservation, SurveyWalk, live_observations,
 )
 
 BlockState = Literal["open", "in_progress", "done"]
@@ -103,7 +103,8 @@ def block_events(db: Session, borough: str, block_key: str
     observed = (db.query(SurveyObservation.address, SurveyObservation.observed_at)
                 .join(SurveyWalk, SurveyWalk.id == SurveyObservation.walk_id)
                 .filter(SurveyWalk.block_key == block_key,
-                        or_(SurveyWalk.borough == borough, SurveyWalk.borough.is_(None)))
+                        or_(SurveyWalk.borough == borough, SurveyWalk.borough.is_(None)),
+                        live_observations())   # ADR-555: withdrawn records re-open their doors
                 .all())
     unlocks = (db.query(SurveyDoorUnlock.address, SurveyDoorUnlock.unlocked_at)
                .filter(SurveyDoorUnlock.borough == borough, SurveyDoorUnlock.block_key == block_key)
@@ -140,7 +141,7 @@ def area_progress(db: Session, blocks: list, now: datetime) -> dict:
              .filter(SurveyWalk.block_key.in_(keys)).all())
     obs = (db.query(SurveyObservation.walk_id, SurveyObservation.address, SurveyObservation.observed_at)
            .join(SurveyWalk, SurveyWalk.id == SurveyObservation.walk_id)
-           .filter(SurveyWalk.block_key.in_(keys)).all())
+           .filter(SurveyWalk.block_key.in_(keys), live_observations()).all())
     unl = (db.query(SurveyDoorUnlock.borough, SurveyDoorUnlock.block_key,
                     SurveyDoorUnlock.address, SurveyDoorUnlock.unlocked_at)
            .filter(SurveyDoorUnlock.block_key.in_(keys)).all())

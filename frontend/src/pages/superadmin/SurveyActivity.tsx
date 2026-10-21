@@ -7,6 +7,7 @@
  * action is on an account or a claim.
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
 import AccountId from '../../components/ui/AccountId';
 import { Check, Copy, Loader2, RefreshCw } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
@@ -17,6 +18,7 @@ import { formatDate, formatDateTime, getLocalYMD } from '../../utils/date';
 import type {
   SurveyAccountStatus, SurveyActivity, SurveyActivityClaim, SurveyContributorHealth,
   SurveyContributorInvited, SurveyStaffReleaseResult, SurveyMfaResetResult,
+  SurveyWithdrawalPreview, SurveyWithdrawalResult,
 } from '../../api/types';
 
 const STATUS: Record<SurveyAccountStatus, { label: string; tone: string }> = {
@@ -56,6 +58,13 @@ export default function SurveyActivityPage() {
   const [reason, setReason] = useState('');
   const [readmitting, setReadmitting] = useState<SurveyContributorHealth | null>(null);
   // ADR-550 D2: reset a surveyor's two-factor, by surveyor ID, with a reason.
+  // ADR-555 D2: only the register's owner may take records out of it.
+  const { groups } = useAuth();
+  const isOwner = groups.includes('super_admin');
+  const [withdrawing, setWithdrawing] = useState<SurveyContributorHealth | null>(null);
+  const [wRange, setWRange] = useState({ from: getLocalYMD(), to: getLocalYMD() });
+  const [wPreview, setWPreview] = useState<number | null>(null);
+  const [wReason, setWReason] = useState('');
   const [resetting, setResetting] = useState<SurveyContributorHealth | null>(null);
   const [resetReason, setResetReason] = useState('');
   // ADR-550 D1: find a surveyor by name, email or surveyor ID.
@@ -108,6 +117,23 @@ export default function SurveyActivityPage() {
     const name = readmitting.display_name;
     setReadmitting(null);
     return `${name} is a contributor again.`;
+  });
+
+  const previewWithdrawal = () => withdrawing && run(`wpreview-${withdrawing.id}`, async () => {
+    const { data } = await axiosClient.get<SurveyWithdrawalPreview>(
+      `/survey/contributors/${withdrawing.id}/withdrawal-preview`,
+      { params: { from_date: wRange.from, to_date: wRange.to } });
+    setWPreview(data.count);
+    return '';
+  });
+
+  const submitWithdrawal = () => withdrawing && wPreview !== null && run(`withdraw-${withdrawing.id}`, async () => {
+    const { data } = await axiosClient.post<SurveyWithdrawalResult>(
+      `/survey/contributors/${withdrawing.id}/withdraw-records`,
+      { from_date: wRange.from, to_date: wRange.to, reason: wReason.trim(), expected_count: wPreview });
+    const name = withdrawing.display_name;
+    setWithdrawing(null); setWPreview(null); setWReason('');
+    return `Withdrew ${data.count} of ${name}'s records across ${data.blocks_affected} block(s). Their doors are open again; the records stay as evidence.`;
   });
 
   const submitReset = () => resetting && run(`reset-${resetting.id}`, async () => {
@@ -240,6 +266,13 @@ export default function SurveyActivityPage() {
                                 Reset two-factor
                               </button>
                             )}
+                            {isOwner && (
+                              <button type="button" disabled={busy !== null}
+                                      onClick={() => { setWithdrawing(c); setWPreview(null); setWReason(''); setWRange({ from: getLocalYMD(), to: getLocalYMD() }); }}
+                                      className="btn-ghost min-h-11 px-3 text-sm text-danger disabled:opacity-50">
+                                Withdraw records…
+                              </button>
+                            )}
                             {c.revoked_at && (
                               <button type="button" disabled={busy !== null}
                                       onClick={() => { setReadmitting(c); setAgreement({ version: '', signedOn: getLocalYMD(), confirmed: false }); }}
@@ -254,6 +287,54 @@ export default function SurveyActivityPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+
+            {withdrawing && (
+              <form className="rounded-lg border border-danger/30 p-3 space-y-3"
+                    onSubmit={e => { e.preventDefault(); submitWithdrawal(); }}>
+                <p className="text-sm">
+                  Withdraw <strong>{withdrawing.display_name}</strong>'s records{' '}
+                  <AccountId id={withdrawing.id} label="Surveyor ID" />. They stop counting everywhere and the doors
+                  they locked open again. The records themselves stay, as evidence (ADR-504).
+                </p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="text-sm space-y-1">
+                    <span className="block text-xs text-muted-foreground">From</span>
+                    <input type="date" required max={getLocalYMD()} value={wRange.from} className="input min-h-11"
+                           onChange={e => { setWRange(r => ({ ...r, from: e.target.value })); setWPreview(null); }} />
+                  </label>
+                  <label className="text-sm space-y-1">
+                    <span className="block text-xs text-muted-foreground">To</span>
+                    <input type="date" required max={getLocalYMD()} value={wRange.to} className="input min-h-11"
+                           onChange={e => { setWRange(r => ({ ...r, to: e.target.value })); setWPreview(null); }} />
+                  </label>
+                  <button type="button" onClick={previewWithdrawal} disabled={busy !== null}
+                          className="btn-ghost min-h-11 px-3 text-sm disabled:opacity-50">
+                    {busy?.startsWith('wpreview') ? 'Counting…' : 'Count records'}
+                  </button>
+                </div>
+                {wPreview !== null && (
+                  <>
+                    <p className="text-sm font-medium" aria-live="polite">
+                      {wPreview === 0 ? 'No records to withdraw in that range.' : `${wPreview} record(s) in that range.`}
+                    </p>
+                    {wPreview > 0 && (
+                      <>
+                        <label htmlFor="withdraw-reason" className="block text-xs text-muted-foreground">Reason (10–200 characters)</label>
+                        <textarea id="withdraw-reason" required minLength={10} maxLength={200} rows={2}
+                                  value={wReason} onChange={e => setWReason(e.target.value)} className="input w-full" />
+                      </>
+                    )}
+                  </>
+                )}
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setWithdrawing(null)} className="btn-ghost min-h-11 px-3 text-sm">Cancel</button>
+                  <button type="submit" disabled={!wPreview || wReason.trim().length < 10 || busy !== null}
+                          className="btn-primary min-h-11 px-3 text-sm bg-danger disabled:opacity-50">
+                    {busy?.startsWith('withdraw') ? 'Withdrawing…' : wPreview ? `Withdraw ${wPreview} record(s)` : 'Withdraw'}
+                  </button>
+                </div>
+              </form>
             )}
 
             {resetting && (

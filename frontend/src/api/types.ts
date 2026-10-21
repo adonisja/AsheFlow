@@ -3851,6 +3851,22 @@ export interface SurveyStaffReleaseResult extends SurveyActivityClaim {
   holder_emailed: boolean;
 }
 
+/** ADR-555 D2. GET /survey/contributors/{id}/withdrawal-preview (super admin). */
+export interface SurveyWithdrawalPreview {
+  contributor_id: string;
+  from_date: string;
+  to_date: string;
+  count: number;
+}
+
+/** ADR-555 D2. POST /survey/contributors/{id}/withdraw-records (super admin). */
+export interface SurveyWithdrawalResult {
+  withdrawal_id: string;
+  contributor_id: string;
+  count: number;
+  blocks_affected: number;
+}
+
 /** ADR-550 D2. POST /survey/contributors/{surveyor_id}/reset-mfa. */
 export interface SurveyMfaResetResult {
   contributor_id: string;

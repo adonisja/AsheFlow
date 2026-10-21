@@ -312,3 +312,55 @@ class SurveyDoorUnlock(Base):
     __table_args__ = (
         Index("ix_survey_door_unlocks_block", "borough", "block_key"),
     )
+
+
+class SurveyWithdrawal(Base):
+    """A super admin withdrawing one contributor's records over a date range
+    (ADR-555 D2). The batch: who, whose, which days, why, how many.
+
+    Append-only (ADR-504 D5, ADR-513): the observations are NOT changed. Each
+    withdrawn one gets a SurveyObservationWithdrawal row beside it, and every
+    reader filters with live_observations(). The original rows -- false
+    attestations included -- stay as the evidence.
+    """
+    __tablename__ = "survey_withdrawals"
+
+    id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contributor_id = Column(UUID(as_uuid=True), ForeignKey("survey_contributors.id", ondelete="RESTRICT"),
+                            nullable=False, index=True)
+    writer_sub     = Column(String(255), nullable=False)
+    from_date      = Column(Date, nullable=False)
+    to_date        = Column(Date, nullable=False)
+    reason         = Column(String(200), nullable=False)
+    count          = Column(Integer, nullable=False)
+    withdrawn_by   = Column(String(255), nullable=False)        # super admin sub; no Employee FK
+    created_at     = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("from_date <= to_date", name="ck_survey_withdrawal_range"),
+    )
+
+
+class SurveyObservationWithdrawal(Base):
+    """One observation taken out of the record by a withdrawal (ADR-555 D2).
+
+    The primary key is the observation: an observation is withdrawn once, and
+    a second batch over the same days simply finds nothing live to withdraw."""
+    __tablename__ = "survey_observation_withdrawals"
+
+    observation_id = Column(UUID(as_uuid=True), ForeignKey("survey_observations.id", ondelete="RESTRICT"),
+                            primary_key=True)
+    withdrawal_id  = Column(UUID(as_uuid=True), ForeignKey("survey_withdrawals.id", ondelete="RESTRICT"),
+                            nullable=False, index=True)
+
+
+def live_observations():
+    """The filter every reader of SurveyObservation applies (ADR-555 D2).
+
+    A withdrawn observation stops counting everywhere -- progress (so the doors
+    it locked re-open), the walk's done doors, the duplicate check, lists and
+    activity counts. One helper so no reader can forget a hand-written clause;
+    a test walks every SurveyObservation query in app/ and requires it.
+    """
+    from sqlalchemy import exists
+    return ~exists().where(SurveyObservationWithdrawal.observation_id == SurveyObservation.id)
