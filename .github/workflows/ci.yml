@@ -280,6 +280,11 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
     needs: audit
+    # ADR-552 D5: the reuse lookup reads Actions artifacts. Declared here so it
+    # does not depend on the repository's default token setting.
+    permissions:
+      contents: read
+      actions: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -346,6 +351,10 @@ jobs:
           if [ -d /tmp/asheflow-private/backend/tests/services ]; then
             cp /tmp/asheflow-private/backend/tests/services/*.py backend/tests/services/ 2>/dev/null || true
           fi
+          # ADR-552 D1: the private code's own fingerprint, captured before the
+          # clone is deleted. The TREE, not the branch: identical code on
+          # private main and staging matches; different code never does.
+          echo "PRIVATE_TREE=$(git -C /tmp/asheflow-private rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
           rm -rf /tmp/asheflow-private ~/.ssh/asheflow_private_deploy
           echo "Proprietary source + tests pulled from AsheFlow-private ($PRIV_BRANCH)."
 
@@ -481,7 +490,25 @@ jobs:
             exit 1
           fi
 
+      # ADR-552. Same public tree, same private tree, same Python, passed in the
+      # last 24 h in a run that ACTUALLY ran the tests: reuse that result.
+      # continue-on-error: a crash here must cost time, never skip the tests
+      # (an empty `hit` is not 'true', so the tests run). Install, the private
+      # pull, the drift check and the MIN_TESTS floor above have all run.
+      - name: Look for an identical passing run (ADR-552)
+        id: reuse
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PUBLIC_TREE="$(git rev-parse 'HEAD^{tree}')"
+          export PYTHON_VERSION="$(python --version 2>&1)"
+          FP="$(python scripts/ci_reuse_tests.py fingerprint)"
+          echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
+          python scripts/ci_reuse_tests.py lookup "$FP"
+
       - name: Run tests
+        if: steps.reuse.outputs.hit != 'true'
         working-directory: backend
         run: python -m pytest tests/ -v --tb=short
         env:
@@ -493,6 +520,20 @@ jobs:
           AWS_COGNITO_APP_CLIENT_ID: test-client-id
           INTERNAL_SECRET: ci-test-secret-not-real
           CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
+
+      # ADR-552 D2: only a run that ACTUALLY ran the tests vouches for this code,
+      # so a reuse can never be reused. Kept 2 days; the lookup accepts 24 h.
+      - name: Record that this exact code passed (ADR-552)
+        if: success() && steps.reuse.outputs.hit != 'true' && steps.reuse.outputs.fingerprint != '' && !startsWith(steps.reuse.outputs.fingerprint, 'none')
+        run: echo "${{ steps.reuse.outputs.fingerprint }}" > backend-tests-passed.txt
+
+      - name: Upload the pass marker (ADR-552)
+        if: success() && steps.reuse.outputs.hit != 'true' && steps.reuse.outputs.fingerprint != '' && !startsWith(steps.reuse.outputs.fingerprint, 'none')
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-tests-passed-${{ steps.reuse.outputs.fingerprint }}
+          path: backend-tests-passed.txt
+          retention-days: 2
 
   # ── 3. FRESH-DATABASE MIGRATIONS ───────────────────────────────────────────
   # `alembic upgrade head` had NEVER worked from an empty database (ADR-248):
