@@ -259,11 +259,13 @@ export default function LoginScreen() {
           )}
           {/* Username */}
           <View style={s.fieldGroup}>
-            <Text style={s.label}>Username</Text>
+            {/* ADR-566 D4: Cognito resolves a sign-in name (alias) here too. */}
+            <Text style={s.label}>Username or sign-in name</Text>
             <TextInput
               style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
               placeholder="username"
               placeholderTextColor={c.placeholder}
+              accessibilityLabel="Username or sign-in name"
               autoCapitalize="none"
               autoCorrect={false}
               value={username}
