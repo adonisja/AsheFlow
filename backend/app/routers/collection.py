@@ -446,7 +446,9 @@ def create_token(
         company_id = caller.company_id
         scope = SCOPE_COMPANY
         created_by = caller.id
-        created_by_name = f"{caller.first_name} {caller.last_name}".strip()
+        # ADR-568: Employee has one name column. This read first_name/last_name,
+        # which don't exist, so every company admin's request was a 500.
+        created_by_name = caller.name
 
     raw = secrets.token_urlsafe(32)[:64]
     tok = CollectionToken(
