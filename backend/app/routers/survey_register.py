@@ -827,7 +827,8 @@ def invite_contributor(body: ContributorInviteIn, staff: dict = Depends(get_plat
             MessageAction="SUPPRESS",
             UserAttributes=[
                 {"Name": "email", "Value": email},
-                {"Name": "email_verified", "Value": "true"},
+                # ADR-564: verified by signing in with the emailed password.
+                {"Name": "email_verified", "Value": "false"},
                 {"Name": "name", "Value": body.name},
             ],
         )
@@ -875,6 +876,8 @@ def invite_contributor(body: ContributorInviteIn, staff: dict = Depends(get_plat
     except Exception as exc:
         logger.error("survey invite: credentials email failed: %s", type(exc).__name__)
         email_delivered = False
+    from app.services import account_security
+    account_security.record_password_delivery(username, emailed=email_delivered)   # ADR-564 D3
 
     return InviteOut(contributor=ContributorOut.model_validate(c), email_delivered=email_delivered,
                      temp_password=None if email_delivered else temp_password)
@@ -1502,6 +1505,8 @@ def resend_contributor_signin(contributor_id: UUID, staff: dict = Depends(get_pl
     except Exception as exc:
         logger.error("survey resend: credentials email failed: %s", type(exc).__name__)
         delivered = False
+    from app.services import account_security
+    account_security.record_password_delivery(c.cognito_username, emailed=delivered)   # ADR-564 D3
     return InviteOut(contributor=ContributorOut.model_validate(c), email_delivered=delivered,
                      temp_password=None if delivered else temp_password)
 
@@ -1846,3 +1851,51 @@ def staff_release_claim(claim_id: UUID, body: StaffReleaseIn, staff: dict = Depe
                            holder=holder.display_name if holder else "Owner", claimed_at=c.claimed_at,
                            expires_at=c.expires_at, walk_open=walk is not None and walk.closed_at is None,
                            holder_emailed=emailed)
+
+
+# ── ADR-563 D3: a super admin changes a surveyor's email, by surveyor ID ──
+# For a surveyor who lost access to their inbox. A link goes to the NEW address
+# and nothing changes until it is used there (services/email_change.py).
+
+class SurveyorEmailChangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    new_email: EmailStr
+
+
+@router.post("/contributors/{contributor_id}/email/change", status_code=status.HTTP_200_OK)
+def start_surveyor_email_change(contributor_id: UUID, body: SurveyorEmailChangeIn,
+                                owner: dict = Depends(get_super_admin), db: Session = Depends(get_db)):
+    from app.services import account_security, email_change
+    c = _contributor(db, contributor_id)
+    if not c.cognito_username:
+        raise HTTPException(status_code=409, detail="This surveyor has no sign-in account yet.")
+    try:
+        expires = email_change.start_admin_change(
+            db, username=c.cognito_username, kind="surveyor", company_id=None,
+            new_email=str(body.new_email), by_kind="super_admin", by_ref=str(owner.get("id")),
+            by_label="The AsheFlow team")
+    except email_change.EmailChangeError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"detail": "Confirmation sent to the new address.",
+            "pending_email_masked": account_security.mask_email(str(body.new_email).lower()),
+            "expires_at": expires.isoformat()}
+
+
+@router.delete("/contributors/{contributor_id}/sign-in-name", status_code=status.HTTP_200_OK)
+def clear_surveyor_sign_in_name(contributor_id: UUID, owner: dict = Depends(get_super_admin),
+                                db: Session = Depends(get_db)):
+    """ADR-566 D4: a super admin may clear a surveyor's sign-in name, never
+    choose one. Keyed on the surveyor row, as the email change is: the list
+    the super admin acts from carries the contributor id, not the sub."""
+    from app.services import sign_in_name
+    c = _contributor(db, contributor_id)
+    if not c.cognito_username:
+        raise HTTPException(status_code=409, detail="This surveyor has no sign-in account yet.")
+    try:
+        cleared = sign_in_name.remove_sign_in_name(
+            db, username=c.cognito_username, by="super_admin",
+            audit={"company_id": None, "actor_id": None,
+                   "target_table": "survey_contributors", "target_id": str(c.id)})
+    except sign_in_name.SignInNameError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"cleared": cleared}

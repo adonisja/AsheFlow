@@ -13,7 +13,7 @@
  *
  * Renders inside the MyAccountScreen tab shell, so no PageHeader/SafeAreaView here.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { errorText } from '@api/errorText';
 import {
   View, Text, StyleSheet, TouchableOpacity,
@@ -23,6 +23,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors, useTheme } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import MfaEnrolment from '@components/MfaEnrolment';
+import SignInNameCard from '@components/SignInNameCard';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type EmailStep    = 'idle' | 'entering' | 'verifying';
@@ -45,6 +46,15 @@ export default function AccountSettingsScreen() {
   const [masked,       setMasked]       = useState<{ current: string; new: string } | null>(null);
   const [emailBusy,    setEmailBusy]    = useState(false);
   const [currentEmail, setCurrentEmail] = useState(user?.email ?? '');
+
+  // ADR-566 D4. Hidden until the environment's pool accepts sign-in names.
+  const [signInName, setSignInName] = useState<
+    { available: boolean; username: string; sign_in_name: string | null } | null>(null);
+  useEffect(() => {
+    apiClient.get('/employees/me/sign-in-name')
+      .then(r => setSignInName(r.data))
+      .catch(() => { /* silent: the section just stays hidden */ });
+  }, []);
 
   // Discord link (ADR-270)
   const [dStep,    setDStep]    = useState<DiscordStep>('idle');
@@ -465,6 +475,14 @@ export default function AccountSettingsScreen() {
           )}
         </View>
 
+        {/* ── Sign-in name (ADR-566 D4) ── */}
+        {signInName?.available && (
+          <View style={[s.section, s.signInName, { backgroundColor: c.card, borderColor: c.border }]}>
+            <SignInNameCard path="/employees/me/sign-in-name" current={signInName.sign_in_name}
+                            username={signInName.username} />
+          </View>
+        )}
+
         {/* ── Security section ── */}
         <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>Security</Text>
         <View style={[s.section, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -638,6 +656,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   sectionLabel:{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: -spacing.xs },
   section:     { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden' },
+  signInName:  { padding: spacing.md, marginTop: spacing.lg },
 
   row:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.sm + 4, paddingHorizontal: spacing.md },
   rowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth },

@@ -33,6 +33,12 @@ looks at the EFFECT, not the status field:
                      PostAuthentication gone nothing stamps, and unenrolled
                      admins keep their pass forever -- with no error anywhere.
 
+  app client write allow-list  ADR-558: with WriteAttributes unset, a signed-in
+                     user can DELETE their own custom:mfa_first_seen with their
+                     own token and reopen the 24-hour enrolment window forever.
+                     An empty list reads back as unset, and a recreated client
+                     starts unset, so both are failures here.
+
 That last one matters more than it looks. The SNS topic was created and confirmed,
 but an unconfirmed or deleted subscription leaves publishing "successful" and
 nobody notified — the same green-while-blind shape as the trail.
@@ -176,6 +182,37 @@ def _check_pool_triggers(region: str, pool_id: str) -> list[str]:
     return problems
 
 
+def _check_client_write_attributes(region: str, pool_id: str, client_id: str) -> list[str]:
+    """The app client may write only plain attributes, never a custom one (ADR-558).
+
+    Unset (None) or [] means EVERY attribute is writable with a user token --
+    measured on staging 2026-10-21: a [] client let the user delete
+    custom:mfa_first_seen and change their email. A custom attribute in the list
+    hands the user a value the server relies on.
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    if not pool_id or not client_id:
+        return ["no Cognito pool or app client configured; cannot check write allow-list"]
+    try:
+        cfg = boto3.client("cognito-idp", region_name=region).describe_user_pool_client(
+            UserPoolId=pool_id, ClientId=client_id)["UserPoolClient"]
+    except ClientError as exc:
+        return [f"app client: {exc.response.get('Error', {}).get('Code', 'ClientError')}"]
+    except BotoCoreError as exc:
+        return [f"app client: {type(exc).__name__}"]
+
+    write = cfg.get("WriteAttributes")
+    if not write:
+        return ["app client WriteAttributes is unset, so EVERY attribute is writable with a user token"
+                " -- a user can reopen their MFA enrolment window (ADR-558)"]
+    custom = sorted(a for a in write if a.startswith("custom:"))
+    if custom:
+        return [f"app client may write {', '.join(custom)} with a user token (ADR-558)"]
+    return []
+
+
 def _check_topic(region: str) -> list[str]:
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
@@ -307,6 +344,9 @@ def _checks(region: str, pool_id: str) -> dict:
                         "MFA containment cannot run: the app lacks a Cognito permission (ADR-389)"),
         "pool_triggers": (lambda: _check_pool_triggers(region, pool_id),
                           "MFA enforcement on sign-in is not wired: a Cognito trigger is detached (ADR-530)"),
+        "client_write_attributes": (
+            lambda: _check_client_write_attributes(region, pool_id, settings.aws_cognito_app_client_id),
+            "Users can rewrite their own Cognito attributes, including the MFA enrolment stamp (ADR-558)"),
     }
 
 

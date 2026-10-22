@@ -843,6 +843,41 @@ def send_email_change_code(*, to_email: str, employee_name: str, code: str,
                          account_ref=account_ref)
 
 
+def send_email_change_link(*, to_email: str, name: str, token: str, requested_by: str,
+                           hours: int, account_ref: str) -> None:
+    """To the NEW address of an admin-started email change (ADR-563 D3).
+
+    The link is the proof that this inbox belongs to the account holder, so it
+    goes here and nowhere else. Nothing about the account changes until it is
+    used, so an admin's typo costs nothing.
+    """
+    from app.core.config import settings
+    first, first_html = _greeting_name(name)
+    url = f"{settings.app_base_url}/email-change?token={token}"
+    subject = "Confirm your new AsheFlow email"
+    body = (
+        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, '
+        f'{html.escape(requested_by)} asked to make this address the email on your AsheFlow account.</p>'
+        '<p style="margin:0 0 18px;font-size:14px;line-height:1.55;color:#374151;">Confirm it and it becomes the '
+        "address your sign-in codes and security notices go to. Every device will be signed out, and your old "
+        "address will be told about the change.</p>"
+        f'<p style="margin:0 0 18px;"><a href="{html.escape(url)}" style="display:inline-block;background:#8517D3;'
+        'color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 18px;border-radius:8px;">'
+        "Confirm this email</a></p>"
+        f'<p style="margin:0 0 14px;font-size:12px;line-height:1.5;color:#6B7280;word-break:break-all;">{html.escape(url)}</p>'
+        f'<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;">The link works once and expires in '
+        f"{hours} hours. If you didn't expect this, ignore it and nothing will change.</p>"
+    )
+    text = (f"Hi {first},\n\n{requested_by} asked to make this address the email on your AsheFlow account.\n\n"
+            "Confirm it and it becomes the address your sign-in codes and security notices go to. Every device "
+            "will be signed out, and your old address will be told about the change.\n\n"
+            f"{url}\n\nThe link works once and expires in {hours} hours. If you didn't expect this, ignore it "
+            "and nothing will change.")
+    _send_security_email(to_email=to_email, subject=subject, text=text,
+                         html_body=_security_layout(heading="Confirm your new email", body_html=body, label="Security"),
+                         account_ref=account_ref)
+
+
 def send_email_changed_notice(*, to_email: str, employee_name: str,
                               new_email_masked: str, when: str, account_ref: str) -> None:
     """To the OLD address once an email change completes (ADR-541 D3)."""
@@ -934,33 +969,51 @@ def send_mfa_reset_request_code(*, to_email: str, name: str, code: str, account_
                          account_ref=account_ref)
 
 
-def send_surveyor_mfa_reset_notice(*, to_email: str, name: str, reason: str,
-                                   account_ref: str) -> None:
-    """To a surveyor whose two-factor platform staff reset (ADR-550 D2).
+def send_mfa_reset_notice(*, to_email: str, name: str, reset_by: str, account: str,
+                          if_not_you: str, account_ref: str, reason: str | None = None) -> None:
+    """To anyone whose two-factor sign-in someone else reset (ADR-561).
 
-    They have no in-app inbox, and a reset nobody told them about reads, the
-    next time they sign in, exactly like someone tampering with their account.
-    So it says what happened, why, and what to do -- and who to tell if they
-    did not ask for it.
+    Every reset path sends this: tenant admins, super admins, platform support.
+    A reset clears the factor and signs out every device, so one nobody was told
+    about reads, at the next sign-in, exactly like tampering -- and it is how an
+    unwanted reset (a talked-into helpdesk, a compromised admin) gets noticed.
+
+    reset_by:   "An admin at your company" / "The AsheFlow team" (sentence start)
+    account:    "your AsheFlow account" / "your survey account"
+    if_not_you: what to do if they didn't ask, e.g. "tell your manager straight away"
+    reason:     optional; shown in its own box when given, always escaped
     """
     first, first_html = _greeting_name(name)
     subject = "Your two-factor sign-in was reset"
-    body = (
-        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, '
-        'the AsheFlow team reset the two-factor sign-in on your survey account and signed it out everywhere.</p>'
+    reason_html = (
         '<table width="100%" cellpadding="0" cellspacing="0" style="background:#FBFAFD;border:1px solid #E6E2F0;border-radius:10px;margin-bottom:14px;"><tr><td style="padding:12px 16px;">'
         f'<p style="margin:0;font-size:14px;line-height:1.5;color:#374151;"><strong>Reason:</strong> {html.escape(reason)}</p></td></tr></table>'
+    ) if reason else ""
+    body = (
+        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#374151;">Hi {first_html}, '
+        f'{html.escape(reset_by)} reset the two-factor sign-in on {html.escape(account)} and signed it out everywhere.</p>'
+        + reason_html +
         '<p style="margin:0 0 14px;font-size:14px;line-height:1.55;color:#374151;">Next time you sign in you\'ll be asked to set up '
-        'an authenticator app again. You have 24 hours from that sign-in to finish.</p>'
-        '<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;">If you didn\'t ask for this, reply to this email '
-        'so we can check your account.</p>'
+        'two-factor again. You have 24 hours from that sign-in to finish.</p>'
+        f'<p style="margin:0;font-size:14px;line-height:1.55;color:#374151;">If you didn\'t ask for this, {html.escape(if_not_you)}.</p>'
     )
-    text = (f"Hi {first},\n\nThe AsheFlow team reset the two-factor sign-in on your survey account and signed it out everywhere.\n\n"
-            f"Reason: {reason}\n\nNext time you sign in you'll be asked to set up an authenticator app again. "
-            "You have 24 hours from that sign-in to finish.\n\nIf you didn't ask for this, reply to this email so we can check your account.")
+    text = (f"Hi {first},\n\n{reset_by} reset the two-factor sign-in on {account} and signed it out everywhere.\n\n"
+            + (f"Reason: {reason}\n\n" if reason else "")
+            + "Next time you sign in you'll be asked to set up two-factor again. "
+            "You have 24 hours from that sign-in to finish.\n\n"
+            f"If you didn't ask for this, {if_not_you}.")
     _send_security_email(to_email=to_email, subject=subject, text=text,
                          html_body=_security_layout(heading="Your two-factor sign-in was reset", body_html=body, label="Security"),
                          account_ref=account_ref)
+
+
+def send_surveyor_mfa_reset_notice(*, to_email: str, name: str, reason: str,
+                                   account_ref: str) -> None:
+    """To a surveyor whose two-factor platform staff reset (ADR-550 D2; ADR-561)."""
+    send_mfa_reset_notice(to_email=to_email, name=name, reset_by="The AsheFlow team",
+                          account="your survey account",
+                          if_not_you="reply to this email so we can check your account",
+                          reason=reason, account_ref=account_ref)
 
 
 def send_claim_released_notice(*, to_email: str, name: str, block: str, area: str,

@@ -3055,6 +3055,23 @@ export interface PlatformMe {
   groups: string[];
   role_label: string;
   mfa_enrolled: boolean | null;
+  /** ADR-566 D4: the sign-in name (Cognito alias), if the person set one. */
+  sign_in_name: string | null;
+  /** False until this environment's pool accepts the alias; hide the setting. */
+  sign_in_name_available: boolean;
+}
+
+/** GET /employees/me/sign-in-name (ADR-566 D4). */
+export interface SignInNameStatus {
+  available: boolean;
+  username: string;
+  rules: string;
+  sign_in_name: string | null;
+}
+
+/** PUT /employees/me/sign-in-name and /platform/me/sign-in-name. Extra keys are a 422. */
+export interface SignInNameIn {
+  sign_in_name: string;
 }
 
 export interface MfaStatus {

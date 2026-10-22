@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import AccountId from '../../components/ui/AccountId';
 import { ShieldCheck, UserPlus, RefreshCw, KeyRound } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
+import AdminEmailChangeDialog from '../../components/AdminEmailChangeDialog';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
@@ -58,6 +59,8 @@ export default function PlatformStaff() {
   // The reset endpoint is get_super_admin; offer the row button to no one else.
   const { groups } = useAuth();
   const isSuperAdmin = groups.includes('super_admin');
+  // ADR-563 D3: a staff account that lost its inbox.
+  const [emailFor, setEmailFor] = useState<{ id: string; name: string } | null>(null);
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +87,29 @@ export default function PlatformStaff() {
   const [resetUser, setResetUser] = useState('');
   const [resetting, setResetting] = useState(false);
   const [resetMsg, setResetMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // ADR-566 D4: a super admin may clear a platform account's sign-in name,
+  // never choose one. Hidden until this environment's pool supports them.
+  const [signInNamesOn, setSignInNamesOn] = useState(false);
+  useEffect(() => {
+    axiosClient.get<{ sign_in_name_available: boolean }>('/platform/me')
+      .then(({ data }) => setSignInNamesOn(!!data?.sign_in_name_available))
+      .catch(() => {/* silent: the action stays hidden */});
+  }, []);
+  const clearSignInName = async (accountId: string, label: string) => {
+    const ok = await confirm({
+      title: 'Clear sign-in name',
+      message: `Remove ${label}'s sign-in name? They can still sign in with their username.`,
+      confirmLabel: 'Clear',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const { data } = await axiosClient.delete<{ cleared: boolean }>(`/platform/accounts/${accountId}/sign-in-name`);
+      setResetMsg({ ok: true, text: data.cleared ? `${label}: sign-in name cleared.` : `${label} doesn't have a sign-in name.` });
+    } catch (err) {
+      setResetMsg({ ok: false, text: errorText(err, "Couldn't clear the sign-in name.") });
+    }
+  };
 
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
@@ -155,7 +181,11 @@ export default function PlatformStaff() {
       const res = await axiosClient.post('/platform/mfa/reset', target);
       setResetMsg({
         ok: true,
-        text: `${label}: cleared and signed out everywhere, ${res.data.devices_forgotten} device(s) forgotten.`,
+        // ADR-561 D4: whether the person was told.
+        text: `${label}: cleared and signed out everywhere, ${res.data.devices_forgotten} device(s) forgotten. `
+          + (res.data.emailed
+            ? 'They were emailed.'
+            : 'No verified email on that account, so tell them directly.'),
       });
       if ('username' in target) setResetUser('');
     } catch (err: any) {
@@ -292,6 +322,18 @@ export default function PlatformStaff() {
                       <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
                         Reset requested
                       </span>
+                    )}
+                    {isSuperAdmin && !r.pending && r.account_id && (
+                      <button type="button" onClick={() => setEmailFor({ id: r.account_id!, name: r.name || r.username })}
+                              className="text-xs font-medium px-2.5 py-1 min-h-[44px] rounded-lg border border-border text-foreground hover:bg-accent">
+                        Change email
+                      </button>
+                    )}
+                    {isSuperAdmin && signInNamesOn && !r.pending && r.account_id && (
+                      <button type="button" onClick={() => void clearSignInName(r.account_id!, r.name || r.username)}
+                              className="text-xs font-medium px-2.5 py-1 min-h-[44px] rounded-lg border border-border text-foreground hover:bg-accent">
+                        Clear sign-in name
+                      </button>
                     )}
                     {isSuperAdmin && !r.pending && r.account_id && (
                       <button type="button" disabled={resetting}
@@ -440,6 +482,13 @@ export default function PlatformStaff() {
       </div>
 
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+      <AdminEmailChangeDialog
+        open={emailFor !== null}
+        personName={emailFor?.name ?? ''}
+        onClose={() => setEmailFor(null)}
+        submit={async (newEmail) => (await axiosClient.post(
+          '/platform/accounts/email/change', { account_id: emailFor!.id, new_email: newEmail })).data}
+      />
     </div>
   );
 }

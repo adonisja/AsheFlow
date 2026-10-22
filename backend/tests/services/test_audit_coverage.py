@@ -41,6 +41,21 @@ import pytest
 ROUTERS = Path(__file__).resolve().parents[2] / "app" / "routers"
 
 _AUDIT_CALLS = {"write_audit", "AuditLog"}
+
+# ADR-563: email changes are applied by ONE shared service so every path writes
+# Cognito, the database copy, sessions and the audit the same way. ADR-566's
+# sign-in names follow the same shape. Calls into these functions count as
+# audited -- and TestServiceAuditsAreReal proves each one really calls
+# write_audit, so this set can't vouch for something untrue.
+#
+# Names are matched bare, so each must be unique to its service: a generic
+# name ("set_name") would vouch for any function that happens to share it, and
+# an ENDPOINT with a trusted name would count as audited by its name alone.
+_AUDITING_SERVICES = (
+    ("email_change.py", {"apply_change", "start_admin_change", "confirm_admin_change", "cancel_admin_change"}),
+    ("sign_in_name.py", {"apply_sign_in_name", "remove_sign_in_name"}),
+)
+_TRUSTED = set().union(*(names for _f, names in _AUDITING_SERVICES))
 _WRITE_VERBS = {"post", "patch", "put", "delete"}
 
 
@@ -128,6 +143,8 @@ _NO_AUDIT = {
     "employee_off_days.py::create_employee_off_day",
     "employees.py::request_discord_link",
     "employees.py::request_email_change",
+    # ADR-563: the platform twin -- emails two codes, changes nothing; confirm audits.
+    "platform_account.py::request_email_change",
     # ADR-541: emails a code and changes nothing; /me/password/confirm audits the change.
     "employees.py::request_password_code",
     "feedback.py::create_feedback",
@@ -211,7 +228,7 @@ def _write_endpoints_without_audit() -> list[str]:
     missing: list[str] = []
     for path in sorted(ROUTERS.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        reaches = _audited_names(tree)
+        reaches = _audited_names(tree) | _TRUSTED
         local = {
             n.name: n for n in tree.body
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -444,3 +461,27 @@ class TestClaimKeyNames:
             "these read a 'sub' claim that get_current_user never sets, so the "
             f"value is always None: {offenders}"
         )
+
+
+class TestServiceAuditsAreReal:
+    @pytest.mark.parametrize("fname,names", _AUDITING_SERVICES)
+    def test_every_trusted_service_function_writes_an_audit_row(self, fname, names):
+        """The allowance above is only honest if each named function audits."""
+        tree = ast.parse((ROUTERS.parent / "services" / fname).read_text(encoding="utf-8"))
+        audited = _audited_names(tree)
+        local = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for _ in range(3):   # same transitive rule as the router scan
+            for name, fn in local.items():
+                if name not in audited and any(c in audited for c in _called_names(fn)):
+                    audited.add(name)
+        assert names <= audited, f"claimed to audit but don't: {sorted(names - audited)}"
+
+    def test_no_endpoint_shares_a_trusted_name(self):
+        """An endpoint named like a trusted service function would be counted
+        as audited by its name alone."""
+        clashes = []
+        for path in sorted(ROUTERS.glob("*.py")):
+            for n in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in _TRUSTED:
+                    clashes.append(f"{path.name}::{n.name}")
+        assert not clashes, clashes

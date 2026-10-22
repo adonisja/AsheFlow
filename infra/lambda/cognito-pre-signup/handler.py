@@ -1,28 +1,11 @@
-import boto3
-import os
+"""PreSignUp trigger, attached to both pools.
 
-# The invoking pool comes from the EVENT, not the environment (ADR-362).
-#
-# This read os.environ["USER_POOL_ID"], pinned to the staging pool. Once this
-# same function is attached to BOTH pools, that means a prod federated sign-in
-# has its email checked against STAGING's user list: anyone with a staging
-# account is admitted to prod, and a legitimate prod user is refused. The event
-# always carries the pool that invoked us, so there is no reason to guess.
-#
-# Kept as a fallback only for a direct/manual invoke with no event context.
-_FALLBACK_POOL_ID = os.environ.get("USER_POOL_ID", "")
-
-_client = None
-
-def _cognito():
-    global _client
-    if _client is None:
-        _client = boto3.client("cognito-idp", region_name="us-east-2")
-    return _client
-
-
-def _pool_id(event) -> str:
-    return event.get("userPoolId") or _FALLBACK_POOL_ID
+No account in AsheFlow is created by signing up: managers and super admins
+create accounts with the admin API (AdminCreateUser, which this allows). Both
+self-signup and federated sign-up are refused (ADR-560), so this needs no AWS
+client and no pool lookup -- the pool-pinning bug ADR-362 fixed here can't
+recur because there is no lookup left to pin.
+"""
 
 
 def handler(event, context):
@@ -33,51 +16,15 @@ def handler(event, context):
     if trigger == "PreSignUp_SignUp":
         raise Exception("Self-signup is not allowed. Contact your dispatcher to create an account.")
 
-    # Federated sign-in via Discord or Google.
-    # Allow only if a native Cognito user with the same email already exists —
-    # meaning a manager pre-created the account. Cognito will then link the
-    # federated identity to that existing user automatically.
+    # ADR-560: federated sign-in is removed. This branch used to admit a Discord
+    # or Google sign-in whenever ANY native user had the same email, claiming
+    # Cognito would then link the two. It doesn't (that needs
+    # AdminLinkProviderForUser): it created a separate Discord_/Google_ user,
+    # which the backend's email fallback resolved to the employee -- no password,
+    # no MFA (proved on staging). Refuse it outright, so re-adding a provider
+    # without a design admits nobody.
     if trigger.startswith("PreSignUp_ExternalProvider"):
-        email = _extract_email(event)
-
-        if email and _native_user_exists(email, _pool_id(event)):
-            # Account pre-exists — allow and auto-confirm/verify so linking works.
-            event["response"]["autoConfirmUser"] = True
-            event["response"]["autoVerifyEmail"] = True
-            return event
-
-        # No matching native account — block.
-        raise Exception(
-            "No AsheFlow account found for this email address. "
-            "Ask your dispatcher to create your account before signing in with Discord or Google."
-        )
+        raise Exception("Sign in with your AsheFlow username and password.")
 
     # Admin-created accounts (AdminCreateUser trigger) — always allow.
     return event
-
-
-def _extract_email(event):
-    attrs = event.get("request", {}).get("userAttributes", {})
-    return attrs.get("email", "").lower().strip() or None
-
-
-def _native_user_exists(email, pool_id):
-    if not pool_id:
-        # No pool to check against: fail closed, same as a failed lookup.
-        return False
-    try:
-        resp = _cognito().list_users(
-            UserPoolId=pool_id,
-            Filter=f'email = "{email}"',
-            Limit=1,
-        )
-        # Only count native (non-federated) users — federated users have a username
-        # like "Discord_123456" and no password; native users have normal usernames.
-        for user in resp.get("Users", []):
-            username = user.get("Username", "")
-            if not username.startswith(("Discord_", "Google_", "SignInWithApple_")):
-                return True
-        return False
-    except Exception:
-        # Fail closed — if we can't verify, block the signup.
-        return False

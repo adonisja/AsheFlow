@@ -16,6 +16,7 @@ from app.database import get_db
 from app.services.audit import write_audit
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
+from app.services import account_security
 from app.services.email import send_invite_email, send_credentials_email
 from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
@@ -401,6 +402,9 @@ def resend_credentials(
             "Credentials resend email failed for %s (%s): %s",
             employee.email, code, e,
         )
+        # ADR-564 D3: handed to an admin, so signing in with it proves nothing
+        # about the inbox.
+        account_security.record_password_delivery(employee.username, emailed=False)
         return {
             "detail": (
                 f"Credentials were reset, but the email to {employee.email} "
@@ -413,6 +417,7 @@ def resend_credentials(
             "temp_password": temp_password,
         }
 
+    account_security.record_password_delivery(employee.username, emailed=True)   # ADR-564 D3
     return {"detail": f"Credentials resent to {employee.email}.", "email_delivered": True}
 
 
@@ -500,6 +505,11 @@ def complete_registration(
     ).first():
         raise HTTPException(status_code=409, detail="That Discord ID is already linked to another account.")
 
+    # ADR-564 D1: the temporary password is emailed, and signing in with it is
+    # what verifies the address -- so there must be one.
+    if not (employee.email or "").strip():
+        raise HTTPException(status_code=422, detail="This invite has no email address. Ask your manager to add one.")
+
     username = _derive_username(employee.name, db)
 
     # Generate our own temp password so we can include it in our branded email
@@ -536,8 +546,10 @@ def complete_registration(
                 Username=username,
                 TemporaryPassword=temp_password,
                 UserAttributes=[
-                    {"Name": "email",          "Value": employee.email or ""},
-                    {"Name": "email_verified", "Value": "true"},
+                    {"Name": "email",          "Value": employee.email},
+                    # ADR-564 D1/D2: verified by signing in with the password
+                    # emailed to it, not by being typed into a form.
+                    {"Name": "email_verified", "Value": "false"},
                     {"Name": "name",           "Value": employee.name},
                 ],
                 MessageAction="SUPPRESS",
@@ -687,6 +699,10 @@ def complete_registration(
                 message=EMAIL_DOWN_MESSAGE,
             )
             db.commit()
+
+    # ADR-564 D3: if the email failed, nobody holds this password (the manager
+    # resends), so mark it not-emailed until a resend succeeds.
+    account_security.record_password_delivery(username, emailed=email_sent)
 
     # ADR-336 D1 — do not promise an email that failed to send. This returned
     # "Check your email for sign-in credentials" unconditionally, so a new

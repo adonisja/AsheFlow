@@ -114,6 +114,7 @@ class TestItRaisesOneAlertForSuperAdmins:
              patch.object(h, "_check_topic", return_value=[]), \
              patch.object(h, "_check_containment_permissions", return_value=[]), \
              patch.object(h, "_check_pool_triggers", return_value=[]), \
+             patch.object(h, "_check_client_write_attributes", return_value=[]), \
              patch.object(h, "raise_platform_alert") as alert:
             r = h.check_security_infra()
         assert r["healthy"] is True
@@ -129,6 +130,7 @@ class TestItRaisesOneAlertForSuperAdmins:
              patch.object(h, "_check_topic", return_value=[]), \
              patch.object(h, "_check_containment_permissions", return_value=[]), \
              patch.object(h, "_check_pool_triggers", return_value=[]), \
+             patch.object(h, "_check_client_write_attributes", return_value=[]), \
              patch.object(h, "SessionLocal"), \
              patch.object(h, "clear_integration_alert"), \
              patch.object(h, "raise_platform_alert") as alert:

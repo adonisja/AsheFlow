@@ -2543,8 +2543,10 @@ def request_owner_email_change(
         )
 
     # The token is the proof of control over the NEW address, so it is sent
-    # there and nowhere else. Reusing InviteToken would conflate "you may
-    # register" with "you may take over this address".
+    # there and nowhere else. It is stored in an InviteToken row (the old ones
+    # for this owner are deleted first), so this token can't double as a
+    # registration invite. ADR-563 gives every other email change its own
+    # table; moving this one onto it is a follow-up.
     token_str = secrets.token_urlsafe(48)
     owner.pending_email = new_email
     owner.pending_email_expires_at = (

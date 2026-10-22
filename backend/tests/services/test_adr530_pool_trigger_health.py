@@ -75,6 +75,7 @@ def test_it_is_part_of_the_hourly_run():
          patch.object(h, "_check_topic", return_value=[]), \
          patch.object(h, "_check_containment_permissions", return_value=[]), \
          patch.object(h, "_check_pool_triggers", return_value=["PostAuthentication trigger is missing"]), \
+         patch.object(h, "_check_client_write_attributes", return_value=[]), \
          patch.object(h, "SessionLocal"), \
          patch.object(h, "raise_platform_alert") as alert:
         r = h.check_security_infra()

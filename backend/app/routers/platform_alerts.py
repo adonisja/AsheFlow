@@ -106,6 +106,8 @@ class MfaResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     account_id: Optional[UUID] = None
     username: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    # ADR-561 D3: optional; shown to the person in the reset notice.
+    reason: Optional[str] = Field(default=None, min_length=10, max_length=200)
 
     @model_validator(mode="after")
     def _exactly_one(self):
@@ -180,6 +182,8 @@ def platform_reset_mfa(
     kind = account_security.mark_sessions_ended(db, sub)
     # ADR-551 D4: closes the account's reset request, if any.
     mfa_reset_requests.resolve_for(db, sub, by_kind="super_admin", by_ref=_super.get("id"))
+    from app.services.note_scrub import scrub_note
+    reason = (scrub_note(body.reason.strip())[0] or "").strip() or None if body.reason else None
 
     write_audit(
         db=db,
@@ -195,6 +199,7 @@ def platform_reset_mfa(
             "actor": super_admin_identity(_super),
             "target_username": username,
             "account_kind": kind,
+            "reason": reason,
             "devices_forgotten": result.devices_forgotten,
             "signed_out": result.signed_out,
             "factor_cleared": result.factor_cleared,
@@ -202,6 +207,13 @@ def platform_reset_mfa(
         },
     )
     db.commit()
+
+    # ADR-561: tell them. A tenant admin rescued here (ADR-389) hears it from
+    # the AsheFlow team too, and their manager can't act on a super admin's reset.
+    emailed = account_security.notify_mfa_reset(
+        username, reset_by="The AsheFlow team", account="your AsheFlow account",
+        if_not_you="reply to this email so we can check your account",
+        account_ref=sub, reason=reason)
 
     if not result.fully_contained:
         raise HTTPException(
@@ -211,6 +223,7 @@ def platform_reset_mfa(
     return {
         "username": username,
         "account_id": sub,
+        "emailed": emailed,
         "devices_forgotten": result.devices_forgotten,
         "signed_out": result.signed_out,
         "factor_cleared": result.factor_cleared,
@@ -449,7 +462,8 @@ def create_platform_staff(
             MessageAction="SUPPRESS",
             UserAttributes=[
                 {"Name": "email", "Value": body.email},
-                {"Name": "email_verified", "Value": "true"},
+                # ADR-564: verified by signing in with the emailed password.
+                {"Name": "email_verified", "Value": "false"},
                 {"Name": "name", "Value": body.name},
                 # The group is NOT granted here (ADR-397). PreAuthentication
                 # refuses a privileged account with no factor BEFORE issuing any
@@ -486,6 +500,7 @@ def create_platform_staff(
         code = exc.response.get("Error", {}).get("Code", "Unknown")
         logger.error("platform staff credentials email failed (%s)", code)
         email_delivered = False
+    account_security.record_password_delivery(username, emailed=email_delivered)   # ADR-564 D3
 
     write_audit(
         db=db,
@@ -771,3 +786,74 @@ def sign_out_alert_account(
     if not result.signed_out:
         raise HTTPException(status_code=502, detail="Cognito didn't confirm the sign-out. Try again.")
     return PlatformAlertOut.model_validate(row, from_attributes=True)
+
+
+# ── ADR-563 D3: a super admin changes a PLATFORM account's email ──────────
+# For a super admin, platform support or surveyor who lost access to their
+# inbox. Never a tenant employee: that's their company's admin
+# (/employees/{id}/email/change). Nothing changes until the link sent to the
+# new address is used.
+
+class PlatformEmailChangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    account_id: UUID
+    new_email: EmailStr
+
+
+def _platform_target(account_id: UUID, _super: dict) -> tuple[str, str, str]:
+    from app.api.deps import PLATFORM_ACCOUNT_GROUPS
+    from app.services import email_change
+    if str(account_id) == str(_super.get("id")):
+        raise HTTPException(status_code=400, detail="Change your own email from My account.")
+    username, sub = _resolve_account(boto3.client("cognito-idp", region_name=settings.aws_region),
+                                     account_id=account_id, username=None)
+    acct = email_change.cognito_account(username)
+    groups = acct["groups"] if acct else set()
+    if not (groups & PLATFORM_ACCOUNT_GROUPS):
+        raise HTTPException(status_code=403,
+                            detail="That's a company account; its company's admin changes its email.")
+    kind = "surveyor" if "surveyor" in groups else "staff"
+    return username, sub, kind
+
+
+@router.post("/accounts/email/change", status_code=status.HTTP_200_OK)
+def platform_start_email_change(body: PlatformEmailChangeIn, _super: dict = Depends(get_super_admin),
+                                db: Session = Depends(get_db)) -> dict:
+    from app.services import email_change
+    username, sub, kind = _platform_target(body.account_id, _super)
+    try:
+        expires = email_change.start_admin_change(
+            db, username=username, kind=kind, company_id=None, new_email=str(body.new_email),
+            by_kind="super_admin", by_ref=str(_super.get("id")), by_label="The AsheFlow team")
+    except email_change.EmailChangeError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"detail": "Confirmation sent to the new address.",
+            "pending_email_masked": account_security.mask_email(str(body.new_email).lower()),
+            "expires_at": expires.isoformat()}
+
+
+@router.delete("/accounts/{account_id}/sign-in-name", status_code=status.HTTP_200_OK)
+def platform_clear_sign_in_name(account_id: UUID, _super: dict = Depends(get_super_admin),
+                                db: Session = Depends(get_db)) -> dict:
+    """ADR-566 D4: a super admin may clear a platform account's sign-in name,
+    never choose one. Company accounts are their company admin's to clear."""
+    from app.services import sign_in_name
+    if str(account_id) == str(_super.get("id")):
+        raise HTTPException(status_code=400, detail="Change your own sign-in name from My account.")
+    username, sub, _kind = _platform_target(account_id, _super)
+    try:
+        cleared = sign_in_name.remove_sign_in_name(
+            db, username=username, by="super_admin",
+            audit={"company_id": None, "actor_id": None, "target_table": "cognito_users", "target_id": sub})
+    except sign_in_name.SignInNameError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"cleared": cleared}
+
+
+@router.delete("/accounts/{account_id}/email/change", status_code=status.HTTP_200_OK)
+def platform_cancel_email_change(account_id: UUID, _super: dict = Depends(get_super_admin),
+                                 db: Session = Depends(get_db)) -> dict:
+    from app.services import email_change
+    _username, sub, _kind = _platform_target(account_id, _super)
+    return {"cancelled": email_change.cancel_admin_change(db, sub=sub, by_kind="super_admin",
+                                                          by_ref=str(_super.get("id")))}

@@ -121,8 +121,8 @@ def test_an_employee_request_reaches_their_admins_once(db, _no_broker):
     admin, mgmt, dispatch = _emp(db, "admin"), _emp(db, "management"), _emp(db, "dispatch")
     out = _confirm(db, _cognito_user(sub))
     assert out["sent_to"] == "your company's admins"
-    # ADR-556 D4: no reset email exists for employees, so none is promised.
-    assert "email" not in out["detail"] and "sign in" in out["detail"]
+    # ADR-561 D5: every reset path now emails the person, so every kind is promised it.
+    assert "email you" in out["detail"] and "sign in" in out["detail"]
     req = db.query(MfaResetRequest).one()
     assert (req.account_kind, req.company_id, req.request_ip) == ("employee", SEED_COMPANY_ID, "203.0.113.7")
     told = {n.employee_id for n in db.query(Notification).filter(Notification.type == "mfa_reset_requested")}
@@ -152,7 +152,7 @@ def test_a_staff_request_raises_a_platform_alert(db):
     out = _confirm(db, _cognito_user(str(uuid.uuid4()), username="test.support",
                                      groups=("platform_support",)), alert=alert)
     assert out["sent_to"] == "a super admin"
-    assert "email" not in out["detail"]                 # ADR-556 D4
+    assert "email you" in out["detail"]                 # ADR-561 D5
     assert alert.call_args.kwargs["alert_type"] == "mfa.reset_requested"
     assert db.query(MfaResetRequest).one().account_kind == "staff"
 

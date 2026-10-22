@@ -20,6 +20,10 @@ class Settings(BaseSettings):
 
     # Redis — used for dispatch confirmation state
     redis_url: str = "redis://localhost:6379/0"
+    # ADR-562: peers allowed to set X-Forwarded-For / -Proto. Docker's private
+    # bridge range (whatever subnet compose assigns) and localhost: Caddy, on the
+    # compose network, is the only thing that reaches the backend. Never "*".
+    trusted_proxy_hosts: str = "172.16.0.0/12,127.0.0.1"
 
     # Shared secret for internal bot → backend webhook calls.
     # Must be overridden via environment variable before deployment.

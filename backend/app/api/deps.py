@@ -183,7 +183,15 @@ _SESSION_ENDED = HTTPException(
 )
 
 def _resolve_employee_from_cognito(current_user: dict, db: Session):
-    """Shared lookup chain: cognito_sub → discord_id → email → UUID fallback.
+    """Shared lookup chain: cognito_sub → username → UUID fallback. Never email.
+
+    ADR-560: an employee is identified by the Cognito identity that holds the
+    token, never by an attribute two accounts can share. The email fallback let
+    a DIFFERENT Cognito user (a federated Discord_ user; or a platform account,
+    which has no Employee row) act as whichever employee had the same email --
+    proved on staging: no MFA, no groups, resolved as manager.test (management)
+    and passed the MFA gate on manager.test's enrolment. The discord_id branch
+    matched a token's USERNAME against Discord ids, an old-pool convention.
 
     Returns the Employee if found, else None.  Also stamps cognito_sub on first
     login so future calls take the fast path.  Does NOT commit activation logic
@@ -194,7 +202,6 @@ def _resolve_employee_from_cognito(current_user: dict, db: Session):
 
     sub      = current_user.get("id", "")
     username = current_user.get("username", "")
-    email    = current_user.get("email", "")
 
     employee = None
 
@@ -213,19 +220,8 @@ def _resolve_employee_from_cognito(current_user: dict, db: Session):
             "sub=%r — cognito_sub will be stamped after resolution.",
             username, sub,
         )
-        # New pool: username is danny.rivera — match Employee.username
+        # Cognito usernames are unique in the pool and set by us (danny.rivera).
         employee = db.query(Employee).filter(Employee.username == username).first()
-        # Old pool fallback: username was the discord_id
-        if not employee:
-            employee = db.query(Employee).filter(Employee.discord_id == username).first()
-
-    if not employee and email:
-        logger.warning(
-            "SC-3 fallback: resolving employee by email=%r (username fallback also missed). "
-            "sub=%r — cognito_sub will be stamped after resolution.",
-            email, sub,
-        )
-        employee = db.query(Employee).filter(Employee.email == email).first()
 
     if not employee and sub:
         try:

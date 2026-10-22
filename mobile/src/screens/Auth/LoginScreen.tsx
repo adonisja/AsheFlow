@@ -7,7 +7,6 @@ import {
 import { useAuth, type AuthChallenge } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
-import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 import { classifySignInError } from './signInError';
 import ResetRequest, { ResetRequestLink, type ResetSent } from './ResetRequest';
 import SignInNotice, { NoticeText } from './SignInNotice';
@@ -15,13 +14,12 @@ import SetupKey from '@components/SetupKey';
 
 export default function LoginScreen() {
   const c = useColors();
-  const { signIn, respondToChallenge, signInWithProvider, sessionNotice, clearSessionNotice } = useAuth();
+  const { signIn, respondToChallenge, sessionNotice, clearSessionNotice } = useAuth();
 
   const [username,       setUsername]       = useState('');
   const [password,       setPassword]       = useState('');
   const [showPw,         setShowPw]         = useState(false);
   const [loading,        setLoading]        = useState(false);
-  const [federatedLoading, setFederatedLoading] = useState<'Discord' | 'Google' | null>(null);
   const [error,          setError]          = useState<string | null>(null);
   // ADR-548 D5: the enrolment-window refusal is a state, not an error.
   const [mfaSetupClosed, setMfaSetupClosed] = useState(false);
@@ -115,18 +113,6 @@ export default function LoginScreen() {
       label: 'Code from your app',
       secure: false,
     },
-  };
-
-  const handleFederated = async (provider: 'Discord' | 'Google') => {
-    setFederatedLoading(provider);
-    setError(null);
-    try {
-      await signInWithProvider(provider);
-    } catch (err: any) {
-      fail(err, 'Sign-in failed. Please try again.');
-    } finally {
-      setFederatedLoading(null);
-    }
   };
 
   const s = styles(c);
@@ -273,11 +259,13 @@ export default function LoginScreen() {
           )}
           {/* Username */}
           <View style={s.fieldGroup}>
-            <Text style={s.label}>Username</Text>
+            {/* ADR-566 D4: Cognito resolves a sign-in name (alias) here too. */}
+            <Text style={s.label}>Username or sign-in name</Text>
             <TextInput
               style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
               placeholder="username"
               placeholderTextColor={c.placeholder}
+              accessibilityLabel="Username or sign-in name"
               autoCapitalize="none"
               autoCorrect={false}
               value={username}
@@ -347,7 +335,7 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={[s.btn, { backgroundColor: c.brand, opacity: loading ? 0.7 : 1 }]}
             onPress={handleLogin}
-            disabled={loading || !!federatedLoading}
+            disabled={loading}
             activeOpacity={0.82}
           >
             {loading
@@ -356,39 +344,6 @@ export default function LoginScreen() {
             }
           </TouchableOpacity>
 
-          {/* ── Divider ─────────────────────────────────────── */}
-          <View style={s.dividerRow}>
-            <View style={[s.dividerLine, { backgroundColor: c.border }]} />
-            <Text style={[s.dividerLabel, { color: c.mutedForeground }]}>or</Text>
-            <View style={[s.dividerLine, { backgroundColor: c.border }]} />
-          </View>
-
-          {/* ── Federated buttons ───────────────────────────── */}
-          <TouchableOpacity
-            style={[s.socialBtn, { borderColor: '#5865F2', backgroundColor: c.surfaceMuted, opacity: federatedLoading === 'Discord' ? 0.7 : 1 }]}
-            onPress={() => handleFederated('Discord')}
-            disabled={loading || !!federatedLoading}
-            activeOpacity={0.82}
-          >
-            {federatedLoading === 'Discord'
-              ? <ActivityIndicator color="#fff" style={s.socialIcon} />
-              : <View style={s.socialIcon}><DiscordIcon size={20} /></View>
-            }
-            <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Discord</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[s.socialBtn, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: federatedLoading === 'Google' ? 0.7 : 1 }]}
-            onPress={() => handleFederated('Google')}
-            disabled={loading || !!federatedLoading}
-            activeOpacity={0.82}
-          >
-            {federatedLoading === 'Google'
-              ? <ActivityIndicator color={c.foreground} style={s.socialIcon} />
-              : <View style={s.socialIcon}><GoogleIcon size={20} /></View>
-            }
-            <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Google</Text>
-          </TouchableOpacity>
           </>
           )}
           </>
@@ -488,24 +443,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
   },
   btnText: { color: c.brandForeground, fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: 0.2 },
-
-  // Divider
-  dividerRow:  { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
-  dividerLine: { flex: 1, height: 1 },
-  dividerLabel: { marginHorizontal: spacing.sm, fontSize: fontSize.xs, textTransform: 'uppercase', letterSpacing: 1 },
-
-  // Social buttons
-  socialBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: radius.md,
-    paddingVertical: spacing.sm + 4,
-    paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  socialIcon:    { width: 22, height: 22, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center' },
-  socialBtnText: { fontSize: fontSize.base, fontWeight: fontWeight.medium },
 
   hint: {
     textAlign: 'center',

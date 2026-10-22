@@ -197,3 +197,55 @@ def mask_email(address: str) -> str:
     if not domain:
         return "•••"
     return f"{local[:1]}•••@{domain}"
+
+
+def notify_mfa_reset(username: str, *, reset_by: str, account: str, if_not_you: str,
+                     account_ref: str, reason: str | None = None) -> bool:
+    """Tell the account holder their second factor was reset (ADR-561). True if emailed.
+
+    Sent to the address Cognito sends this account's codes to, and only when
+    Cognito marks it verified -- never Employee.email, which can differ from the
+    recovery address (staging: walker.test@asheflow.internal vs walker@test.com).
+    Never raises: the reset already happened, and a failed notice must not turn
+    it into an error. Logged by error type only.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+    from app.services.email import send_mfa_reset_notice
+    try:
+        u = _cognito().admin_get_user(UserPoolId=settings.aws_cognito_user_pool_id, Username=username)
+    except (ClientError, BotoCoreError) as exc:
+        code = exc.response.get("Error", {}).get("Code") if isinstance(exc, ClientError) else type(exc).__name__
+        logger.warning("mfa reset notice: account lookup failed: %s", code)
+        return False
+    attrs = {a["Name"]: a.get("Value") for a in u.get("UserAttributes", [])}
+    email = attrs.get("email")
+    if not email or attrs.get("email_verified") != "true":
+        return False
+    try:
+        send_mfa_reset_notice(to_email=email, name=attrs.get("name") or u.get("Username", ""),
+                              reset_by=reset_by, account=account, if_not_you=if_not_you,
+                              account_ref=account_ref, reason=reason)
+    except Exception as exc:  # the reset stands whatever the mailer did
+        logger.warning("mfa reset notice: send failed: %s", type(exc).__name__)
+        return False
+    return True
+
+
+HANDED_OVER_ATTR = "custom:pw_handed_over"
+
+
+def record_password_delivery(username: str, *, emailed: bool) -> None:
+    """How this account's temporary password travelled (ADR-564 D3).
+
+    "1" when it was handed to an admin because the email failed: signing in
+    with it then proves nothing about the inbox, so the sign-in Lambda won't
+    mark the address verified. "0" when it was emailed. Written every time a
+    temporary password is issued, so a password re-sent by email after an
+    earlier handover counts again. Never raises.
+    """
+    try:
+        _cognito().admin_update_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id, Username=username,
+            UserAttributes=[{"Name": HANDED_OVER_ATTR, "Value": "0" if emailed else "1"}])
+    except Exception as exc:
+        logger.warning("account_security: could not record password delivery: %s", type(exc).__name__)
