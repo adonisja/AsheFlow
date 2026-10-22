@@ -1,5 +1,6 @@
 {
   "react-native": {
-    "messaging_android_notification_channel_id": "alerts"
+    "messaging_android_notification_channel_id": "alerts",
+    "messaging_android_notification_color": "@color/notification_accent"
   }
 }

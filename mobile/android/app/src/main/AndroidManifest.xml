@@ -25,6 +25,15 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="${usesCleartextTraffic}"
       android:supportsRtl="true">
+      <!-- ADR-570. The status-bar icon for pushes Android draws itself (app in
+           the background). Without it Firebase falls back to the launcher
+           icon, and Android 5+ draws a small icon from its alpha channel only:
+           an opaque square comes out as a grey square. The ACCENT colour is set
+           in firebase.json (messaging_android_notification_color), because the
+           Firebase library declares that meta-data itself. -->
+      <meta-data
+        android:name="com.google.firebase.messaging.default_notification_icon"
+        android:resource="@drawable/ic_notification" />
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
