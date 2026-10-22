@@ -5,6 +5,7 @@
   1. .github/workflows/ci.yml        (the pull step, at build time)
   2. scripts/setup_private_repo.sh   (developer setup)
   3. scripts/check_private_branch_ready.sh (the pre-merge guard)
+  4. scripts/promote_private_main.sh (the fix the guard points to, ADR-569)
 
 Three copies of one rule is the risk this file exists for. If they disagree,
 the guard checks a different branch than CI pulls — and passes while the merge
@@ -17,6 +18,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _CI = _ROOT / ".github" / "workflows" / "ci.yml"
 _GUARD = _ROOT / "scripts" / "check_private_branch_ready.sh"
 _SETUP = _ROOT / "scripts" / "setup_private_repo.sh"
+_PROMOTE = _ROOT / "scripts" / "promote_private_main.sh"
 
 
 def test_ci_maps_master_to_main():
@@ -28,6 +30,11 @@ def test_ci_maps_master_to_main():
 
 def test_the_guard_uses_the_same_mapping():
     text = _GUARD.read_text()
+    assert re.search(r'map_branch\(\)\s*\{\s*\[\s*"\$1"\s*=\s*"master"\s*\]\s*&&\s*echo\s+"main"', text)
+
+
+def test_the_promote_script_uses_the_same_mapping():
+    text = _PROMOTE.read_text()
     assert re.search(r'map_branch\(\)\s*\{\s*\[\s*"\$1"\s*=\s*"master"\s*\]\s*&&\s*echo\s+"main"', text)
 
 

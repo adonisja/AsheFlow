@@ -98,7 +98,13 @@ git -C "$TMP/priv" diff --name-only "${BASE_PRIV}..${HEAD_PRIV}" -- \
 
 cat <<MSG
 
-To fix, sync the private branch, then re-run this check:
+To fix (ADR-569), promote the private branch, then re-run this check:
+
+  scripts/promote_private_main.sh
+
+It fast-forwards private '${BASE_PRIV}' to '${HEAD_PRIV}' after showing the files,
+and refuses if '${BASE_PRIV}' has commits '${HEAD_PRIV}' lacks. Only then, after
+deciding what to keep, use the manual sync below:
 
   git clone -b ${HEAD_PRIV} ${REPO} /tmp/priv && cd /tmp/priv
   git checkout -B sync origin/${HEAD_PRIV}
