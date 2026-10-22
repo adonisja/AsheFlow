@@ -832,6 +832,24 @@ def platform_start_email_change(body: PlatformEmailChangeIn, _super: dict = Depe
             "expires_at": expires.isoformat()}
 
 
+@router.delete("/accounts/{account_id}/sign-in-name", status_code=status.HTTP_200_OK)
+def platform_clear_sign_in_name(account_id: UUID, _super: dict = Depends(get_super_admin),
+                                db: Session = Depends(get_db)) -> dict:
+    """ADR-566 D4: a super admin may clear a platform account's sign-in name,
+    never choose one. Company accounts are their company admin's to clear."""
+    from app.services import sign_in_name
+    if str(account_id) == str(_super.get("id")):
+        raise HTTPException(status_code=400, detail="Change your own sign-in name from My account.")
+    username, sub, _kind = _platform_target(account_id, _super)
+    try:
+        cleared = sign_in_name.remove_sign_in_name(
+            db, username=username, by="super_admin",
+            audit={"company_id": None, "actor_id": None, "target_table": "cognito_users", "target_id": sub})
+    except sign_in_name.SignInNameError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"cleared": cleared}
+
+
 @router.delete("/accounts/{account_id}/email/change", status_code=status.HTTP_200_OK)
 def platform_cancel_email_change(account_id: UUID, _super: dict = Depends(get_super_admin),
                                  db: Session = Depends(get_db)) -> dict:

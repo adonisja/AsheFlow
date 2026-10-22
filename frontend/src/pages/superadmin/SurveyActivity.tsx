@@ -85,6 +85,15 @@ export default function SurveyActivityPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // ADR-566 D4: clear (never choose) a surveyor's sign-in name. Hidden until
+  // this environment's pool supports them.
+  const [signInNamesOn, setSignInNamesOn] = useState(false);
+  useEffect(() => {
+    axiosClient.get<{ sign_in_name_available: boolean }>('/platform/me')
+      .then(({ data }) => setSignInNamesOn(!!data?.sign_in_name_available))
+      .catch(() => {/* silent: the action stays hidden */});
+  }, []);
+
   const run = async (key: string, fn: () => Promise<string>) => {
     setBusy(key); setError(null); setNotice(null);
     try {
@@ -273,6 +282,19 @@ export default function SurveyActivityPage() {
                               <button type="button" disabled={busy !== null} onClick={() => setEmailFor(c)}
                                       className="btn-ghost min-h-11 px-3 text-sm disabled:opacity-50">
                                 Change email
+                              </button>
+                            )}
+                            {isOwner && signInNamesOn && !c.revoked_at && (
+                              <button type="button" disabled={busy !== null}
+                                      onClick={() => {
+                                        if (!window.confirm(`Remove ${c.display_name}'s sign-in name? They can still sign in with their username.`)) return;
+                                        void run(`signin-${c.id}`, async () => {
+                                          const { data } = await axiosClient.delete<{ cleared: boolean }>(`/survey/contributors/${c.id}/sign-in-name`);
+                                          return data.cleared ? `${c.display_name}: sign-in name cleared.` : `${c.display_name} doesn't have a sign-in name.`;
+                                        });
+                                      }}
+                                      className="btn-ghost min-h-11 px-3 text-sm disabled:opacity-50">
+                                Clear sign-in name
                               </button>
                             )}
                             {isOwner && (

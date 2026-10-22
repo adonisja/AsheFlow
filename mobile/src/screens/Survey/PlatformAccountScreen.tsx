@@ -13,6 +13,7 @@ import { Alert, Platform, StyleSheet, Text, TextInput, View } from 'react-native
 import ScreenShell from '@components/ui/ScreenShell';
 import { Button } from '@components/ui/primitives';
 import MfaEnrolment from '@components/MfaEnrolment';
+import SignInNameCard from '@components/SignInNameCard';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useAuth } from '@contexts/AuthContext';
@@ -23,6 +24,7 @@ type PlatformMe = {
   account_id: string; surveyor_id: string | null;   // ADR-550 D1
   username: string; name: string | null; email: string | null; email_verified: boolean;
   groups: string[]; role_label: string; mfa_enrolled: boolean | null;
+  sign_in_name: string | null; sign_in_name_available: boolean;   // ADR-566 D4
 };
 
 export default function PlatformAccountScreen({ navigation }: { navigation: { goBack: () => void } }) {
@@ -133,6 +135,13 @@ export default function PlatformAccountScreen({ navigation }: { navigation: { go
         )}
         <Text style={s.hint}>A super admin sets platform names.</Text>
       </View>
+
+      {/* ADR-566 D4: hidden until this environment's pool accepts sign-in names. */}
+      {me?.sign_in_name_available && (
+        <View style={s.card}>
+          <SignInNameCard path="/platform/me/sign-in-name" current={me.sign_in_name} username={me.username} />
+        </View>
+      )}
 
       <View style={s.card}>
         <Text style={s.h2}>Change email</Text>

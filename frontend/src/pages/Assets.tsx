@@ -2,7 +2,7 @@ import { errorText } from '../utils/errorText';
 import { formatDate } from '../utils/date';
 import SelectMenu from '../components/ui/SelectMenu';
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X, AtSign } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, AtSign, Check, CheckCircle2, Copy, Eraser, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow, MfaResetRequestRow } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
@@ -885,6 +885,31 @@ function PeopleTab() {
    *  no caller until this. It does NOT remove the Cognito factor -- a new secret
    *  replaces the old on re-enrolment (ADR-377 D3) -- it clears the remembered
    *  devices skipping the challenge and ends the sessions outliving the change. */
+  // ADR-566 D4. An admin may clear a sign-in name (an offensive one, say) but
+  // never choose it. Hidden until this environment's pool supports them.
+  const [signInNamesOn, setSignInNamesOn] = useState(false);
+  useEffect(() => {
+    axiosClient.get<{ available: boolean }>('/employees/me/sign-in-name')
+      .then(({ data }) => setSignInNamesOn(!!data?.available))
+      .catch(() => {/* silent: the action stays hidden */});
+  }, []);
+  const handleClearSignInName = async (emp: Employee) => {
+    const ok = await confirm({
+      title: 'Clear sign-in name',
+      message: `Remove ${emp.name}'s sign-in name? They can still sign in with their username, and can choose a new name from My account.`,
+      confirmLabel: 'Clear',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const { data } = await axiosClient.delete<{ cleared: boolean }>(`/employees/${emp.id}/sign-in-name`);
+      setResetMfaMsg({ id: emp.id, ok: true,
+                       text: data.cleared ? 'Sign-in name cleared.' : "They don't have a sign-in name." });
+    } catch (err) {
+      setResetMfaMsg({ id: emp.id, ok: false, text: errorText(err, "Couldn't clear the sign-in name.") });
+    }
+  };
+
   const handleResetMfa = async (emp: any) => {
     // ADR-467 D2. The old copy said only "must set it up again at their next
     // sign-in", written when reset cleared nothing but the factor. Since
@@ -1699,6 +1724,16 @@ function PeopleTab() {
                                   aria-label={`Change ${emp.name}'s email`}
                                 >
                                   <AtSign className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {signInNamesOn && lc === 'active' && (
+                                <button
+                                  onClick={() => void handleClearSignInName(emp)}
+                                  className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                                  title="Clear sign-in name"
+                                  aria-label={`Clear ${emp.name}'s sign-in name`}
+                                >
+                                  <Eraser className="w-3.5 h-3.5" />
                                 </button>
                               )}
                               {isAdmin && (

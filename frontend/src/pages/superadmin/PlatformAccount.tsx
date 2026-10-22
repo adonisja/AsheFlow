@@ -16,6 +16,7 @@ import { signOut } from 'aws-amplify/auth';
 import { Lock, CheckCircle2, UserCircle2 } from 'lucide-react';
 
 import EmailChangeSection from '../../components/EmailChangeSection';
+import SignInNameSection from '../../components/SignInNameSection';
 import axiosClient from '../../api/axiosClient';
 import type { PlatformMe } from '../../api/types';
 import SecurityPanel from '../../components/SecurityPanel';
@@ -114,6 +115,13 @@ export default function PlatformAccount() {
                 onChanged={() => { signOut().catch(() => {}).finally(() => window.location.assign('/login?ended=email')); }}
                 noEmailHint={me.email ? 'Not verified. Ask a super admin to change it.' : 'None. Ask a super admin to add one.'}
               />
+            </div>
+          )}
+          {/* ADR-566 D4: hidden until this environment's pool accepts the alias. */}
+          {me?.sign_in_name_available && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <SignInNameSection path="/platform/me/sign-in-name" available
+                                 current={me.sign_in_name} username={me.username} />
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-5">A super admin sets platform names.</p>

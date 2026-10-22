@@ -2366,6 +2366,101 @@ def confirm_password_change(
     return {"detail": "Password changed. Sign in with your new password.", "signed_out": True}
 
 
+class _SignInNameIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # The shape rules live in sign_in_name.normalise; this only bounds the input.
+    sign_in_name: str = Field(..., min_length=1, max_length=64)
+
+
+def _sign_in_name_error(e) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@router.get("/me/sign-in-name", status_code=status.HTTP_200_OK)
+def get_sign_in_name(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_self),
+):
+    """ADR-566 D4: the caller's own sign-in name, and whether this environment
+    supports one yet."""
+    from app.services import sign_in_name
+    username = _username_or_409(caller)
+    ok = sign_in_name.available()
+    return {"available": ok, "username": username, "rules": sign_in_name.RULES,
+            "sign_in_name": sign_in_name.current(username) if ok else None}
+
+
+@router.put("/me/sign-in-name", status_code=status.HTTP_200_OK)
+def set_sign_in_name(
+    payload: _SignInNameIn,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
+):
+    """ADR-566 D4: only the person chooses their sign-in name."""
+    from app.services import sign_in_name
+    username = _username_or_409(caller)
+    try:
+        name = sign_in_name.apply_sign_in_name(
+            db, username=username, raw=payload.sign_in_name, rate_key=caller.id,
+            audit={"company_id": caller.company_id, "actor_id": caller.id,
+                   "target_table": "employees", "target_id": str(caller.id)})
+    except sign_in_name.SignInNameError as e:
+        raise _sign_in_name_error(e)
+    return {"sign_in_name": name}
+
+
+@router.delete("/me/sign-in-name", status_code=status.HTTP_200_OK)
+def clear_own_sign_in_name(
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
+):
+    from app.services import sign_in_name
+    username = _username_or_409(caller)
+    try:
+        cleared = sign_in_name.remove_sign_in_name(
+            db, username=username, by="self",
+            audit={"company_id": caller.company_id, "actor_id": caller.id,
+                   "target_table": "employees", "target_id": str(caller.id)})
+    except sign_in_name.SignInNameError as e:
+        raise _sign_in_name_error(e)
+    return {"cleared": cleared}
+
+
+# Declared after the /me routes: "/{employee_id}/sign-in-name" would otherwise
+# match "/me/sign-in-name" and fail UUID validation with a 422.
+@router.delete("/{employee_id}/sign-in-name", status_code=status.HTTP_200_OK)
+def admin_clear_sign_in_name(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """ADR-566 D4: an admin may clear a sign-in name (an offensive one, say) but
+    never choose one. Same scope as an email change: own company, and
+    management can't act on an admin or a manager."""
+    from app.services import sign_in_name
+    target = db.query(Employee).filter(Employee.id == employee_id,
+                                       Employee.company_id == caller.company_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if target.id == caller.id:
+        raise HTTPException(status_code=400, detail="Change your own sign-in name from My account.")
+    _assert_not_protected(set(current_user.get("cognito_groups", [])), target.role)
+    username = cognito_username_for(target)
+    if not username:
+        raise HTTPException(status_code=409, detail="This employee has not completed registration yet.")
+    try:
+        cleared = sign_in_name.remove_sign_in_name(
+            db, username=username, by="tenant_admin",
+            audit={"company_id": caller.company_id, "actor_id": caller.id,
+                   "target_table": "employees", "target_id": str(target.id)})
+    except sign_in_name.SignInNameError as e:
+        raise _sign_in_name_error(e)
+    return {"cleared": cleared}
+
+
 class _EmailChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     new_email: EmailStr

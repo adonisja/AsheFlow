@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import PLATFORM_ACCOUNT_GROUPS, get_db, get_platform_user
 from app.core.config import settings
-from app.services import account_security
+from app.services import account_security, sign_in_name
 from app.services.audit import write_audit
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,10 @@ class PlatformMeOut(BaseModel):
     groups: list[str]
     role_label: str
     mfa_enrolled: bool | None
+    # ADR-566 D4. `sign_in_name_available` is False until this environment's
+    # pool accepts the alias; the client hides the setting until then.
+    sign_in_name: str | None = None
+    sign_in_name_available: bool = False
 
 
 class _PasswordConfirmRequest(BaseModel):
@@ -119,7 +123,42 @@ def get_me(caller: dict = Depends(get_platform_account), db: Session = Depends(g
         groups=groups,
         role_label=label,
         mfa_enrolled=enrolled,
+        sign_in_name=attrs.get("preferred_username"),
+        sign_in_name_available=sign_in_name.available(),
     )
+
+
+class _SignInNameIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sign_in_name: str = Field(..., min_length=1, max_length=64)
+
+
+@router.put("/sign-in-name", status_code=status.HTTP_200_OK)
+def set_sign_in_name(payload: _SignInNameIn, caller: dict = Depends(get_platform_account),
+                     db: Session = Depends(get_db)):
+    """ADR-566 D4: only the person chooses their sign-in name."""
+    username = _username_or_409(caller)
+    try:
+        name = sign_in_name.apply_sign_in_name(
+            db, username=username, raw=payload.sign_in_name, rate_key=_rate_key(caller),
+            audit={"company_id": None, "actor_id": None,
+                   "target_table": "cognito_users", "target_id": str(caller["id"])})
+    except sign_in_name.SignInNameError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"sign_in_name": name}
+
+
+@router.delete("/sign-in-name", status_code=status.HTTP_200_OK)
+def clear_sign_in_name(caller: dict = Depends(get_platform_account), db: Session = Depends(get_db)):
+    username = _username_or_409(caller)
+    try:
+        cleared = sign_in_name.remove_sign_in_name(
+            db, username=username, by="self",
+            audit={"company_id": None, "actor_id": None,
+                   "target_table": "cognito_users", "target_id": str(caller["id"])})
+    except sign_in_name.SignInNameError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"cleared": cleared}
 
 
 @router.get("/session", status_code=status.HTTP_200_OK)

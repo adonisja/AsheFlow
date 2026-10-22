@@ -87,6 +87,29 @@ export default function PlatformStaff() {
   const [resetUser, setResetUser] = useState('');
   const [resetting, setResetting] = useState(false);
   const [resetMsg, setResetMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // ADR-566 D4: a super admin may clear a platform account's sign-in name,
+  // never choose one. Hidden until this environment's pool supports them.
+  const [signInNamesOn, setSignInNamesOn] = useState(false);
+  useEffect(() => {
+    axiosClient.get<{ sign_in_name_available: boolean }>('/platform/me')
+      .then(({ data }) => setSignInNamesOn(!!data?.sign_in_name_available))
+      .catch(() => {/* silent: the action stays hidden */});
+  }, []);
+  const clearSignInName = async (accountId: string, label: string) => {
+    const ok = await confirm({
+      title: 'Clear sign-in name',
+      message: `Remove ${label}'s sign-in name? They can still sign in with their username.`,
+      confirmLabel: 'Clear',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const { data } = await axiosClient.delete<{ cleared: boolean }>(`/platform/accounts/${accountId}/sign-in-name`);
+      setResetMsg({ ok: true, text: data.cleared ? `${label}: sign-in name cleared.` : `${label} doesn't have a sign-in name.` });
+    } catch (err) {
+      setResetMsg({ ok: false, text: errorText(err, "Couldn't clear the sign-in name.") });
+    }
+  };
 
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
@@ -304,6 +327,12 @@ export default function PlatformStaff() {
                       <button type="button" onClick={() => setEmailFor({ id: r.account_id!, name: r.name || r.username })}
                               className="text-xs font-medium px-2.5 py-1 min-h-[44px] rounded-lg border border-border text-foreground hover:bg-accent">
                         Change email
+                      </button>
+                    )}
+                    {isSuperAdmin && signInNamesOn && !r.pending && r.account_id && (
+                      <button type="button" onClick={() => void clearSignInName(r.account_id!, r.name || r.username)}
+                              className="text-xs font-medium px-2.5 py-1 min-h-[44px] rounded-lg border border-border text-foreground hover:bg-accent">
+                        Clear sign-in name
                       </button>
                     )}
                     {isSuperAdmin && !r.pending && r.account_id && (

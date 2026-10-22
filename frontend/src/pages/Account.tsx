@@ -18,6 +18,8 @@ import React, { useEffect, useState } from 'react';
 import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../contexts/AuthContext';
 import EmailChangeSection from '../components/EmailChangeSection';
+import SignInNameSection from '../components/SignInNameSection';
+import type { SignInNameStatus } from '../api/types';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import { Lock, CheckCircle2, Mail, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
@@ -113,6 +115,14 @@ export default function Account() {
         setCurrentDiscord(data?.discord_id ?? null);
       })
       .catch(() => {/* silent: the rows fall back to placeholders */});
+  }, []);
+
+  // ADR-566 D4. Hidden until the environment's pool accepts sign-in names.
+  const [signInName, setSignInName] = useState<SignInNameStatus | null>(null);
+  useEffect(() => {
+    axiosClient.get<SignInNameStatus>('/employees/me/sign-in-name')
+      .then(({ data }) => setSignInName(data))
+      .catch(() => {/* silent: the row just stays hidden */});
   }, []);
 
   /** After a credential change the server has ended every session, this one
@@ -223,6 +233,13 @@ export default function Account() {
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Username</span>
               <span className="text-sm font-medium text-foreground font-mono">{user?.username || '—'}</span>
             </div>
+
+            {signInName?.available && (
+              <div className="py-2.5 border-t border-border">
+                <SignInNameSection path="/employees/me/sign-in-name" available
+                                   current={signInName.sign_in_name} username={signInName.username} />
+              </div>
+            )}
 
             {/* Email — two-step verified change (ADR-541 R2), shared with the
                 platform account page (ADR-563 D2). */}
