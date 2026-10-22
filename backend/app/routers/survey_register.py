@@ -827,7 +827,8 @@ def invite_contributor(body: ContributorInviteIn, staff: dict = Depends(get_plat
             MessageAction="SUPPRESS",
             UserAttributes=[
                 {"Name": "email", "Value": email},
-                {"Name": "email_verified", "Value": "true"},
+                # ADR-564: verified by signing in with the emailed password.
+                {"Name": "email_verified", "Value": "false"},
                 {"Name": "name", "Value": body.name},
             ],
         )
@@ -875,6 +876,8 @@ def invite_contributor(body: ContributorInviteIn, staff: dict = Depends(get_plat
     except Exception as exc:
         logger.error("survey invite: credentials email failed: %s", type(exc).__name__)
         email_delivered = False
+    from app.services import account_security
+    account_security.record_password_delivery(username, emailed=email_delivered)   # ADR-564 D3
 
     return InviteOut(contributor=ContributorOut.model_validate(c), email_delivered=email_delivered,
                      temp_password=None if email_delivered else temp_password)
@@ -1502,6 +1505,8 @@ def resend_contributor_signin(contributor_id: UUID, staff: dict = Depends(get_pl
     except Exception as exc:
         logger.error("survey resend: credentials email failed: %s", type(exc).__name__)
         delivered = False
+    from app.services import account_security
+    account_security.record_password_delivery(c.cognito_username, emailed=delivered)   # ADR-564 D3
     return InviteOut(contributor=ContributorOut.model_validate(c), email_delivered=delivered,
                      temp_password=None if delivered else temp_password)
 

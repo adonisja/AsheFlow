@@ -79,6 +79,43 @@ FIRST_SEEN_ATTR = "custom:mfa_first_seen"
 # completed. RESET_REQUIRED is the admin-forced reset, same shape.
 PRE_PASSWORD_STATES = {"FORCE_CHANGE_PASSWORD", "RESET_REQUIRED"}
 
+# ADR-564. Set by a create path when the temporary password was handed to an
+# admin because the credentials email failed (ADR-394): signing in with it then
+# proves nothing about the inbox, so it must not verify the address.
+HANDED_OVER_ATTR = "custom:pw_handed_over"
+
+
+def _verify_email_on_temporary_password(event, pool_id: str, username: str) -> None:
+    """ADR-564 D2: a temporary password was emailed to this address; signing in
+    with it proves the person reads that inbox, so the address is verified.
+
+    Only FORCE_CHANGE_PASSWORD (a password we emailed). Not RESET_REQUIRED (an
+    admin-forced reset) and not when the password was handed over (D3). Reads
+    the event's own attributes -- no lookup inside Cognito's 5 s limit. Never
+    raises: this is bookkeeping, and must not fail a sign-in.
+    """
+    try:
+        a = dict(event.get("request", {}).get("userAttributes", {}))
+        # Measured in CloudWatch (30 days to 2026-10-22): the event carried
+        # cognito:user_status on all 13 sign-ins, FORCE_CHANGE_PASSWORD included,
+        # and it matched AdminGetUser every time. Fall back to a lookup anyway,
+        # as _post_authentication does, so a missing attribute can't silently
+        # leave every new account unverified.
+        if "cognito:user_status" not in a:
+            u = _cognito().admin_get_user(UserPoolId=pool_id, Username=username)
+            a = {x["Name"]: x.get("Value") for x in u.get("UserAttributes", [])}
+            a["cognito:user_status"] = u.get("UserStatus")
+        if a.get("cognito:user_status") != "FORCE_CHANGE_PASSWORD":
+            return
+        if not a.get("email") or a.get("email_verified") == "true" or a.get(HANDED_OVER_ATTR) == "1":
+            return
+        _cognito().admin_update_user_attributes(
+            UserPoolId=pool_id, Username=username,
+            UserAttributes=[{"Name": "email_verified", "Value": "true"}])
+        logger.info("post-auth: %s signed in with the emailed temporary password; email verified (ADR-564)", username)
+    except Exception:
+        logger.exception("post-auth: could not verify the email for %s", username)
+
 def _make_client():
     return boto3.client("cognito-idp", region_name=os.environ.get("AWS_REGION", "us-east-2"))
 
@@ -258,6 +295,8 @@ def handler(event, context):
     # ADR-530. Anything that is not PostAuthentication takes the PreAuth path,
     # which is the historical behaviour for an event with no triggerSource.
     if event.get("triggerSource", "").startswith("PostAuthentication"):
+        # ADR-564: for EVERY account, before the privileged-only pass logic.
+        _verify_email_on_temporary_password(event, pool_id, username)
         return _post_authentication(event, pool_id, username)
 
     try:

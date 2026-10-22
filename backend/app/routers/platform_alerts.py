@@ -462,7 +462,8 @@ def create_platform_staff(
             MessageAction="SUPPRESS",
             UserAttributes=[
                 {"Name": "email", "Value": body.email},
-                {"Name": "email_verified", "Value": "true"},
+                # ADR-564: verified by signing in with the emailed password.
+                {"Name": "email_verified", "Value": "false"},
                 {"Name": "name", "Value": body.name},
                 # The group is NOT granted here (ADR-397). PreAuthentication
                 # refuses a privileged account with no factor BEFORE issuing any
@@ -499,6 +500,7 @@ def create_platform_staff(
         code = exc.response.get("Error", {}).get("Code", "Unknown")
         logger.error("platform staff credentials email failed (%s)", code)
         email_delivered = False
+    account_security.record_password_delivery(username, emailed=email_delivered)   # ADR-564 D3
 
     write_audit(
         db=db,

@@ -229,3 +229,23 @@ def notify_mfa_reset(username: str, *, reset_by: str, account: str, if_not_you: 
         logger.warning("mfa reset notice: send failed: %s", type(exc).__name__)
         return False
     return True
+
+
+HANDED_OVER_ATTR = "custom:pw_handed_over"
+
+
+def record_password_delivery(username: str, *, emailed: bool) -> None:
+    """How this account's temporary password travelled (ADR-564 D3).
+
+    "1" when it was handed to an admin because the email failed: signing in
+    with it then proves nothing about the inbox, so the sign-in Lambda won't
+    mark the address verified. "0" when it was emailed. Written every time a
+    temporary password is issued, so a password re-sent by email after an
+    earlier handover counts again. Never raises.
+    """
+    try:
+        _cognito().admin_update_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id, Username=username,
+            UserAttributes=[{"Name": HANDED_OVER_ATTR, "Value": "0" if emailed else "1"}])
+    except Exception as exc:
+        logger.warning("account_security: could not record password delivery: %s", type(exc).__name__)

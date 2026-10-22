@@ -82,11 +82,16 @@ class TestNoSiteGuessesTheEmail:
             "the registered branch must be selected on Employee.username"
         )
 
-    def test_the_corrected_email_is_marked_verified(self):
-        """forgot-password recovers on verified_email only; leaving it
-        unverified breaks the recovery path the correction exists to restore."""
+    def test_the_corrected_email_is_not_self_verified(self):
+        """ADR-564 supersedes the ADR-380 rule that pinned "true" here. This arm
+        corrects a REGISTERED employee who hasn't signed in -- their credentials
+        went to the wrong address, so forgot-password was never the way back;
+        resending credentials to the corrected address is. Signing in with
+        those verifies it (the sign-in Lambda). An admin typing an address
+        proves nothing about who reads it."""
         src = inspect.getsource(E.update_employee)
-        assert '{"Name": "email_verified", "Value": "true"}' in src
+        assert '{"Name": "email_verified", "Value": "true"}' not in src
+        assert '{"Name": "email_verified", "Value": "false"}' in src
 
 
 class TestGroupAssignmentIsNotBestEffort:

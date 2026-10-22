@@ -1262,10 +1262,12 @@ def update_employee(
                 Username=db_employee.username,
                 UserAttributes=[
                     {"Name": "email", "Value": new_email},
-                    # Re-verified: an admin corrected it, and leaving it
-                    # unverified breaks forgot-password, which recovers on
-                    # verified_email only.
-                    {"Name": "email_verified", "Value": "true"},
+                    # ADR-564: NOT verified by an admin typing it. They haven't
+                    # signed in yet; resending their credentials to this
+                    # address and their signing in with them verifies it (the
+                    # sign-in Lambda). Forgot-password isn't needed meanwhile:
+                    # they have a temporary password.
+                    {"Name": "email_verified", "Value": "false"},
                 ],
             )
         except ClientError as e:
