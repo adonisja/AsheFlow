@@ -1020,7 +1020,7 @@ def run_sort_endpoint(
         sort_date       = date_str,
         task_id         = task_id,
         created_by      = str(caller.id),
-        created_by_name = caller.name,
+        created_by_name = caller.legal_name,
     )
 
     logger.info(
@@ -2325,7 +2325,7 @@ def check_tote(
             truck_id=home_truck_id,
             bag_id=bag_id,
             checked_by=caller.id,
-            checked_by_name=caller.name,
+            checked_by_name=caller.legal_name,
         ))
         # A confirmed transfer completes when the tote lands on its destination.
         xfer = (
@@ -2434,7 +2434,7 @@ def resolve_transfer(
         _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
         xfer.status = "kept"
     xfer.resolved_by = caller.id
-    xfer.resolved_by_name = caller.name
+    xfer.resolved_by_name = caller.legal_name
     xfer.resolved_at = datetime.now(timezone.utc)
 
     db.flush()
@@ -2504,7 +2504,7 @@ def create_manual_transfer(
         status="confirmed",
         reason="dispatch",
         resolved_by=caller.id,
-        resolved_by_name=caller.name,
+        resolved_by_name=caller.legal_name,
     )
     db.add(xfer)
     db.flush()
@@ -2579,7 +2579,7 @@ def check_all_totes(
                 truck_id=truck_id,
                 bag_id=bag,
                 checked_by=caller.id,
-                checked_by_name=caller.name,
+                checked_by_name=caller.legal_name,
             ))
             newly_checked.append(bag)
 
@@ -2674,7 +2674,7 @@ def confirm_load(
         load_date=sort_date,
         truck_id=truck_id,
         confirmed_by=caller.id,
-        confirmed_by_name=caller.name,
+        confirmed_by_name=caller.legal_name,
         short_bag_ids=short or None,
         total_totes=len(roster_bags),
         checked_totes=len(roster_bags) - len(short),
@@ -3391,7 +3391,7 @@ def confirm_removal(
     _complete_ap_removal(db, caller.company_id, removal)
     removal.status = "removed"
     removal.removed_by = caller.id
-    removal.removed_by_name = caller.name
+    removal.removed_by_name = caller.legal_name
     removal.removed_at = _dt.now(_tz.utc)
 
     db.flush()
@@ -3479,7 +3479,7 @@ def handover_ap_removal(
 
     removal.handoff_status = "handed_over"
     removal.handed_over_by = caller.id
-    removal.handed_over_by_name = caller.name
+    removal.handed_over_by_name = caller.legal_name
     removal.handed_over_at = _dt.now(_tz.utc)
     db.flush()
     db.add(AuditLog(
@@ -3534,12 +3534,12 @@ def receive_ap_removal(
     now = _dt.now(_tz.utc)
     removal.handoff_status = "received"
     removal.received_by = caller.id
-    removal.received_by_name = caller.name
+    removal.received_by_name = caller.legal_name
     removal.received_at = now
     _complete_ap_removal(db, caller.company_id, removal)
     removal.status = "removed"
     removal.removed_by = caller.id
-    removal.removed_by_name = caller.name
+    removal.removed_by_name = caller.legal_name
     removal.removed_at = now
     db.flush()
     db.add(AuditLog(
@@ -3587,7 +3587,7 @@ def confirm_all_transfers(
     for xfer in suggested:
         xfer.status = "confirmed"
         xfer.resolved_by = caller.id
-        xfer.resolved_by_name = caller.name
+        xfer.resolved_by_name = caller.legal_name
         xfer.resolved_at = now
 
     db.flush()

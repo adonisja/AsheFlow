@@ -1,3 +1,4 @@
+import { csvCell } from '../utils/spreadsheet';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axiosClient from '../api/axiosClient';
 import SelectMenu from '../components/ui/SelectMenu';
@@ -66,7 +67,8 @@ function exportToCSV(walkers: WalkerSummary[], minShifts: number) {
   ]);
 
   const csv = [headers, ...rows]
-    .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    // ADR-567 D10: names are now people's own text; neutralise formulas.
+    .map(row => row.map(csvCell).join(','))
     .join('\n');
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

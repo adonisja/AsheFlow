@@ -668,7 +668,7 @@ def review_rts_report(
     row.status = payload.status
     row.dispatch_notes = payload.dispatch_notes
     row.reviewed_by = caller.id
-    row.reviewed_by_name = caller.name
+    row.reviewed_by_name = caller.legal_name
     row.reviewed_at = datetime.now(timezone.utc)
     write_audit(
         db,

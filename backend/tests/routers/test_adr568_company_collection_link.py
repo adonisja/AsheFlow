@@ -48,7 +48,7 @@ def test_a_company_admin_issues_a_link_bound_to_their_company(db, role):
                        current_user={"cognito_groups": [role]}, caller=caller)
     tok = db.query(CollectionToken).filter(CollectionToken.id == out.id).one()
     assert tok.company_id == SEED_COMPANY_ID and tok.created_by == caller.id
-    assert tok.created_by_name == caller.name, "the record keeps the employee's name of record"
+    assert tok.created_by_name == caller.legal_name, "the record keeps the legal name of record (ADR-567)"
     assert db.query(AuditLog).filter(AuditLog.action_type == "collection.token.create").count() == 1
 
 

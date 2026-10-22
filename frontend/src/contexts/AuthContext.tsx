@@ -30,6 +30,8 @@ interface AuthContextType {
   isLoading: boolean;
   isConfigured: boolean;
   refreshConfigured: () => Promise<void>;
+  /** ADR-567: after a chosen-name change, show the new name without a reload. */
+  setShownName: (name: string) => void;
   /** null while loading or when the call failed — see hasFeature. */
   capabilities: Capabilities | null;
   /** ADR-377 — null means "not known", not "no MFA required". */
@@ -101,9 +103,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         fetchAuthSession(),
       ]);
 
-      // New pool: currentUser.username is the Cognito username (e.g. "danny.rivera")
-      // Use it as the display name fallback; /employees/me first name takes priority.
-      const displayName = currentUser.username ?? undefined;
+      // The Cognito username (e.g. "danny.rivera") is built from the LEGAL name
+      // (ADR-567 D8), so it is only a fallback: /employees/me's `name` is the
+      // name the person is shown by (their chosen name if they set one).
+      let displayName = currentUser.username ?? undefined;
 
       // 2. Decode the JWT to get their Cognito groups using our utility
       const userGroups = await getUserGroups();
@@ -117,6 +120,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       if (!noEmployeeRow) {
         try {
           const res = await axiosClient.get<{ name: string }>('/employees/me');
+          if (res.data?.name) displayName = res.data.name;
           firstName = res.data?.name?.split(' ')[0] ?? displayName;
         } catch {
           // keep Cognito username as fallback
@@ -220,7 +224,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return unsubscribe;
   }, []);
 
+  const setShownName = (name: string) =>
+    setUser(u => (u ? { ...u, displayName: name, firstName: name.split(' ')[0] } : u));
+
   const value = {
+    setShownName,
     user,
     groups,
     isAuthenticated: !!user,

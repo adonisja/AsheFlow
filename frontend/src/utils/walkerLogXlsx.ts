@@ -1,3 +1,4 @@
+import { xlsxCell } from './spreadsheet';
 import * as XLSX from 'xlsx';
 import {
   durationMin,
@@ -139,7 +140,8 @@ export function buildWorkbook(
 ): Blob {
   const rows = sections.flatMap((s) => chainRows(s.days, s.unclaimed));
 
-  const ws = XLSX.utils.aoa_to_sheet([HEADER, ...rows]);
+  // ADR-435/567 D10: typed names and notes reach a spreadsheet; neutralise formulas.
+  const ws = XLSX.utils.aoa_to_sheet([HEADER, ...rows.map(r => r.map(xlsxCell))]);
   ws['!cols'] = WIDTHS.map((w) => ({ wch: w }));
   // NO FREEZE PANES. `!freeze` and `!views` are both inert in the community
   // build of xlsx 0.18.5 — verified by unzipping the output and finding no

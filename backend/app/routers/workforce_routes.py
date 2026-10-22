@@ -740,7 +740,7 @@ def add_tote_address(
         # ADR-291 D9/D10 re-litigated it for workforce mode and upheld it.
         entry_sequence=next_seq,
         entered_by=caller.id,
-        entered_by_name=(caller.name or "")[:100],
+        entered_by_name=(caller.legal_name or "")[:100],
     )
     # ADR-403 D1a. The OV's size lives on the OV, not on the address: an address
     # row is identical for both units, and a size column there would be
@@ -1715,7 +1715,7 @@ def check_tote(
             truck_id=ta.truck_id,
             bag_id=bag_id,
             checked_by=caller.id,
-            checked_by_name=caller.name,
+            checked_by_name=caller.legal_name,
         ))
         action = "workforce.tote_checked"
     else:

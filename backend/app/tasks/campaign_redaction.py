@@ -65,10 +65,11 @@ def _name_patterns(employees: list[Employee]) -> list[tuple[re.Pattern, str]]:
     "[walker] Santos" behind — a partial redaction that still names somebody.
     """
     out: list[tuple[re.Pattern, str, int]] = []
-    for emp in employees:
-        full = (emp.name or "").strip()
-        if not full:
-            continue
+    # ADR-567: both names. A colleague may type the name they know someone by
+    # (the chosen one) or the one on an old roster (the legal one).
+    named = [(emp, (n or "").strip()) for emp in employees
+             for n in {emp.legal_name, emp.chosen_name} if n]
+    for emp, full in named:
         role = f"[{emp.role}]" if emp.role else "[colleague]"
 
         # The full name always, whatever its parts look like.

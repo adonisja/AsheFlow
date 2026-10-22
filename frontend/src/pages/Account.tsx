@@ -19,6 +19,7 @@ import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../contexts/AuthContext';
 import EmailChangeSection from '../components/EmailChangeSection';
 import SignInNameSection from '../components/SignInNameSection';
+import ChosenNameSection from '../components/ChosenNameSection';
 import type { SignInNameStatus } from '../api/types';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
@@ -49,7 +50,7 @@ const FIELD_ROLES = ['driver', 'walker', 'trainer', 'trainee', 'captain'];
 type Step = 'idle' | 'entering' | 'verifying';
 
 export default function Account() {
-  const { user, groups } = useAuth();
+  const { user, groups, setShownName } = useAuth();
   const [tab, setTab] = useState<Tab>('settings');
 
   // ADR-398 D3 — see FIELD_ROLES above for why this is a disjunction.
@@ -104,6 +105,8 @@ export default function Account() {
   const [dMsg, setDMsg] = useState('');
   const [dHelp, setDHelp] = useState(false);
   const [currentDiscord, setCurrentDiscord] = useState<string | null>(null);
+  // ADR-567: the person's own names (only they and management/admin see the legal one).
+  const [names, setNames] = useState<{ legal: string; chosen: string | null } | null>(null);
 
   // AuthUser carries only Cognito claims (username/displayName), not our
   // employee row — so email and discord_id come from the API. Reading them
@@ -113,6 +116,7 @@ export default function Account() {
       .then(({ data }) => {
         setCurrentEmail(data?.email ?? '');
         setCurrentDiscord(data?.discord_id ?? null);
+        if (data?.legal_name) setNames({ legal: data.legal_name, chosen: data.chosen_name ?? null });
       })
       .catch(() => {/* silent: the rows fall back to placeholders */});
   }, []);
@@ -233,6 +237,26 @@ export default function Account() {
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Username</span>
               <span className="text-sm font-medium text-foreground font-mono">{user?.username || '—'}</span>
             </div>
+
+            {/* ADR-567: the name everyone else sees. */}
+            {names && (
+              <div className="py-2.5 border-t border-border">
+                <ChosenNameSection
+                  legalName={names.legal}
+                  chosen={names.chosen}
+                  onChanged={me => {
+                    setNames({ legal: me.legal_name ?? names.legal, chosen: me.chosen_name ?? null });
+                    setShownName(me.name);
+                  }}
+                />
+                {/* D8: the username is built from the legal name. */}
+                {names.chosen && signInName?.available && !signInName.sign_in_name && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Your username is based on your legal name. Add a sign-in name below to sign in without it.
+                  </p>
+                )}
+              </div>
+            )}
 
             {signInName?.available && (
               <div className="py-2.5 border-t border-border">
