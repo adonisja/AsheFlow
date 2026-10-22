@@ -29,6 +29,8 @@ WRITE_ATTRIBUTES = {
     # staging: Discord/Google sign-in removed (ADR-560), so nothing needs email
     # writable any more. Same reasoning as prod below.
     "us-east-2_SvVO2ofAb": ["locale"],
+    # ADR-566: the v3 staging pool, cloned from v2 with the same client allow-list.
+    "us-east-2_umklCMhEu": ["locale"],
     # prod: no federated providers, so email must NOT be writable (prod applies a
     # user-level email change immediately, unverified). [] is not a lock -- it
     # reads back as unset -- so the list holds one harmless, unused attribute.

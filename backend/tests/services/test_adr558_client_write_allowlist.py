@@ -73,7 +73,7 @@ def _script():
 
 def test_every_pool_gets_a_non_empty_list_without_custom_attributes():
     s = _script()
-    assert set(s.WRITE_ATTRIBUTES) == {"us-east-2_SvVO2ofAb", "us-east-2_AYHjejPis"}
+    assert set(s.WRITE_ATTRIBUTES) == {"us-east-2_SvVO2ofAb", "us-east-2_AYHjejPis", "us-east-2_umklCMhEu"}
     for pool, attrs in s.WRITE_ATTRIBUTES.items():
         assert attrs, f"{pool}: an empty list is unset, i.e. everything writable"
         assert not [a for a in attrs if a.startswith("custom:")], pool

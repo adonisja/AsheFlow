@@ -431,8 +431,10 @@ export default function Login() {
             ) : (
               <>
                 <div>
-                  <label className="block text-sm font-medium text-foreground mb-1.5">Username</label>
+                  {/* ADR-566 D4: Cognito resolves a sign-in name (alias) here too. */}
+                  <label htmlFor="signin-username" className="block text-sm font-medium text-foreground mb-1.5">Username or sign-in name</label>
                   <input
+                    id="signin-username"
                     type="text"
                     value={username}
                     onChange={e => setUsername(e.target.value)}
