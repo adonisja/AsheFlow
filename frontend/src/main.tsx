@@ -8,9 +8,8 @@ import { Amplify } from 'aws-amplify';
 
 const _poolId    = import.meta.env.VITE_AWS_POOL_ID;
 const _clientId  = import.meta.env.VITE_AWS_CLIENT_ID;
-const _authDomain = import.meta.env.VITE_AWS_DOMAIN;
 
-if (!_poolId || !_clientId || !_authDomain) {
+if (!_poolId || !_clientId) {
   throw new Error(
     'Missing required Amplify env vars. Copy frontend/.env.template → frontend/.env.local and fill in values.'
   );
@@ -21,16 +20,9 @@ Amplify.configure({
     Cognito: {
       userPoolId: _poolId,
       userPoolClientId: _clientId,
-      loginWith: {
-        username: true,
-        oauth: {
-          domain: _authDomain,
-          scopes: ['email', 'openid', 'profile'],
-          redirectSignIn: [window.location.origin + '/'],
-          redirectSignOut: [window.location.origin + '/login'],
-          responseType: 'code'
-        }
-      }
+      // Username and password only (ADR-560): no OAuth / hosted UI, so no
+      // Discord or Google redirect to configure.
+      loginWith: { username: true }
     }
   }
 });

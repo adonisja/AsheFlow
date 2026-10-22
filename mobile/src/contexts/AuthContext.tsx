@@ -8,11 +8,10 @@ import React, {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { unregisterFromPush } from '@api/pushRegistration';
-import InAppBrowser from 'react-native-inappbrowser-reborn';
-import { AppState, Linking } from 'react-native';
+import { AppState } from 'react-native';
 import { onCredentialsChanged, onMfaEnrolmentRequired } from '@api/client';
 import { Platform } from 'react-native';
-import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
+import { COGNITO_USER_POOL_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP } from '@env';
 import {
   signIn as amplifySignIn,
   confirmSignIn as amplifyConfirmSignIn,
@@ -22,14 +21,10 @@ import {
 } from 'aws-amplify/auth';
 import { getValidIdToken, touchLastActive, clearTokens } from '../api/tokenRefresh';
 import apiClient from '../api/client';
-import { generatedLight } from '@theme/generated-colors';
 
 /** OAuth hosted-UI chrome. Theme-constant on purpose — see usage below. */
-const OAUTH_BAR    = generatedLight.brandSurface;
-const OAUTH_BAR_FG = generatedLight.brandSurfaceForeground;
 
 const USER_POOL_ID    = COGNITO_USER_POOL_ID ?? '';
-const CLIENT_ID       = COGNITO_CLIENT_ID ?? '';
 const API_BASE        = ASHEFLOW_API_URL
   ? ASHEFLOW_API_URL
   : Platform.OS === 'android'
@@ -37,8 +32,6 @@ const API_BASE        = ASHEFLOW_API_URL
     : `http://${ASHEFLOW_LAN_IP ?? '192.168.1.1'}:8000/api/v1`;
 const REGION          = USER_POOL_ID.split('_')[0] ?? 'us-east-2';
 const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
-const OAUTH_DOMAIN    = COGNITO_OAUTH_DOMAIN ?? '';
-const REDIRECT_URI    = COGNITO_REDIRECT_URI ?? 'asheflow://callback';
 
 type AuthUser = {
   id: string;
@@ -116,7 +109,6 @@ type AuthContextType = {
   /** Answer the challenge signIn returned. Resolves to the NEXT challenge when
    *  Cognito chains them (choosing a factor, then entering its code). */
   respondToChallenge: (challenge: AuthChallenge, answer: string) => Promise<AuthChallenge | null>;
-  signInWithProvider: (provider: 'Discord' | 'Google') => Promise<void>;
   signOut: () => Promise<void>;
   hasRole: (...roles: string[]) => boolean;
   capabilities: Capabilities | null;
@@ -307,71 +299,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [adoptSession, toChallenge],
   );
 
-  const signInWithProvider = useCallback(async (provider: 'Discord' | 'Google') => {
-    const authUrl = buildHostedUiUrl(provider);
-
-    const available = await InAppBrowser.isAvailable();
-    if (!available) {
-      // Fallback: open system browser — user must manually return to app
-      await Linking.openURL(authUrl);
-      return;
-    }
-
-    const result = await InAppBrowser.openAuth(authUrl, REDIRECT_URI, {
-      // iOS
-      dismissButtonStyle: 'cancel',
-      // `brandSurface` is theme-CONSTANT by design: the OAuth browser is a
-        // separate process that cannot follow an in-app theme change mid-flow,
-        // and it is the same navy as the sign-in hero. Was '#5B21B6' — a third
-        // violet matching neither `brand` nor `primary`.
-        preferredBarTintColor: OAUTH_BAR,
-      preferredControlTintColor: OAUTH_BAR_FG,
-      readerMode: false,
-      animated: true,
-      modalEnabled: true,
-      enableBarCollapsing: false,
-      // Android
-      showTitle: false,
-      toolbarColor: OAUTH_BAR,
-      secondaryToolbarColor: 'black',
-      navigationBarColor: 'black',
-      navigationBarDividerColor: 'white',
-      enableUrlBarHiding: true,
-      enableDefaultShare: false,
-      forceCloseOnRedirection: false,
-    });
-
-    if (result.type !== 'success' || !result.url) {
-      throw new Error('Sign in was cancelled or failed.');
-    }
-
-    // Extract the authorization code from the redirect URL
-    const redirectUrl = new URL(result.url);
-    const code = redirectUrl.searchParams.get('code');
-    const errorParam = redirectUrl.searchParams.get('error');
-    const errorDesc = redirectUrl.searchParams.get('error_description');
-
-    if (errorParam) {
-      // Lambda pre-signup rejection surfaces here as an error in the redirect
-      const friendly = errorDesc?.includes('No AsheFlow account')
-        ? 'No AsheFlow account found for this email. Ask your dispatcher to create your account first.'
-        : errorDesc ?? 'Sign in failed. Please try again.';
-      throw new Error(friendly);
-    }
-
-    if (!code) {
-      throw new Error('No authorization code returned. Please try again.');
-    }
-
-    // Exchange authorization code for tokens
-    const tokens = await exchangeCodeForTokens(code);
-    await storeTokens(tokens);
-    const base = buildUserFromToken(tokens.IdToken);
-    setUser(base);
-    resolveFirstName(tokens.IdToken, base.firstName).then(firstName =>
-      setUser(prev => prev ? { ...prev, firstName } : prev)
-    );
-  }, []);
 
   const signOut = useCallback(async () => {
     // ADR-487 D5. BEFORE clearTokens: the revoke is an authenticated DELETE,
@@ -484,7 +411,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, isLoading, isAuthenticated: !!user,
-      signIn, respondToChallenge, signInWithProvider, signOut, hasRole,
+      signIn, respondToChallenge, signOut, hasRole,
       capabilities, hasFeature, mfaStatus, mfaResolved, refreshMfaStatus,
       sessionNotice, clearSessionNotice,
     }}>
@@ -506,7 +433,6 @@ const AUTH_FALLBACK: AuthContextType = {
   refreshMfaStatus: async () => {},
   signIn: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   respondToChallenge: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
-  signInWithProvider: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signOut: async () => {},
   hasRole: () => false,
   capabilities: null,
@@ -518,47 +444,6 @@ export function useAuth() {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function buildHostedUiUrl(provider: 'Discord' | 'Google'): string {
-  const params = new URLSearchParams({
-    client_id:     CLIENT_ID,
-    response_type: 'code',
-    scope:         'email openid profile',
-    redirect_uri:  REDIRECT_URI,
-    identity_provider: provider,
-  });
-  return `https://${OAUTH_DOMAIN}/oauth2/authorize?${params.toString()}`;
-}
-
-async function exchangeCodeForTokens(code: string): Promise<{
-  AccessToken: string;
-  IdToken: string;
-  RefreshToken: string;
-}> {
-  const body = new URLSearchParams({
-    grant_type:   'authorization_code',
-    client_id:    CLIENT_ID,
-    code,
-    redirect_uri: REDIRECT_URI,
-  });
-
-  const res = await fetch(`https://${OAUTH_DOMAIN}/oauth2/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
-
-  const data = await res.json();
-  if (!res.ok || data.error) {
-    throw new Error(data.error_description ?? data.error ?? 'Token exchange failed');
-  }
-
-  return {
-    AccessToken:  data.access_token,
-    IdToken:      data.id_token,
-    RefreshToken: data.refresh_token,
-  };
-}
 
 async function storeTokens(tokens: {
   AccessToken: string;

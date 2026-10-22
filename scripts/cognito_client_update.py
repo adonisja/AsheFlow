@@ -1,4 +1,4 @@
-"""Set an app client's WriteAttributes WITHOUT dropping anything else (ADR-558).
+"""Set an app client's WriteAttributes (and existence errors) WITHOUT dropping anything else (ADR-558).
 
 Usage: python scripts/cognito_client_update.py <pool-id> <client-id> [--apply]
 
@@ -26,12 +26,28 @@ REGION = "us-east-2"
 # Prod has no providers. Never add custom:mfa_first_seen: the PreAuthentication
 # Lambda writes it with the admin API, which this list does not restrict.
 WRITE_ATTRIBUTES = {
-    "us-east-2_SvVO2ofAb": ["email"],   # staging (AsheFlow-v2): Discord + Google map email
+    # staging: Discord/Google sign-in removed (ADR-560), so nothing needs email
+    # writable any more. Same reasoning as prod below.
+    "us-east-2_SvVO2ofAb": ["locale"],
     # prod: no federated providers, so email must NOT be writable (prod applies a
     # user-level email change immediately, unverified). [] is not a lock -- it
     # reads back as unset -- so the list holds one harmless, unused attribute.
     "us-east-2_AYHjejPis": ["locale"],
 }
+
+
+# ADR-558 D4: every app client answers an unknown username exactly like a wrong
+# password. Prod's client was LEGACY ("User does not exist."), and the client id
+# ships in the web bundle, so anyone could confirm which first.last names exist.
+CLIENT_SETTINGS = {"PreventUserExistenceErrors": "ENABLED"}
+
+# ADR-560: password sign-in only. A federated identity became a SEPARATE
+# Cognito user that the backend's email fallback resolved to the employee with
+# that email -- proved on staging 2026-10-21: no MFA, no groups, acted as
+# manager.test. This only ever REMOVES non-Cognito providers from the live
+# list; it never adds one (prod's list is null, and adding COGNITO would switch
+# on a hosted sign-in page nothing uses).
+ALLOWED_IDENTITY_PROVIDERS = {"COGNITO"}
 
 
 def accepted_fields() -> list[str]:
@@ -48,6 +64,10 @@ def request(cfg: dict, write: list[str], fields: list[str]) -> dict:
     req = {k: cfg[k] for k in fields if k in cfg and cfg[k] is not None}
     req["UserPoolId"], req["ClientId"] = cfg["UserPoolId"], cfg["ClientId"]
     req["WriteAttributes"] = list(write)
+    req.update(CLIENT_SETTINGS)
+    if cfg.get("SupportedIdentityProviders"):
+        req["SupportedIdentityProviders"] = [
+            p for p in cfg["SupportedIdentityProviders"] if p in ALLOWED_IDENTITY_PROVIDERS]
     return req
 
 

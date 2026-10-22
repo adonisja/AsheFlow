@@ -44,8 +44,6 @@ interface AuthContextType {
    *  gated route is enforced server-side anyway (RequireMode → 404). Failing
    *  open here costs a dead tab; failing closed costs a walker their app. */
   hasFeature: (key: string) => boolean;
-  federatedError: string | null;
-  clearFederatedError: () => void;
   checkAuth: () => Promise<void>;
 }
 
@@ -56,7 +54,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [groups, setGroups] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isConfigured, setIsConfigured] = useState(true);
-  const [federatedError, setFederatedError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   /* ADR-377 — null means "not known", NOT "no MFA required". The fetch is
      allowed to fail without blocking sign-in, so consumers must render nothing
@@ -91,7 +88,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return capabilities.features.includes(key);
   };
 
-  const clearFederatedError = () => setFederatedError(null);
 
   const checkAuth = async () => {
     setIsLoading(true);
@@ -218,16 +214,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setGroups([]);
           setCapabilities(null);
           break;
-        case 'signIn_failure': {
-          // Fired when a federated flow is rejected — e.g. pre-signup Lambda blocks the user.
-          // Extract the human-readable message from the error description if present.
-          const raw = (payload as any)?.data?.error?.message ?? (payload as any)?.data?.message ?? '';
-          const friendly = raw.includes('No AsheFlow account')
-            ? 'No AsheFlow account found for this email. Ask your dispatcher to create your account first.'
-            : raw || 'Sign in failed. Please try again.';
-          setFederatedError(friendly);
-          break;
-        }
       }
     });
 
@@ -245,8 +231,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     mfaStatus,
     mfaResolved,
     hasFeature,
-    federatedError,
-    clearFederatedError,
     checkAuth,
   };
 

@@ -93,9 +93,14 @@ def test_the_request_carries_every_live_field_and_changes_only_write_attributes(
     live = {f: f"v-{f}" for f in fields}
     live.update(UserPoolId="pool", ClientId="client", WriteAttributes=None,
                 CreationDate="read-only", LastModifiedDate="read-only")
+    live["SupportedIdentityProviders"] = ["COGNITO", "Discord"]
     req = s.request(live, ["email"], fields)
     assert req["WriteAttributes"] == ["email"]
+    # The fields the script deliberately manages; everything else is carried.
+    managed = {"WriteAttributes", "SupportedIdentityProviders", *s.CLIENT_SETTINGS}
+    assert req["SupportedIdentityProviders"] == ["COGNITO"]            # ADR-560
+    assert req["PreventUserExistenceErrors"] == "ENABLED"              # ADR-558 D4
     for f in fields:
-        if f != "WriteAttributes":
+        if f not in managed:
             assert req[f] == live[f], f"{f} would be dropped or changed"
     assert "CreationDate" not in req and "LastModifiedDate" not in req

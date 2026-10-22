@@ -16,6 +16,8 @@ So a field user issued a temporary password got "undefined is not an object"
 instead of a prompt to set one.
 """
 import re
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -128,27 +130,38 @@ class TestWebHandlesAChallenge:
         )
 
 
-class TestTheLambdaIsNotPinnedToOnePool:
-    """The PreSignUp trigger now runs for BOTH pools (ADR-362 D4).
+class TestThePreSignUpTriggerAdmitsNobody:
+    """ADR-560 replaces ADR-362 D4's pool fix: the trigger no longer looks
+    anyone up. It admitted a federated sign-in whenever ANY native user shared
+    its email, which created a separate Discord_/Google_ user that the backend
+    resolved to the employee by email -- no password, no MFA. It now refuses
+    every sign-up path except the admin create, so there is no lookup to pin to
+    the wrong pool and no email to match."""
 
-    It read the pool id from its environment, pinned to staging. Attached to
-    prod as well, that means a prod federated sign-in has its email checked
-    against STAGING's user list: anyone with a staging account is admitted to
-    prod, and a legitimate prod user is refused.
-    """
+    @staticmethod
+    def _handler():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "pre_signup", ROOT / "infra" / "lambda" / "cognito-pre-signup" / "handler.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.handler
 
-    def test_the_pool_comes_from_the_event(self):
+    @staticmethod
+    def _event(trigger, email="manager@test.com"):
+        return {"triggerSource": trigger, "userPoolId": "us-east-2_ANY",
+                "request": {"userAttributes": {"email": email}}, "response": {}}
+
+    @pytest.mark.parametrize("trigger", ["PreSignUp_ExternalProvider", "PreSignUp_SignUp"])
+    def test_sign_up_paths_are_refused(self, trigger):
+        with pytest.raises(Exception):
+            self._handler()(self._event(trigger), None)
+
+    def test_an_admin_create_passes_through_untouched(self):
+        ev = self._event("PreSignUp_AdminCreateUser")
+        assert self._handler()(ev, None) is ev
+        assert ev["response"] == {}, "nothing auto-confirmed or auto-verified"
+
+    def test_it_never_looks_anyone_up(self):
         src = _read(ROOT / "infra" / "lambda" / "cognito-pre-signup" / "handler.py")
-        assert 'event.get("userPoolId")' in src, (
-            "the handler still trusts an environment variable for the pool id"
-        )
-        assert not re.search(r"UserPoolId=POOL_ID\b", src), (
-            "list_users still queries the hardcoded pool"
-        )
-
-    def test_no_pool_fails_closed(self):
-        src = _read(ROOT / "infra" / "lambda" / "cognito-pre-signup" / "handler.py")
-        idx = src.index("def _native_user_exists")
-        assert "if not pool_id:" in src[idx: idx + 300], (
-            "a missing pool id must block, not fall through to a lookup"
-        )
+        assert "list_users" not in src and "boto3" not in src
