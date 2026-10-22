@@ -151,12 +151,68 @@ def _contain(client, pool_id: str, username: str) -> dict:
     return result
 
 
+# ADR-565 (ADR-541 D4). User-level credential calls nothing of ours makes:
+# both clients change passwords and emails through the API, which uses the
+# admin calls and ForgotPassword/ConfirmForgotPassword (NOT listed -- ours).
+# One of these in CloudTrail is someone going around the app with a token.
+DIRECT_CREDENTIAL_EVENTS = frozenset({
+    "ChangePassword", "UpdateUserAttributes", "DeleteUserAttributes", "VerifyUserAttribute",
+})
+
+
+def _contain_by_sub(detail: dict, subject: str) -> dict:
+    """Find the account by additionalEventData.sub, contain it, alert. Shared shape."""
+    event_name, event_id = detail.get("eventName", ""), detail.get("eventID", "")
+    sub = (detail.get("additionalEventData") or {}).get("sub")
+    if not sub:
+        _alert(f"{subject} could not be attributed",
+               {"eventName": event_name, "eventID": event_id, "reason": "additionalEventData.sub absent"})
+        return {"action": "alerted", "reason": "no_sub"}
+    if not POOL_IDS:
+        _alert(f"{subject}: no pool to search", {"eventID": event_id, "sub": sub})
+        return {"action": "alerted", "reason": "no_pool"}
+    client = boto3.client("cognito-idp")
+    for pid in POOL_IDS:
+        username = _username_for_sub(client, pid, sub)
+        if not username:
+            continue
+        result = _contain(client, pid, username)
+        # The sub and pool only -- never a username or address (ADR-115 D7).
+        _alert(f"{subject}: account contained",
+               {"eventName": event_name, "eventID": event_id, "sub": sub, "userPoolId": pid,
+                "errorCode": detail.get("errorCode"), **result})
+        return {"action": "contained", **result}
+    _alert(f"{subject}: sub not found in any pool", {"eventID": event_id, "sub": sub, "poolsSearched": POOL_IDS})
+    return {"action": "alerted", "reason": "sub_not_found"}
+
+
+def _direct_credential_change(detail: dict) -> dict:
+    """ADR-565 D2. A success changed a credential outside the app. A
+    NotAuthorizedException is, since ADR-558, the refusal a REAL user token gets
+    when it tries to write email or the enrolment stamp -- the fingerprint of a
+    stolen session. Both are contained. Other errors are only logged."""
+    error_code = detail.get("errorCode")
+    if error_code and error_code != "NotAuthorizedException":
+        logger.warning("direct %s failed (%s); logged, not contained", detail.get("eventName"), error_code)
+        return {"action": "ignored", "reason": "call_failed", "errorCode": error_code}
+    subject = ("Direct Cognito credential change refused" if error_code
+               else "Direct Cognito credential change")
+    return _contain_by_sub(detail, subject)
+
+
 def handler(event, context):
     """EventBridge entry point. Never raises -- a crash here loses the event."""
     detail = event.get("detail", {}) or {}
     event_name = detail.get("eventName", "")
     event_id = detail.get("eventID", "")
     params = detail.get("requestParameters", {}) or {}
+
+    if event_name in DIRECT_CREDENTIAL_EVENTS:
+        try:
+            return _direct_credential_change(detail)
+        except Exception:
+            logger.exception("direct credential change: responder failed")
+            return {"action": "error"}
 
     # ADR-407 D1. A call that RETURNED AN ERROR changed nothing.
     #
