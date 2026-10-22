@@ -7,7 +7,12 @@
 
 export interface Employee {
   id: string;
+  /** ADR-567: the name to SHOW. The chosen name if the person set one, else the legal name. */
   name: string;
+  /** ADR-567 D5: present only for management, admin and the person themselves. */
+  legal_name?: string;
+  /** ADR-567: the person's own chosen name, if any (same audience as legal_name). */
+  chosen_name?: string | null;
   first_name?: string;
   email?: string;
   discord_id?: string;

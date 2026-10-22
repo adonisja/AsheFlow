@@ -98,6 +98,20 @@ class EmployeeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EmployeeRecordResponse(EmployeeResponse):
+    """ADR-567 D5: the employee record WITH the legal name.
+
+    Only for those who need the legal name: the person themselves (/me),
+    management and admin (ADP and Amazon scorecards compare against it).
+    Dispatch and field staff get EmployeeResponse / EmployeePublicResponse,
+    whose `name` is the shown name and which have no legal_name at all.
+    A test walks every response model and fails if `legal_name` appears in
+    any other (the ADR-483 partition rule).
+    """
+    legal_name: str
+    chosen_name: Optional[str] = None
+
+
 class InjuryStatusPatch(BaseModel):
     """Body for PATCH /employees/{id}/injury-status.
 

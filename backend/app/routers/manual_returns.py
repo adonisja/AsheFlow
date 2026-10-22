@@ -297,9 +297,9 @@ def record_rts(
         rts_explanation=explanation or payload.rts_type,
         is_reattemptable=is_reattemptable(payload.rts_type),
         walker_id=walker.id if walker else None,
-        walker_name=(walker.name[:100] if walker else None),
+        walker_name=(walker.legal_name[:100] if walker else None),
         recorded_by=caller.id,
-        recorded_by_name=(caller.name or "")[:100],
+        recorded_by_name=(caller.legal_name or "")[:100],
         source="manual",
     )
     db.add(row)
@@ -347,9 +347,9 @@ def record_missing(
         truck_assignment_id=route.truck_assignment_id,
         tba_number=payload.tba_number,
         walker_id=walker.id if walker else None,
-        walker_name=(walker.name[:100] if walker else None),
+        walker_name=(walker.legal_name[:100] if walker else None),
         recorded_by=caller.id,
-        recorded_by_name=(caller.name or "")[:100],
+        recorded_by_name=(caller.legal_name or "")[:100],
         resolution_notes=notes,
         source="manual",
     )
@@ -402,7 +402,7 @@ def record_damaged(
         stage=payload.stage,
         damage_notes=notes or payload.stage,
         reported_by=caller.id,
-        reported_by_name=(caller.name or "")[:100],
+        reported_by_name=(caller.legal_name or "")[:100],
         source="manual",
     )
     db.add(row)

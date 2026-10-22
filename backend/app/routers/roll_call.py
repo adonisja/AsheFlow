@@ -735,7 +735,7 @@ def _build_summary_entries(
             sub = employees.get(str(rc.submitted_by_id))
             if sub is None:
                 sub = db.query(Employee).filter(Employee.id == rc.submitted_by_id).first()
-            submitter_name = sub.name if sub else None
+            submitter_name = sub.legal_name if sub else None
 
         entries.append(RollCallSummaryEntry(
             id               = rc.id if rc else None,

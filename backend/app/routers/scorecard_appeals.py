@@ -194,7 +194,7 @@ def create_appeal(
         scope=scorecard.scope, employee_id=scorecard.employee_id,
         employee_name=emp_name, status="draft",
         title=payload.title, rationale=payload.rationale,
-        created_by=caller.id, created_by_name=caller.name,
+        created_by=caller.id, created_by_name=caller.legal_name,
     )
     db.add(appeal)
     db.flush()                      # assigns appeal.id for the child rows
@@ -315,7 +315,7 @@ def submit_appeal(
     appeal.status = "submitted"
     appeal.submitted_at = datetime.now(timezone.utc)
     appeal.submitted_by = caller.id
-    appeal.submitted_by_name = caller.name
+    appeal.submitted_by_name = caller.legal_name
     appeal.amazon_reference = payload.amazon_reference
 
     db.flush()
@@ -360,7 +360,7 @@ def resolve_appeal(
     appeal.status = payload.outcome
     appeal.resolved_at = datetime.now(timezone.utc)
     appeal.resolved_by = caller.id
-    appeal.resolved_by_name = caller.name
+    appeal.resolved_by_name = caller.legal_name
     appeal.outcome_notes = payload.outcome_notes
 
     db.flush()

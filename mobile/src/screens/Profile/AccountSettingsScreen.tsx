@@ -24,6 +24,7 @@ import { useColors, useTheme } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import MfaEnrolment from '@components/MfaEnrolment';
 import SignInNameCard from '@components/SignInNameCard';
+import ChosenNameCard, { type MyNames } from '@components/ChosenNameCard';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type EmailStep    = 'idle' | 'entering' | 'verifying';
@@ -50,6 +51,14 @@ export default function AccountSettingsScreen() {
   // ADR-566 D4. Hidden until the environment's pool accepts sign-in names.
   const [signInName, setSignInName] = useState<
     { available: boolean; username: string; sign_in_name: string | null } | null>(null);
+  // ADR-567: the person's own names (legal_name reaches only them and management/admin).
+  const [names, setNames] = useState<{ legal: string; chosen: string | null } | null>(null);
+  useEffect(() => {
+    apiClient.get<MyNames>('/employees/me')
+      .then(r => { if (r.data?.legal_name) setNames({ legal: r.data.legal_name, chosen: r.data.chosen_name ?? null }); })
+      .catch(() => { /* silent: the section just stays hidden */ });
+  }, []);
+
   useEffect(() => {
     apiClient.get('/employees/me/sign-in-name')
       .then(r => setSignInName(r.data))
@@ -474,6 +483,14 @@ export default function AccountSettingsScreen() {
             </View>
           )}
         </View>
+
+        {/* ── Name shown to others (ADR-567) ── */}
+        {names && (
+          <View style={[s.section, s.signInName, { backgroundColor: c.card, borderColor: c.border }]}>
+            <ChosenNameCard legalName={names.legal} chosen={names.chosen}
+                            onChanged={me => setNames({ legal: me.legal_name ?? names.legal, chosen: me.chosen_name ?? null })} />
+          </View>
+        )}
 
         {/* ── Sign-in name (ADR-566 D4) ── */}
         {signInName?.available && (

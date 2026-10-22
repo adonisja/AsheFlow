@@ -77,3 +77,8 @@ from app.models.stolen_package_report import StolenPackageReport, ReportVersion 
 from app.models.platform_session import PlatformSessionStamp  # ADR-549
 from app.models.mfa_reset_request import MfaResetRequest  # ADR-551
 from app.models.email_change_request import EmailChangeRequest  # ADR-563
+
+# ADR-567 D3: past records show a person's current shown name. Installed here,
+# once every model class exists, so every Session (app, tasks, tests) gets it.
+from app.services.chosen_names import install as _install_chosen_names  # noqa: E402
+_install_chosen_names()

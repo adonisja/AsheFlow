@@ -467,7 +467,7 @@ def redact_departed_employee_names() -> dict:
             .filter(
                 Employee.deactivated_at.isnot(None),
                 Employee.deactivated_at < cutoff,
-                Employee.name != REDACTED_NAME,   # not already redacted
+                Employee.legal_name != REDACTED_NAME,   # not already redacted (ADR-567: the record name)
             )
             .all()
         )

@@ -150,7 +150,7 @@ def _resolve(
             )
         removal = create_foreign_removal(
             db, company_id=cid, tba=tba, removal_date=when,
-            removed_by=caller.id, removed_by_name=caller.name,
+            removed_by=caller.id, removed_by_name=caller.legal_name,
         )
         db.flush()
         write_audit(
@@ -239,7 +239,7 @@ def _resolve(
             .filter(Employee.id == route.executor_id, Employee.company_id == cid)
             .first()
         )
-        executor_name = ex.name if ex else None
+        executor_name = ex.legal_name if ex else None
 
     stop = attach_to_route(
         db, route, tba=tba,
@@ -252,7 +252,7 @@ def _resolve(
         executor_id=route.executor_id,
         executor_name=executor_name,
         recorded_by=caller.id,
-        recorded_by_name=caller.name,
+        recorded_by_name=caller.legal_name,
     )
     db.flush()
     write_audit(

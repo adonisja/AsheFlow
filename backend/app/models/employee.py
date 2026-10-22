@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, Boolean, CheckConstraint, DateTime, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, CheckConstraint, DateTime, UniqueConstraint, func
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -78,7 +79,15 @@ class Employee(Base):
 
     id                   = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id           = Column(UUID(as_uuid=True), nullable=False, index=True)
-    name                 = Column(String(255),        nullable=False)
+    # ADR-567. The LEGAL name of record. The database column is still `name`;
+    # in Python it is `legal_name`, so a read of `.name` can't get it by
+    # accident. ADP writes it every sync, and stored copies (`*_by_name`) copy
+    # it. Read it only where the law or a match against an outside system needs
+    # the legal name (ADP, Amazon scorecards, redaction).
+    legal_name           = Column("name", String(255), nullable=False)
+    # ADR-567. The name the person asked to be called. Set only by them; NULL
+    # when they haven't chosen one. Stored trimmed, never "".
+    chosen_name          = Column(String(100),        nullable=True)
     username             = Column(String(100),        nullable=True,  unique=True, index=True)
     email                = Column(String(255),        nullable=True,  index=True)
     discord_id           = Column(String(100),        nullable=True,  index=True)
@@ -175,3 +184,26 @@ class Employee(Base):
     # Both non-null values hard-block assignment to heavy routes (ADR-139).
     injury_status       = Column(String(20), nullable=True)
     injury_status_since = Column(DateTime(timezone=True), nullable=True)
+
+    # ── ADR-567: `name` is the name to SHOW ──────────────────────────────────
+    # About 300 server reads and 300 client reads of a person's name predate
+    # chosen names. Making `.name` itself mean "the shown name" puts every one
+    # of them right at once; a per-site `display_name` would have left each one
+    # missed showing the legal name, the exact failure the feature exists to
+    # prevent.
+    #   instance read   -> chosen name if set, else the legal name
+    #   query           -> COALESCE(chosen_name, name), labelled "name", so
+    #                      `row.name`, order_by and search use the shown name
+    #   instance write  -> the LEGAL name (ADP sync, edits, Employee(name=...))
+    @hybrid_property
+    def name(self) -> str:
+        return self.chosen_name or self.legal_name
+
+    @name.inplace.setter
+    def _name_setter(self, value: str) -> None:
+        self.legal_name = value
+
+    @name.inplace.expression
+    @classmethod
+    def _name_expression(cls):
+        return func.coalesce(cls.chosen_name, cls.legal_name).label("name")

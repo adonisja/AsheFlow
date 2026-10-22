@@ -137,7 +137,8 @@ def redact_employee_names(db: Session, employee_id: UUID) -> dict[str, int]:
     from app.models.employee import Employee
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if emp is not None:
-        emp.name = REDACTED_NAME
+        emp.name = REDACTED_NAME          # the legal name (ADR-567: `name` writes legal_name)
+        emp.chosen_name = None           # ADR-567: the chosen name is PII too
         emp.email = None
         emp.phone_number = None
         emp.username = None

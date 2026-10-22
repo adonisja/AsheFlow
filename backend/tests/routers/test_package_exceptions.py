@@ -26,6 +26,7 @@ def _caller():
     c.id = uuid.uuid4()
     c.company_id = _COMPANY_ID
     c.name = "Dispatcher Dana"
+    c.legal_name = "Dispatcher Dana"   # ADR-567: stored copies read the legal name
     return c
 
 

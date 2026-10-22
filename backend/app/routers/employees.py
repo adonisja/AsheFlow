@@ -24,7 +24,7 @@ from app.services import device_fleet, discord_invite, mfa_status
 from app.models.invite_token import InviteToken
 from app.schemas.employee import (
     _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse,
-    EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse,
+    EmployeePublicResponse, EmployeeOfficeResponse, EmployeeEscalationResponse, EmployeeRecordResponse,
     EmployeeMfaEnrolmentResponse, EmployeeMfaDeadlineResponse,
     BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest,
 )
@@ -183,7 +183,7 @@ def _cognito_revoke_access(cognito_username: str | None) -> bool:
     return True
 
 
-@router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=EmployeeRecordResponse, status_code=status.HTTP_201_CREATED)
 def create_employee(
     employee: EmployeeCreate,
     caller: Employee = Depends(get_caller_employee),
@@ -588,10 +588,23 @@ def get_setup_window(
     return {**w, "closes_at": w["closes_at"].isoformat() if w["closes_at"] else None}
 
 
+def _adp_connected(db: Session, company_id) -> bool:
+    """ADR-567: the company's legal names come from ADP (an enabled integration)."""
+    from app.models.adp_integration import ADPIntegration
+    return db.query(ADPIntegration.id).filter(
+        ADPIntegration.company_id == company_id, ADPIntegration.is_enabled.is_(True)).first() is not None
+
+
+def _for_dispatch(e: Employee) -> EmployeeResponse:
+    """ADR-567 D8: dispatch sees the shown name, never the username (built from
+    the legal name)."""
+    return EmployeeResponse.model_validate(e).model_copy(update={"username": None})
+
+
 @router.get(
     "/",
     response_model=list[
-        Union[EmployeeResponse, EmployeeOfficeResponse, EmployeePublicResponse]
+        Union[EmployeeRecordResponse, EmployeeResponse, EmployeeOfficeResponse, EmployeePublicResponse]
     ],
     # ADR-458 D1. Three shapes by caller role and row role. Declared as a
     # union because a single response_model makes FastAPI coerce every row to
@@ -638,13 +651,24 @@ def get_all_employees(
     #
     # An admin still sees everything: they are the role the escalation list
     # exists to reach, and hiding peers from them buys nothing.
+    # ADR-567 D5/D8: management and admin get the legal name (ADP and scorecard
+    # checks compare against it); dispatch gets the shown name only, and no
+    # username (it is built from the legal name). Null for every row, so its
+    # absence marks nobody.
     if caller.role == "admin":
-        return [EmployeeResponse.model_validate(e) for e in employees]
+        return [EmployeeRecordResponse.model_validate(e) for e in employees]
+    if caller.role == "dispatch":
+        return [
+            EmployeeOfficeResponse.model_validate(e)
+            if e.role in PROTECTED_ROLES
+            else _for_dispatch(e)
+            for e in employees
+        ]
 
     return [
         EmployeeOfficeResponse.model_validate(e)
         if e.role in PROTECTED_ROLES
-        else EmployeeResponse.model_validate(e)
+        else EmployeeRecordResponse.model_validate(e)
         for e in employees
     ]
 
@@ -949,12 +973,12 @@ def get_mfa_enrolment(
     return out
 
 
-@identity_router.get("/me", response_model=EmployeeResponse)
+@identity_router.get("/me", response_model=EmployeeRecordResponse)
 def get_my_employee(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Return the Employee record for the currently authenticated user."""
-    return EmployeeResponse.model_validate(caller)
+    return EmployeeRecordResponse.model_validate(caller)   # ADR-567: the person sees both names
 
 
 def _with_setup_window(out: dict, username: str | None) -> dict:
@@ -1118,7 +1142,7 @@ def get_employee_by_discord(
     return EmployeePublicResponse.model_validate(employee)
 
 
-@router.get("/{employee_id}", response_model=EmployeeResponse)
+@router.get("/{employee_id}", response_model=Union[EmployeeRecordResponse, EmployeeResponse, EmployeePublicResponse])
 def get_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
@@ -1143,12 +1167,15 @@ def get_employee(
     if "management" in caller_groups and "admin" not in caller_groups:
         _assert_not_protected(caller_groups, employee.role)
 
+    # ADR-567 D5: the legal name only to management and admin.
+    if caller_groups & {"management", "admin"}:
+        return EmployeeRecordResponse.model_validate(employee)
     if caller_groups & PRIVILEGED_ROLES:
-        return EmployeeResponse.model_validate(employee)
+        return _for_dispatch(employee)
     return EmployeePublicResponse.model_validate(employee)
 
 
-@router.put("/{employee_id}", response_model=EmployeeResponse)
+@router.put("/{employee_id}", response_model=EmployeeRecordResponse)
 def update_employee(
     employee_id: UUID,
     employee: EmployeeUpdate,
@@ -1197,6 +1224,26 @@ def update_employee(
             detail="Use Change email for this person. It sends a confirmation link to the new address.",
         )
 
+    # ADR-567: `name` here is the LEGAL name of record.
+    legal_before = None
+    if "name" in updates:
+        new_name = (updates.get("name") or "").strip()
+        if (db_employee.chosen_name and new_name == db_employee.chosen_name
+                and new_name != db_employee.legal_name):
+            # A client that loaded the shown name (the chosen one) and sent it
+            # back unchanged. Writing it would replace the legal name with the
+            # chosen one; an older web or mobile build does exactly this.
+            updates.pop("name")
+        elif new_name != db_employee.legal_name:
+            # Owner, 2026-10-22: where ADP is connected it is the only source
+            # of the legal name; AsheFlow never edits it.
+            if _adp_connected(db, caller.company_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="This company's legal names come from ADP. Change it in ADP; the next sync updates it here.",
+                )
+            legal_before = db_employee.legal_name
+
     for key, value in updates.items():
         setattr(db_employee, key, value)
 
@@ -1224,7 +1271,9 @@ def update_employee(
         action_type="employee.update",
         target_table="employees",
         target_id=str(db_employee.id),
-        detail={k: str(v) if v is not None else None for k, v in updates.items()},
+        detail={**{k: str(v) if v is not None else None for k, v in updates.items()},
+                # ADR-567: a correction to the legal name records what it was.
+                **({"legal_name_before": legal_before} if legal_before is not None else {})},
     )
 
     db.commit()
@@ -1652,7 +1701,7 @@ def admin_cancel_email_change(
                                                           by_ref=str(caller.id))}
 
 
-@router.put("/{employee_id}/deactivate", response_model=EmployeeResponse)
+@router.put("/{employee_id}/deactivate", response_model=EmployeeRecordResponse)
 def deactivate_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
@@ -1712,7 +1761,7 @@ def deactivate_employee(
     return db_employee
 
 
-@router.put("/{employee_id}/reactivate", response_model=EmployeeResponse)
+@router.put("/{employee_id}/reactivate", response_model=EmployeeRecordResponse)
 def reactivate_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
@@ -2120,7 +2169,7 @@ def _sync_discord_role_for_transition(db_employee: Employee, old_role: str, new_
         _fire_role_sync(discord_id, company_id, f"grant_{new_role}")
 
 
-@router.post("/{employee_id}/transition", response_model=EmployeeResponse)
+@router.post("/{employee_id}/transition", response_model=EmployeeRecordResponse)
 def transition_employee_role(
     employee_id: UUID,
     payload: RoleTransitionRequest,
@@ -2426,6 +2475,91 @@ def clear_own_sign_in_name(
     except sign_in_name.SignInNameError as e:
         raise _sign_in_name_error(e)
     return {"cleared": cleared}
+
+
+class _ChosenNameIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # The shape rule lives in chosen_name.normalise; this only bounds the input.
+    chosen_name: str = Field(..., min_length=1, max_length=200)
+
+
+def _chosen_name_changed(db: Session, target: Employee, before: Optional[str], *, actor_id, action: str,
+                         by: str) -> bool:
+    """Shared tail of every chosen-name change: audit, Cognito, the read cache.
+    The audit holds chosen names only, never the legal name (ADR-567 D2)."""
+    from app.services import chosen_name, chosen_names
+    db.flush()
+    write_audit(db=db, company_id=target.company_id, actor_id=actor_id, action_type=action,
+                target_table="employees", target_id=str(target.id),
+                detail={"from": before, "to": target.chosen_name, "by": by})
+    db.commit()
+    chosen_names.forget(db)
+    return chosen_name.sync_cognito_name(target, cognito_username_for(target))
+
+
+@router.put("/me/chosen-name", response_model=EmployeeRecordResponse)
+def set_chosen_name(
+    payload: _ChosenNameIn,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
+):
+    """ADR-567 D2: only the person sets the name they are called. No approval,
+    no reason. Shown everywhere from the next request; the legal name stays the
+    record."""
+    from app.services import chosen_name
+    try:
+        name = chosen_name.normalise(payload.chosen_name)
+    except chosen_name.ChosenNameError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    if not account_security.allow_request(caller.id, "chosen_name"):
+        raise HTTPException(status_code=429, detail="Too many changes. Try again in an hour.")
+    before = caller.chosen_name
+    # The legal name typed as a "chosen" one is no chosen name: store nothing.
+    caller.chosen_name = None if name == caller.legal_name else name
+    _chosen_name_changed(db, caller, before, actor_id=caller.id, action="account.chosen_name_set", by="self")
+    db.refresh(caller)
+    return EmployeeRecordResponse.model_validate(caller)
+
+
+@router.delete("/me/chosen-name", response_model=EmployeeRecordResponse)
+def clear_own_chosen_name(
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(_allow_self),
+):
+    before = caller.chosen_name
+    if before is not None:
+        caller.chosen_name = None
+        _chosen_name_changed(db, caller, before, actor_id=caller.id, action="account.chosen_name_cleared", by="self")
+        db.refresh(caller)
+    return EmployeeRecordResponse.model_validate(caller)
+
+
+@router.delete("/{employee_id}/chosen-name", status_code=status.HTTP_200_OK)
+def admin_clear_chosen_name(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """ADR-567 D2: management or admin may clear an abusive chosen name, never
+    set one. Same scope as an email change: own company, and management can't
+    act on an admin or a manager."""
+    target = db.query(Employee).filter(Employee.id == employee_id,
+                                       Employee.company_id == caller.company_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if target.id == caller.id:
+        raise HTTPException(status_code=400, detail="Change your own name from My account.")
+    _assert_not_protected(set(current_user.get("cognito_groups", [])), target.role)
+    before = target.chosen_name
+    if before is None:
+        return {"cleared": False}
+    target.chosen_name = None
+    _chosen_name_changed(db, target, before, actor_id=caller.id, action="account.chosen_name_cleared",
+                         by="tenant_admin")
+    return {"cleared": True}
 
 
 # Declared after the /me routes: "/{employee_id}/sign-in-name" would otherwise

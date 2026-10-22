@@ -175,7 +175,7 @@ def _profile_from(door: Door, chosen: CollectedAddressProfile, observers: list,
         building_type_agreement_count = count,
         note_verified                 = False,
         submitted_by                  = caller.id,
-        submitted_by_name             = (caller.name or "")[:100],
+        submitted_by_name             = (caller.legal_name or "")[:100],
         submitted_at                  = now,
     )
 

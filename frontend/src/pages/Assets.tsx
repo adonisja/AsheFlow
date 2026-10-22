@@ -2,7 +2,7 @@ import { errorText } from '../utils/errorText';
 import { formatDate } from '../utils/date';
 import SelectMenu from '../components/ui/SelectMenu';
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, AtSign, Check, CheckCircle2, Copy, Eraser, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, AtSign, Check, CheckCircle2, Copy, Eraser, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, UserX, Users, X } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow, MfaResetRequestRow } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,6 +22,8 @@ import type { RoleTransitionRequest } from '../api/types';
 type Employee = {
   id: string;
   name: string;
+  legal_name?: string;          // ADR-567 D5: management/admin only
+  chosen_name?: string | null;   // ADR-567
   email: string | null;
   discord_id: string | null;
   cognito_sub: string | null;
@@ -192,7 +194,9 @@ type EmployeeFormProps = {
 function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles = ROLES, setupWindowOpen = false }: EmployeeFormProps) {
   const defaultRole = allowedRoles[0] ?? 'trainee';
   const [form, setForm] = useState({
-    name:         initial.name         ?? '',
+    // ADR-567: the form edits the LEGAL name. `name` is the shown name, and
+    // saving it back would overwrite the legal name with a chosen one.
+    name:         initial.legal_name ?? initial.name ?? '',
     email:        initial.email        ?? '',
     discord_id:   initial.discord_id   ?? '',
     role:         initial.role         ?? defaultRole,
@@ -293,7 +297,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
             {/* Name */}
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-foreground">
-                Full name <span className="text-danger">*</span>
+                Legal name <span className="text-danger">*</span>
               </label>
               <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
                 <input
@@ -304,6 +308,9 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                   placeholder="Jane Smith"
                 />
               </div>
+              <p className="text-xs text-muted-foreground">
+                As on payroll. The person can choose the name everyone else sees from their account.
+              </p>
             </div>
 
             {/* Email */}
@@ -435,7 +442,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
               </div>
               <div className="divide-y divide-border">
                 {[
-                  { label: 'Name',  value: form.name },
+                  { label: 'Legal name', value: form.name },
                   { label: 'Email', value: form.email },
                   { label: 'Role',  value: roleName },
                   ...(form.phone_number ? [{ label: 'Phone', value: `+1 ${form.phone_number}` }] : []),
@@ -893,6 +900,27 @@ function PeopleTab() {
       .then(({ data }) => setSignInNamesOn(!!data?.available))
       .catch(() => {/* silent: the action stays hidden */});
   }, []);
+  // ADR-567 D2: management/admin may clear an abusive chosen name, never set one.
+  const handleClearChosenName = async (emp: Employee) => {
+    const ok = await confirm({
+      title: 'Clear chosen name',
+      message: `Stop showing "${emp.name}" for this person? Everyone will see their legal name until they choose a new name from My account.`,
+      confirmLabel: 'Clear',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const { data } = await axiosClient.delete<{ cleared: boolean }>(`/employees/${emp.id}/chosen-name`);
+      if (data.cleared) {
+        setEmployees(prev => prev.map(e => e.id === emp.id
+          ? { ...e, chosen_name: null, name: e.legal_name ?? e.name } : e));
+      }
+      setResetMfaMsg({ id: emp.id, ok: true, text: data.cleared ? 'Chosen name cleared.' : "They don't have a chosen name." });
+    } catch (err) {
+      setResetMfaMsg({ id: emp.id, ok: false, text: errorText(err, "Couldn't clear the chosen name.") });
+    }
+  };
+
   const handleClearSignInName = async (emp: Employee) => {
     const ok = await confirm({
       title: 'Clear sign-in name',
@@ -1059,7 +1087,9 @@ function PeopleTab() {
     // Management callers never see management/admin rows
     if (isManagement && PROTECTED_ROLES.includes(e.role)) return false;
     const matchRole   = filter === 'all' || e.role === filter;
+    // ADR-567 D9: management and admin find people by either name.
     const matchSearch = !search || e.name.toLowerCase().includes(search.toLowerCase())
+      || (e.legal_name ?? '').toLowerCase().includes(search.toLowerCase())
       || (e.email ?? '').toLowerCase().includes(search.toLowerCase())
       || (e.discord_id ?? '').toLowerCase().includes(search.toLowerCase());
     const lc = getLifecycle(e);
@@ -1489,6 +1519,10 @@ function PeopleTab() {
                                 </span>
                               )}
                             </div>
+                            {/* ADR-567 D5/D6: a plain fact for those who handle payroll; no badge. */}
+                            {emp.legal_name && emp.legal_name !== emp.name && (
+                              <span className="text-[11px] text-muted-foreground">Legal name: {emp.legal_name}</span>
+                            )}
                             {emp.username && (
                               <span className="text-[11px] text-muted-foreground font-mono">{emp.username}</span>
                             )}
@@ -1724,6 +1758,16 @@ function PeopleTab() {
                                   aria-label={`Change ${emp.name}'s email`}
                                 >
                                   <AtSign className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {emp.chosen_name && (
+                                <button
+                                  onClick={() => void handleClearChosenName(emp)}
+                                  className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                                  title="Clear chosen name"
+                                  aria-label={`Clear ${emp.name}'s chosen name`}
+                                >
+                                  <UserX className="w-3.5 h-3.5" />
                                 </button>
                               )}
                               {signInNamesOn && lc === 'active' && (

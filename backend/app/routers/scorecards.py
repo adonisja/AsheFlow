@@ -282,7 +282,8 @@ async def bulk_import_scorecards(
         mismatch = (
             row.da_name
             and _norm_name(row.da_name)
-            and _norm_name(row.da_name) != _norm_name(emp.name)
+            # ADR-567: Amazon holds the legal name; compare against ours.
+            and _norm_name(row.da_name) != _norm_name(emp.legal_name)
         )
 
         _write_individual_scorecard(db, cid, caller.id, emp, row)
@@ -295,7 +296,7 @@ async def bulk_import_scorecards(
             outcome="name_mismatch" if mismatch else "imported",
             employee_id=emp.id, employee_name=emp.name, da_name=row.da_name,
             detail=(
-                f"Amazon calls this person {row.da_name!r}; we hold {emp.name!r}. "
+                f"Amazon calls this person {row.da_name!r}; we hold {emp.legal_name!r}. "
                 "The scorecard was imported -- confirm the Transporter ID is still "
                 "bound to the right person."
             ) if mismatch else None,
@@ -395,7 +396,9 @@ def _rank_roster(da_name: Optional[str], roster: List[Employee]) -> List[dict]:
     scored = []
     for e in roster:
         ratio = (
-            difflib.SequenceMatcher(None, target, _norm_name(e.name)).ratio()
+            # ADR-567: the better of the legal name (what Amazon has) and the shown name.
+            max(difflib.SequenceMatcher(None, target, _norm_name(n)).ratio()
+                for n in {e.legal_name, e.name} if n)
             if target else 0.0
         )
         scored.append((ratio, e))
