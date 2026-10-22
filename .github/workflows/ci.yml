@@ -39,8 +39,10 @@ on:
 #
 # Change an environment's pool HERE and every consumer follows.
 env:
-  PROD_COGNITO_POOL_ID: us-east-2_AYHjejPis
-  PROD_COGNITO_CLIENT_ID: 4r8tjkjs01e2b930qtqd12vdmf
+  # ADR-566: the v3 pool (sign-in-name alias). The prod pool us-east-2_AYHjejPis
+  # is kept untouched for 14 days after the switch as the rollback.
+  PROD_COGNITO_POOL_ID: us-east-2_ZaVi0oGdn
+  PROD_COGNITO_CLIENT_ID: 48ld3b5orumqrj1cmsscahvu4p
   # ADR-566: the v3 pool (sign-in-name alias). The v2 pool us-east-2_SvVO2ofAb
   # is kept untouched until 2026-11-05 as the rollback.
   STAGING_COGNITO_POOL_ID: us-east-2_umklCMhEu

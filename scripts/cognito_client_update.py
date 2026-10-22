@@ -35,6 +35,8 @@ WRITE_ATTRIBUTES = {
     # user-level email change immediately, unverified). [] is not a lock -- it
     # reads back as unset -- so the list holds one harmless, unused attribute.
     "us-east-2_AYHjejPis": ["locale"],
+    # ADR-566: the v3 prod pool, cloned from prod with the same client allow-list.
+    "us-east-2_ZaVi0oGdn": ["locale"],
 }
 
 
