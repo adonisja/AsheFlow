@@ -2,7 +2,7 @@ import boto3
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
-from typing import List, Union
+from typing import List, Optional, Union
 from uuid import UUID
 from botocore.exceptions import ClientError
 
@@ -1186,6 +1186,17 @@ def update_employee(
         if refusal:
             raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
+    # ADR-563 D4: on an active account this edit only ever changed the database
+    # copy -- Cognito kept the old address, so codes went to one inbox while the
+    # app showed another (staging walker.test). Active accounts change email
+    # through the confirmed flow; pending/registered keep the correction path.
+    if (new_email and (new_email or "").lower() != (old_email or "").lower()
+            and db_employee.account_status == "active"):
+        raise HTTPException(
+            status_code=409,
+            detail="Use Change email for this person. It sends a confirmation link to the new address.",
+        )
+
     for key, value in updates.items():
         setattr(db_employee, key, value)
 
@@ -1455,9 +1466,16 @@ def resend_discord_invite(
     return {"detail": f"Discord invite sent to {result.email}.", "sent": True}
 
 
+class MfaResetIn(BaseModel):
+    """ADR-561 D3: an optional reason, shown to the employee in the reset notice."""
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(default=None, min_length=10, max_length=200)
+
+
 @router.post("/{employee_id}/mfa/reset", status_code=status.HTTP_200_OK)
 def reset_employee_mfa(
     employee_id: UUID,
+    body: Optional[MfaResetIn] = None,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
@@ -1519,6 +1537,9 @@ def reset_employee_mfa(
         from app.services import mfa_reset_requests
         mfa_reset_requests.resolve_for(db, target.cognito_sub, by_kind="employee", by_ref=str(caller.id))
 
+    from app.services.note_scrub import scrub_note
+    reason = (scrub_note(body.reason.strip())[0] or "").strip() or None if body and body.reason else None
+
     write_audit(
         db=db,
         company_id=caller.company_id,
@@ -1527,6 +1548,7 @@ def reset_employee_mfa(
         target_table="employees",
         target_id=str(target.id),
         detail={
+            "reason": reason,
             "devices_forgotten": result.devices_forgotten,
             "signed_out": result.signed_out,
             "factor_cleared": result.factor_cleared,
@@ -1535,6 +1557,11 @@ def reset_employee_mfa(
         },
     )
     db.commit()
+
+    # ADR-561: tell them, at the account's verified address. Never fails the reset.
+    emailed = account_security.notify_mfa_reset(
+        username, reset_by="An admin at your company", account="your AsheFlow account",
+        if_not_you="tell your manager straight away", account_ref=str(target.id), reason=reason)
 
     if not result.fully_contained:
         # 502, not 500: the failure is downstream at Cognito, and the caller
@@ -1546,10 +1573,81 @@ def reset_employee_mfa(
 
     return {
         "employee_id": str(target.id),
+        "emailed": emailed,
         "devices_forgotten": result.devices_forgotten,
         "signed_out": result.signed_out,
         "factor_cleared": result.factor_cleared,
     }
+
+
+class AdminEmailChangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    new_email: EmailStr
+
+
+def _email_change_target(employee_id: UUID, caller: Employee, current_user: dict, db: Session) -> tuple[Employee, str]:
+    target = db.query(Employee).filter(Employee.id == employee_id,
+                                       Employee.company_id == caller.company_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if target.id == caller.id:
+        raise HTTPException(status_code=400, detail="Change your own email from My account.")
+    _assert_not_protected(set(current_user.get("cognito_groups", [])), target.role)
+    username = cognito_username_for(target)
+    if not username:
+        raise HTTPException(status_code=409, detail="This employee has not completed registration yet.")
+    return target, username
+
+
+@router.post("/{employee_id}/email/change", status_code=status.HTTP_200_OK)
+def admin_start_email_change(
+    employee_id: UUID,
+    body: AdminEmailChangeIn,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """ADR-563 D3: for an employee who lost access to their inbox.
+
+    Nothing changes until the link sent to the NEW address is used; then the
+    address is written to Cognito and here, every session ends, and the old
+    address is told. Company-scoped; management can't change an admin's or a
+    manager's email (same rule as every other edit).
+    """
+    from app.services import email_change
+    target, username = _email_change_target(employee_id, caller, current_user, db)
+    new_email = body.new_email.strip().lower()
+    clash = db.query(Employee).filter(Employee.email == new_email, Employee.company_id == caller.company_id,
+                                      Employee.id != target.id).first()
+    if clash:
+        raise HTTPException(status_code=409, detail="That email is already in use by another account.")
+    try:
+        expires = email_change.start_admin_change(
+            db, username=username, kind="employee", company_id=caller.company_id, new_email=new_email,
+            by_kind="tenant_admin", by_ref=str(caller.id), by_label="An admin at your company")
+    except email_change.EmailChangeError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"detail": "Confirmation sent to the new address.",
+            "pending_email_masked": account_security.mask_email(new_email),
+            "expires_at": expires.isoformat()}
+
+
+@router.delete("/{employee_id}/email/change", status_code=status.HTTP_200_OK)
+def admin_cancel_email_change(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    from app.services import email_change
+    _target, username = _email_change_target(employee_id, caller, current_user, db)
+    # The pending row is keyed on the Cognito sub; the Employee may not hold it
+    # yet (never signed in), so read it from Cognito.
+    acct = email_change.cognito_account(username)
+    if not acct or not acct["sub"]:
+        return {"cancelled": False}
+    return {"cancelled": email_change.cancel_admin_change(db, sub=acct["sub"], by_kind="tenant_admin",
+                                                          by_ref=str(caller.id))}
 
 
 @router.put("/{employee_id}/deactivate", response_model=EmployeeResponse)
@@ -2288,7 +2386,11 @@ def request_email_change(
     new inbox. A first email for an account with none is set by an admin (R3):
     with no current address there is nothing to confirm against.
     """
-    current = (caller.email or "").strip().lower()
+    # ADR-563 D1: "current" is the address Cognito sends this account's codes to,
+    # not Employee.email -- the database copy could drift (staging walker.test).
+    from app.services import email_change
+    acct = email_change.cognito_account(_username_or_409(caller))
+    current = acct["email"] if acct and acct["verified"] else None
     if not current:
         raise HTTPException(status_code=409, detail=_NO_EMAIL)
     new_email = payload.new_email.strip().lower()
@@ -2357,55 +2459,16 @@ def confirm_email_change(
         if verdict == "wrong":
             raise HTTPException(status_code=400, detail=f"The code sent to {where} isn't right.")
 
-    username = _username_or_409(caller)
+    # ADR-563: one write path for every kind of email change -- Cognito first,
+    # then the database copy, every session ended, the OLD (Cognito) address told.
+    from app.services import email_change
     try:
-        _cognito_client().admin_update_user_attributes(
-            UserPoolId=settings.aws_cognito_user_pool_id,
-            Username=username,
-            UserAttributes=[
-                {"Name": "email", "Value": new_email},
-                {"Name": "email_verified", "Value": "true"},
-            ],
-        )
-    except ClientError as e:
-        logger.error("admin_update_user_attributes failed for %s: %s", caller.id, e.response["Error"]["Code"])
-        raise HTTPException(status_code=500, detail="Couldn't update your email. Try again.")
-
-    old_email = caller.email
-    caller.email = new_email
-    # ADR-445 D4 — a new address has not bounced.
-    caller.email_bounced_at = None
-    caller.email_bounce_type = None
-    signed_out = account_security.end_all_sessions(caller, username)
-    db.flush()
-    write_audit(
-        db=db,
-        company_id=caller.company_id,
-        actor_id=caller.id,
-        action_type="account.email_changed",
-        target_table="employees",
-        target_id=str(caller.id),
-        detail={
-            "from": account_security.mask_email(old_email),
-            "to": account_security.mask_email(new_email),
-            "confirmed_by": "codes_to_both_addresses",
-            "signed_out_everywhere": signed_out,
-        },
-    )
-    db.commit()
+        email_change.apply_change(db, username=_username_or_409(caller), new_email=new_email,
+                                  actor={"kind": "self", "ref": str(caller.id), "employee_id": caller.id},
+                                  confirmed_by="codes_to_both_addresses")
+    except email_change.EmailChangeError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
     _get_redis().delete(_PENDING_EMAIL_KEY.format(caller.id))
-
-    # After the commit: the change stands even if the notice cannot be sent.
-    from app.services.email import send_email_changed_notice
-    try:
-        send_email_changed_notice(
-            to_email=old_email, employee_name=caller.name,
-            new_email_masked=account_security.mask_email(new_email),
-            when=datetime.now(timezone.utc).strftime("%d %B %Y at %H:%M UTC"),
-            account_ref=str(caller.id),
-        )
-    except ClientError:
-        pass  # logged by the sender with the account id
 
     return {"detail": "Email updated. Sign in again.", "email": new_email, "signed_out": True}
 
@@ -2413,10 +2476,10 @@ def confirm_email_change(
 # ── Discord account linking (ADR-270) ────────────────────────────────────────
 #
 # WHY THIS IS VERIFIED RATHER THAN A PLAIN FIELD EDIT
-# `employees.discord_id` is not decoration. It is the bot's DM address AND the
-# third step of the auth lookup chain (cognito_sub -> username -> discord_id,
-# see api/deps.py). A user who could set it freely could point their record at
-# a colleague's Discord account and redirect that person's dispatch DMs.
+# `employees.discord_id` is not decoration. It is the bot's DM address (it was
+# also an auth lookup step until ADR-560 removed it). A user who could set it
+# freely could point their record at a colleague's Discord account and
+# redirect that person's dispatch DMs.
 #
 # So it mirrors the email-change flow directly above: request a code, prove
 # receipt, then write. The difference is where the code lives — Cognito holds

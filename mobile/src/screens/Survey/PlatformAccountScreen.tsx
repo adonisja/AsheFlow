@@ -78,6 +78,43 @@ export default function PlatformAccountScreen({ navigation }: { navigation: { go
 
   const noEmail = me !== null && (!me.email || !me.email_verified);
 
+  // ADR-563 D2: change your own email -- a code to the current address and one
+  // to the new. The server writes Cognito, ends every session and tells the old
+  // address, so this phone is signed out too.
+  const [eStep, setEStep] = useState<'idle' | 'entering' | 'verifying'>('idle');
+  const [newEmail, setNewEmail] = useState('');
+  const [eCodes, setECodes] = useState({ current: '', new: '' });
+  const [eMasked, setEMasked] = useState<{ current: string; new: string } | null>(null);
+  const [eError, setEError] = useState<string | null>(null);
+  const [eBusy, setEBusy] = useState(false);
+  const resetEmail = () => { setEStep('idle'); setNewEmail(''); setECodes({ current: '', new: '' }); setEError(null); };
+
+  const requestEmail = async () => {
+    if (!newEmail.includes('@')) { setEError('Enter a valid email address.'); return; }
+    setEBusy(true); setEError(null);
+    try {
+      const { data } = await apiClient.post<{ current_masked: string; new_masked: string }>(
+        '/platform/me/email/request-change', { new_email: newEmail.trim().toLowerCase() });
+      setEMasked({ current: data.current_masked, new: data.new_masked }); setEStep('verifying');
+    } catch (err) {
+      setEError(errorText(err, 'Could not send the codes.'));
+    } finally { setEBusy(false); }
+  };
+
+  const confirmEmail = async () => {
+    if (eCodes.current.trim().length < 6 || eCodes.new.trim().length < 6) { setEError('Enter both 6-digit codes.'); return; }
+    setEBusy(true); setEError(null);
+    try {
+      await apiClient.post('/platform/me/email/confirm-change',
+                           { current_code: eCodes.current.trim(), new_code: eCodes.new.trim() });
+      Alert.alert('Email changed', 'You were signed out everywhere. Your old address was told about the change.',
+                  [{ text: 'Sign in again', onPress: () => void signOut() }], { cancelable: false });
+    } catch (err) {
+      setEError(errorText(err, 'Could not verify the codes.'));
+      setEBusy(false);
+    }
+  };
+
   return (
     <ScreenShell title="My account" subtitle={me?.role_label} onBack={() => navigation.goBack()}
                  onRefresh={load} keyboardInsets>
@@ -94,13 +131,52 @@ export default function PlatformAccountScreen({ navigation }: { navigation: { go
             <Text style={s.mono} selectable>Account ID {me.account_id}</Text>
           </>
         )}
-        <Text style={s.hint}>A super admin sets platform names and email addresses.</Text>
+        <Text style={s.hint}>A super admin sets platform names.</Text>
+      </View>
+
+      <View style={s.card}>
+        <Text style={s.h2}>Change email</Text>
+        {noEmail ? (
+          <Text style={s.muted}>There's no verified email to confirm the change from. Ask a super admin to change it for you.</Text>
+        ) : eStep === 'idle' ? (
+          <>
+            <Text style={s.muted}>We'll email a code to your current address and one to the new address. After the change you'll be signed out everywhere, including this phone.</Text>
+            <Button variant="secondary" onPress={() => { setEStep('entering'); setEError(null); }} disabled={!me} fullWidth>Change email</Button>
+          </>
+        ) : eStep === 'entering' ? (
+          <>
+            <TextInput style={s.input} value={newEmail} onChangeText={t => { setNewEmail(t); setEError(null); }}
+                       placeholder="New email address" placeholderTextColor={c.placeholder}
+                       keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+                       textContentType="emailAddress" autoComplete="email" accessibilityLabel="New email address" />
+            {eError && <Text style={s.error}>{eError}</Text>}
+            <Button onPress={() => void requestEmail()} loading={eBusy} fullWidth>Send codes</Button>
+            <Button variant="ghost" onPress={resetEmail}>Cancel</Button>
+          </>
+        ) : (
+          <>
+            <Text style={s.muted}>Code sent to {eMasked?.current ?? 'your current email'}</Text>
+            <TextInput style={[s.input, s.code]} value={eCodes.current}
+                       onChangeText={t => { setECodes(v => ({ ...v, current: t })); setEError(null); }}
+                       placeholder="000000" placeholderTextColor={c.placeholder} keyboardType="number-pad"
+                       maxLength={6} accessibilityLabel="Code sent to your current email" />
+            <Text style={s.muted}>Code sent to {eMasked?.new ?? 'the new email'}</Text>
+            <TextInput style={[s.input, s.code]} value={eCodes.new}
+                       onChangeText={t => { setECodes(v => ({ ...v, new: t })); setEError(null); }}
+                       placeholder="000000" placeholderTextColor={c.placeholder} keyboardType="number-pad"
+                       maxLength={6} accessibilityLabel="Code sent to the new email" />
+            <Text style={s.hint}>Codes expire in 10 minutes.</Text>
+            {eError && <Text style={s.error}>{eError}</Text>}
+            <Button onPress={() => void confirmEmail()} loading={eBusy} fullWidth>Confirm</Button>
+            <Button variant="ghost" onPress={resetEmail}>Cancel</Button>
+          </>
+        )}
       </View>
 
       <View style={s.card}>
         <Text style={s.h2}>Change password</Text>
         {noEmail ? (
-          <Text style={s.muted}>Changing your password needs a verified email address. Ask a super admin to set it.</Text>
+          <Text style={s.muted}>Changing your password needs a verified email address. Ask a super admin to change it.</Text>
         ) : step === 'idle' ? (
           <>
             <Text style={s.muted}>We'll email a code to your address. After the change you'll be signed out everywhere, including this phone.</Text>

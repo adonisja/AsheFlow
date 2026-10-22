@@ -60,6 +60,17 @@ def env():
     """Cognito, SES senders and Redis, stubbed; returns the stubs to inspect."""
     r = FakeRedis()
     cognito = MagicMock()
+    # ADR-563 D1: email flows read the CURRENT address from Cognito. `acct` is
+    # what the mocked pool holds; _person(..., env=env) fills it.
+    acct = {}
+    cognito.admin_get_user.side_effect = lambda **kw: {
+        "Username": acct.get("username", kw.get("Username")),
+        "UserAttributes": [{"Name": "sub", "Value": acct.get("sub", "")},
+                           {"Name": "email", "Value": acct.get("email") or ""},
+                           {"Name": "email_verified", "Value": "true" if acct.get("email") else "false"},
+                           {"Name": "name", "Value": "Jo Rivera"}]}
+    cognito.admin_list_groups_for_user.return_value = {"Groups": []}
+    cognito.list_users.return_value = {"Users": []}
     sent = []
     draws = iter(range(111111, 999999, 111111))   # distinct, predictable codes
     with patch.object(AS.secrets, "randbelow", side_effect=lambda n: next(draws)), \
@@ -71,15 +82,18 @@ def env():
                side_effect=lambda **kw: sent.append(("code", kw))), \
          patch("app.services.email.send_email_changed_notice",
                side_effect=lambda **kw: sent.append(("notice", kw))):
-        yield {"redis": r, "cognito": cognito, "sent": sent}
+        yield {"redis": r, "cognito": cognito, "sent": sent, "acct": acct}
 
 
-def _person(db, email="jo@example.com", role="walker"):
+def _person(db, email="jo@example.com", role="walker", env=None, cognito_email="same"):
     e = make_employee(db, role=role, name="Jo Rivera")
     e.email = email
     e.username = "jo.rivera"
     e.cognito_sub = str(uuid.uuid4())
     db.commit()
+    if env is not None:   # what the mocked Cognito pool holds for this account
+        env["acct"].update(username="jo.rivera", sub=e.cognito_sub,
+                           email=email if cognito_email == "same" else cognito_email)
     return e
 
 
@@ -236,7 +250,7 @@ def _codes(env):
 
 class TestEmailChange:
     def test_one_code_goes_to_each_address(self, db, env):
-        e = _person(db)
+        e = _person(db, env=env)
         out = E.request_email_change(payload=E._EmailChangeRequest(new_email="New@Example.org"),
                                      caller=e, db=db, _={})
         codes = _codes(env)
@@ -246,7 +260,7 @@ class TestEmailChange:
 
     def test_an_account_with_no_email_is_sent_to_an_admin(self, db, env):
         """R3: nothing to confirm against, and self-service would be a takeover."""
-        e = _person(db, email=None)
+        e = _person(db, email=None, env=env)
         with pytest.raises(HTTPException) as exc:
             E.request_email_change(payload=E._EmailChangeRequest(new_email="me@example.org"),
                                    caller=e, db=db, _={})
@@ -254,7 +268,7 @@ class TestEmailChange:
         assert "admin" in exc.value.detail
 
     def test_both_codes_change_it_tell_the_old_inbox_and_end_sessions(self, db, env):
-        e = _person(db)
+        e = _person(db, env=env)
         E.request_email_change(payload=E._EmailChangeRequest(new_email="new@example.org"),
                                caller=e, db=db, _={})
         c = _codes(env)
@@ -277,7 +291,7 @@ class TestEmailChange:
     def test_swapped_codes_are_refused(self, db, env):
         """Each code is bound to its inbox: the new-address code can't stand in
         for the current-address one."""
-        e = _person(db)
+        e = _person(db, env=env)
         E.request_email_change(payload=E._EmailChangeRequest(new_email="new@example.org"),
                                caller=e, db=db, _={})
         c = _codes(env)
@@ -292,7 +306,7 @@ class TestEmailChange:
         env["cognito"].admin_update_user_attributes.assert_not_called()
 
     def test_five_wrong_guesses_burn_the_code(self, db, env):
-        e = _person(db)
+        e = _person(db, env=env)
         E.request_email_change(payload=E._EmailChangeRequest(new_email="new@example.org"),
                                caller=e, db=db, _={})
         c = _codes(env)
@@ -314,11 +328,21 @@ class TestEmailChange:
         assert e.email == "jo@example.com"
 
     def test_the_same_address_is_refused(self, db, env):
-        e = _person(db)
+        e = _person(db, env=env)
         with pytest.raises(HTTPException) as exc:
             E.request_email_change(payload=E._EmailChangeRequest(new_email="JO@example.com"),
                                    caller=e, db=db, _={})
         assert exc.value.status_code == 400
+
+
+    def test_the_current_code_goes_to_cognitos_address_not_the_database_copy(self, db, env):
+        """ADR-563 D1: staging walker.test had walker.test@asheflow.internal in the
+        database and walker@test.com in Cognito. The proof of ownership must go
+        where the account's codes go."""
+        e = _person(db, email="drifted@internal.example", env=env, cognito_email="real@inbox.example")
+        E.request_email_change(payload=E._EmailChangeRequest(new_email="new@example.org"),
+                               caller=e, db=db, _={})
+        assert _codes(env)["current"][0] == "real@inbox.example"
 
 
 # ── D4's precondition: no flow calls Cognito's user-level APIs ──────────────

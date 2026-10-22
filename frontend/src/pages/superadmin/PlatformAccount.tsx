@@ -15,6 +15,7 @@ import React, { useEffect, useState } from 'react';
 import { signOut } from 'aws-amplify/auth';
 import { Lock, CheckCircle2, UserCircle2 } from 'lucide-react';
 
+import EmailChangeSection from '../../components/EmailChangeSection';
 import axiosClient from '../../api/axiosClient';
 import type { PlatformMe } from '../../api/types';
 import SecurityPanel from '../../components/SecurityPanel';
@@ -96,19 +97,26 @@ export default function PlatformAccount() {
             <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-3 text-sm">
               <dt className="text-muted-foreground">Name</dt><dd className="text-foreground min-w-0 break-words">{me.name || '—'}</dd>
               <dt className="text-muted-foreground">Username</dt><dd className="text-foreground font-mono min-w-0 break-all">{me.username}</dd>
-              <dt className="text-muted-foreground">Email</dt>
-              <dd className="text-foreground min-w-0 break-all">
-                {me.email || '—'}
-                {me.email && !me.email_verified && <span className="ml-2 text-xs text-warning">not verified</span>}
-              </dd>
               <dt className="text-muted-foreground">Role</dt><dd className="text-foreground">{me.role_label}</dd>
               <dt className="text-muted-foreground">Account ID</dt><dd><AccountId id={me.account_id} label="" /></dd>
               {me.surveyor_id && (<><dt className="text-muted-foreground">Surveyor ID</dt><dd><AccountId id={me.surveyor_id} label="" /></dd></>)}
             </dl>
           )}
-          <p className="text-xs text-muted-foreground mt-5">
-            A super admin sets platform names and email addresses.
-          </p>
+          {/* ADR-563 D2: change your own email -- codes to the current and the new
+              address. With no verified address there's nothing to confirm
+              from, so a super admin changes it for you (D3). */}
+          {me && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <EmailChangeSection
+                currentEmail={me.email && me.email_verified ? me.email : null}
+                requestPath="/platform/me/email/request-change"
+                confirmPath="/platform/me/email/confirm-change"
+                onChanged={() => { signOut().catch(() => {}).finally(() => window.location.assign('/login?ended=email')); }}
+                noEmailHint={me.email ? 'Not verified. Ask a super admin to change it.' : 'None. Ask a super admin to add one.'}
+              />
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground mt-5">A super admin sets platform names.</p>
         </div>
 
         {/* Password */}
@@ -127,7 +135,7 @@ export default function PlatformAccount() {
           ) : noEmail ? (
             <p className="text-sm text-muted-foreground max-w-prose">
               Changing your password needs a verified email address to send a code to.
-              Ask a super admin to set your email.
+              Ask a super admin to change your email.
             </p>
           ) : step === 'idle' ? (
             <div className="space-y-3">

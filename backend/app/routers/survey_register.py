@@ -1846,3 +1846,31 @@ def staff_release_claim(claim_id: UUID, body: StaffReleaseIn, staff: dict = Depe
                            holder=holder.display_name if holder else "Owner", claimed_at=c.claimed_at,
                            expires_at=c.expires_at, walk_open=walk is not None and walk.closed_at is None,
                            holder_emailed=emailed)
+
+
+# ── ADR-563 D3: a super admin changes a surveyor's email, by surveyor ID ──
+# For a surveyor who lost access to their inbox. A link goes to the NEW address
+# and nothing changes until it is used there (services/email_change.py).
+
+class SurveyorEmailChangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    new_email: EmailStr
+
+
+@router.post("/contributors/{contributor_id}/email/change", status_code=status.HTTP_200_OK)
+def start_surveyor_email_change(contributor_id: UUID, body: SurveyorEmailChangeIn,
+                                owner: dict = Depends(get_super_admin), db: Session = Depends(get_db)):
+    from app.services import account_security, email_change
+    c = _contributor(db, contributor_id)
+    if not c.cognito_username:
+        raise HTTPException(status_code=409, detail="This surveyor has no sign-in account yet.")
+    try:
+        expires = email_change.start_admin_change(
+            db, username=c.cognito_username, kind="surveyor", company_id=None,
+            new_email=str(body.new_email), by_kind="super_admin", by_ref=str(owner.get("id")),
+            by_label="The AsheFlow team")
+    except email_change.EmailChangeError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"detail": "Confirmation sent to the new address.",
+            "pending_email_masked": account_security.mask_email(str(body.new_email).lower()),
+            "expires_at": expires.isoformat()}

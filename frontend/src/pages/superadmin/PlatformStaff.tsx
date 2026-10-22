@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import AccountId from '../../components/ui/AccountId';
 import { ShieldCheck, UserPlus, RefreshCw, KeyRound } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
+import AdminEmailChangeDialog from '../../components/AdminEmailChangeDialog';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
@@ -58,6 +59,8 @@ export default function PlatformStaff() {
   // The reset endpoint is get_super_admin; offer the row button to no one else.
   const { groups } = useAuth();
   const isSuperAdmin = groups.includes('super_admin');
+  // ADR-563 D3: a staff account that lost its inbox.
+  const [emailFor, setEmailFor] = useState<{ id: string; name: string } | null>(null);
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +158,11 @@ export default function PlatformStaff() {
       const res = await axiosClient.post('/platform/mfa/reset', target);
       setResetMsg({
         ok: true,
-        text: `${label}: cleared and signed out everywhere, ${res.data.devices_forgotten} device(s) forgotten.`,
+        // ADR-561 D4: whether the person was told.
+        text: `${label}: cleared and signed out everywhere, ${res.data.devices_forgotten} device(s) forgotten. `
+          + (res.data.emailed
+            ? 'They were emailed.'
+            : 'No verified email on that account, so tell them directly.'),
       });
       if ('username' in target) setResetUser('');
     } catch (err: any) {
@@ -292,6 +299,12 @@ export default function PlatformStaff() {
                       <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
                         Reset requested
                       </span>
+                    )}
+                    {isSuperAdmin && !r.pending && r.account_id && (
+                      <button type="button" onClick={() => setEmailFor({ id: r.account_id!, name: r.name || r.username })}
+                              className="text-xs font-medium px-2.5 py-1 min-h-[44px] rounded-lg border border-border text-foreground hover:bg-accent">
+                        Change email
+                      </button>
                     )}
                     {isSuperAdmin && !r.pending && r.account_id && (
                       <button type="button" disabled={resetting}
@@ -440,6 +453,13 @@ export default function PlatformStaff() {
       </div>
 
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+      <AdminEmailChangeDialog
+        open={emailFor !== null}
+        personName={emailFor?.name ?? ''}
+        onClose={() => setEmailFor(null)}
+        submit={async (newEmail) => (await axiosClient.post(
+          '/platform/accounts/email/change', { account_id: emailFor!.id, new_email: newEmail })).data}
+      />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { formatDateShort } from './utils/date';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './components/auth/Login';
 import Register from './pages/Register';
+import EmailChangeConfirm from './pages/EmailChangeConfirm';
 import Layout from './components/layout/Layout';
 import Preferences from './pages/Preferences';
 import Schedule from './pages/Schedule';
@@ -312,6 +313,9 @@ function App() {
         <Routes>
           <Route path="/login"    element={<Login />} />
           <Route path="/register" element={<Register />} />
+          {/* ADR-563 D3 / ADR-451 D4: the new inbox confirms an email change. Public: the link is the proof. */}
+          <Route path="/email-change" element={<EmailChangeConfirm />} />
+          <Route path="/owner-email-change" element={<EmailChangeConfirm />} />
 
           {/* Local manual research log — deliberately UNGATED and outside
               <Layout>. It is a data-entry instrument: everything it records

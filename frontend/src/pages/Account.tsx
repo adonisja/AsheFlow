@@ -17,6 +17,7 @@
 import React, { useEffect, useState } from 'react';
 import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../contexts/AuthContext';
+import EmailChangeSection from '../components/EmailChangeSection';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import { Lock, CheckCircle2, Mail, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
@@ -91,13 +92,6 @@ export default function Account() {
 
   // ── email change (ADR-270: web never had this; the backend flow already
   //    existed and mobile has used it since it shipped) ──
-  const [eStep, setEStep] = useState<Step>('idle');
-  const [newEmail, setNewEmail] = useState('');
-  const [eCurrentCode, setECurrentCode] = useState('');
-  const [eNewCode, setENewCode] = useState('');
-  const [eMasked, setEMasked] = useState<{ current: string; new: string } | null>(null);
-  const [eBusy, setEBusy] = useState(false);
-  const [eMsg, setEMsg] = useState('');
   const [currentEmail, setCurrentEmail] = useState('');
 
   // ── discord link ──
@@ -154,37 +148,6 @@ export default function Account() {
     } catch (err) {
       setError(errorText(err, 'Could not change your password. Try again.'));
       setLoading(false);
-    }
-  };
-
-  const requestEmail = async () => {
-    if (!newEmail.includes('@')) { setEMsg('Enter a valid email address.'); return; }
-    setEBusy(true); setEMsg('');
-    try {
-      const { data } = await axiosClient.post<{ current_masked: string; new_masked: string }>(
-        '/employees/me/email/request-change', { new_email: newEmail.trim().toLowerCase() },
-      );
-      setEMasked({ current: data.current_masked, new: data.new_masked });
-      setEStep('verifying');
-    } catch (e) {
-      setEMsg(errorText(e, 'Could not send the codes.'));
-    } finally { setEBusy(false); }
-  };
-
-  const confirmEmail = async () => {
-    if (eCurrentCode.trim().length < 6 || eNewCode.trim().length < 6) {
-      setEMsg('Enter both 6-digit codes.'); return;
-    }
-    setEBusy(true); setEMsg('');
-    try {
-      await axiosClient.post('/employees/me/email/confirm-change', {
-        current_code: eCurrentCode.trim(),
-        new_code: eNewCode.trim(),
-      });
-      leaveAfterChange('email');
-    } catch (e) {
-      setEMsg(errorText(e, 'Could not verify the codes.'));
-      setEBusy(false);
     }
   };
 
@@ -261,71 +224,15 @@ export default function Account() {
               <span className="text-sm font-medium text-foreground font-mono">{user?.username || '—'}</span>
             </div>
 
-            {/* Email — two-step verified change, same backend flow mobile uses */}
+            {/* Email — two-step verified change (ADR-541 R2), shared with the
+                platform account page (ADR-563 D2). */}
             <div className="py-2.5 border-t border-border">
-              {eStep === 'idle' ? (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email</span>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm text-foreground truncate">{currentEmail || '—'}</span>
-                    {/* ADR-541 R3: a first email is added by an admin -- with no
-                        current address there is nothing to confirm against. */}
-                    {currentEmail && (
-                      <button
-                        onClick={() => { setNewEmail(''); setEStep('entering'); setEMsg(''); }}
-                        className="text-sm text-primary hover:underline shrink-0"
-                      >
-                        Change
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ) : eStep === 'entering' ? (
-                <div className="space-y-2 max-w-sm">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5" /> New email address
-                  </label>
-                  <input value={newEmail} onChange={e => setNewEmail(e.target.value)}
-                         type="email" autoComplete="email" className={field} />
-                  <p className="text-xs text-muted-foreground">
-                    We'll email a code to your current address and one to the new
-                    address. After the change you'll be signed out everywhere.
-                  </p>
-                  <div className="flex gap-2">
-                    <button onClick={() => { setEStep('idle'); setEMsg(''); }}
-                            className="btn-ghost text-sm px-3 py-1.5">Cancel</button>
-                    <button onClick={requestEmail} disabled={eBusy}
-                            className="btn-primary text-sm px-3 py-1.5 disabled:opacity-50">
-                      {eBusy ? 'Sending…' : 'Send Code'}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2 max-w-sm">
-                  <label htmlFor="email-code-current" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    Code sent to {eMasked?.current ?? 'your current email'}
-                  </label>
-                  <input id="email-code-current" value={eCurrentCode} onChange={e => setECurrentCode(e.target.value)}
-                         inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000"
-                         className={`${field} font-mono tracking-widest`} />
-                  <label htmlFor="email-code-new" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    Code sent to {eMasked?.new ?? 'the new email'}
-                  </label>
-                  <input id="email-code-new" value={eNewCode} onChange={e => setENewCode(e.target.value)}
-                         inputMode="numeric" maxLength={6} placeholder="000000"
-                         className={`${field} font-mono tracking-widest`} />
-                  <p className="text-xs text-muted-foreground">Codes expire in 10 minutes.</p>
-                  <div className="flex gap-2">
-                    <button onClick={() => { setEStep('idle'); setEMsg(''); setECurrentCode(''); setENewCode(''); }}
-                            className="btn-ghost text-sm px-3 py-1.5">Cancel</button>
-                    <button onClick={confirmEmail} disabled={eBusy || eCurrentCode.length < 6 || eNewCode.length < 6}
-                            className="btn-primary text-sm px-3 py-1.5 disabled:opacity-50">
-                      {eBusy ? 'Verifying…' : 'Confirm'}
-                    </button>
-                  </div>
-                </div>
-              )}
-              {eMsg && <p className="text-xs text-muted-foreground mt-1.5">{eMsg}</p>}
+              <EmailChangeSection
+                currentEmail={currentEmail || null}
+                requestPath="/employees/me/email/request-change"
+                confirmPath="/employees/me/email/confirm-change"
+                onChanged={() => leaveAfterChange('email')}
+              />
             </div>
 
             {/* Discord — verified link (ADR-270). Not a free edit: discord_id is

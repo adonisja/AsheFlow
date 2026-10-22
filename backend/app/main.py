@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import require_configured, require_mfa_enrolled, RequireMode
 from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones, platform_alerts, crew_pins, truck_pins, separations, collection, sns_events, campaigns, privacy, role_guides, survey_register, notification_gallery, stolen_package_reports, platform_account, auth_mfa_reset
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones, platform_alerts, crew_pins, truck_pins, separations, collection, sns_events, campaigns, privacy, role_guides, survey_register, notification_gallery, stolen_package_reports, platform_account, auth_mfa_reset, auth_email_change
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -52,9 +52,15 @@ app = FastAPI(title="AsheFlow Dispatch API")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Trust X-Forwarded-Proto from Caddy so redirect Location headers use https://.
-# Caddy is the only trusted proxy — it runs in the same Docker network.
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# ADR-562: X-Forwarded-For/-Proto are believed only from the container network,
+# where Caddy (the edge, with no trusted_proxies of its own) is the only peer.
+# Every slowapi limit keys on the client IP this produces. It was "*": safe in
+# practice only because Caddy overwrites the header and :8000 isn't published --
+# measured: a spoofed X-Forwarded-For reached the log as the real address.
+_trusted_proxies = [h.strip() for h in settings.trusted_proxy_hosts.split(",") if h.strip()]
+if not _trusted_proxies or "*" in _trusted_proxies:
+    raise RuntimeError("TRUSTED_PROXY_HOSTS must list the proxy's network, never '*' (ADR-562).")
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 
 # Configure CORS — origins loaded from CORS_ORIGINS env var (comma-separated).
 # Dev default is set in config.py; override with CORS_ORIGINS in production.
@@ -230,6 +236,7 @@ api_v1_router.include_router(platform_account.router)
 # ADR-551: PUBLIC (the requester is locked out, so has no session). Bounded
 # by an emailed code, the real client IP and a per-account cap.
 api_v1_router.include_router(auth_mfa_reset.router)
+api_v1_router.include_router(auth_email_change.router)   # ADR-563 D3 (public; the link is the proof)
 api_v1_router.include_router(notification_gallery.router)
 # ADR-465 D3. These three carry ordinary tenant data and were ungated by
 # omission, not by the ADR-335 reasoning above -- that argument is specific to

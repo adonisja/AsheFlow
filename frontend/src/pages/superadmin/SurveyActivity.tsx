@@ -11,6 +11,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import AccountId from '../../components/ui/AccountId';
 import { Check, Copy, Loader2, RefreshCw } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
+import AdminEmailChangeDialog from '../../components/AdminEmailChangeDialog';
 import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { errorText } from '../../utils/errorText';
@@ -66,6 +67,8 @@ export default function SurveyActivityPage() {
   const [wPreview, setWPreview] = useState<number | null>(null);
   const [wReason, setWReason] = useState('');
   const [resetting, setResetting] = useState<SurveyContributorHealth | null>(null);
+  // ADR-563 D3: super admin only -- a surveyor who lost their inbox.
+  const [emailFor, setEmailFor] = useState<SurveyContributorHealth | null>(null);
   const [resetReason, setResetReason] = useState('');
   // ADR-550 D1: find a surveyor by name, email or surveyor ID.
   const [query, setQuery] = useState('');
@@ -264,6 +267,12 @@ export default function SurveyActivityPage() {
                                       onClick={() => { setResetting(c); setResetReason(''); }}
                                       className="btn-ghost min-h-11 px-3 text-sm disabled:opacity-50">
                                 Reset two-factor
+                              </button>
+                            )}
+                            {isOwner && !c.revoked_at && (
+                              <button type="button" disabled={busy !== null} onClick={() => setEmailFor(c)}
+                                      className="btn-ghost min-h-11 px-3 text-sm disabled:opacity-50">
+                                Change email
                               </button>
                             )}
                             {isOwner && (
@@ -469,6 +478,13 @@ export default function SurveyActivityPage() {
           </section>
         </div>
       )}
+      <AdminEmailChangeDialog
+        open={emailFor !== null}
+        personName={emailFor?.display_name ?? ''}
+        onClose={() => setEmailFor(null)}
+        submit={async (newEmail) => (await axiosClient.post(
+          `/survey/contributors/${emailFor!.id}/email/change`, { new_email: newEmail })).data}
+      />
     </div>
   );
 }

@@ -38,6 +38,7 @@ from app.models.base import Base
 from app.models.employee import Employee
 from app.models.platform_session import PlatformSessionStamp  # ADR-549
 from app.models.mfa_reset_request import MfaResetRequest  # ADR-551
+from app.models.email_change_request import EmailChangeRequest  # ADR-563
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
@@ -196,6 +197,7 @@ DISPATCH_TABLES = [
     # ADR-549 D3: get_platform_user reads it on every platform gate.
     PlatformSessionStamp.__table__,
     MfaResetRequest.__table__,           # ADR-551
+    EmailChangeRequest.__table__,        # ADR-563
 ]
 
 
@@ -514,3 +516,25 @@ def code_only(obj) -> str:
             if ast.get_docstring(node) is not None:
                 node.body = node.body[1:]
     return ast.unparse(tree)
+
+
+# ── ADR-561: no test may send a real two-factor-reset email ────────────────
+# Locally the settings carry the REAL staging pool id and the machine has AWS
+# credentials, so an un-stubbed account_security.notify_mfa_reset would call
+# AdminGetUser on staging -- and for a username that exists there, send a real
+# "your two-factor was reset" email. Every test gets a stub returning False;
+# a test of the helper itself opts out with @pytest.mark.real_reset_notice
+# (and stubs boto3 / the mailer itself).
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_reset_notice: run the real notify_mfa_reset (stub AWS yourself)")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_reset_notice(request):
+    if request.node.get_closest_marker("real_reset_notice"):
+        yield None
+        return
+    from unittest.mock import patch
+    with patch("app.services.account_security.notify_mfa_reset", return_value=False) as stub:
+        yield stub

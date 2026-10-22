@@ -2,14 +2,13 @@ import { errorText } from '../utils/errorText';
 import { formatDate } from '../utils/date';
 import SelectMenu from '../components/ui/SelectMenu';
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X,
-} from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, Check, CheckCircle2, Copy, FileUp, Hash, Loader2, Mail, Map, MapPin, MessageSquare, MousePointer2, Navigation, Pencil, Phone, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, ShieldOff, ToggleLeft, ToggleRight, Trash2, Truck, Users, X, AtSign } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import type { CompanyZone, CornerPoint, EscalationContact, MfaDeadlineRow, MfaEnrolmentRow, MfaResetRequestRow } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import AdminEmailChangeDialog from '../components/AdminEmailChangeDialog';
 import CompanyZoneMap from '../components/OperatingZoneMap';
 import { useConfirm } from '../hooks/useConfirm';
 import { roleLabel } from '../utils/roleLabels';
@@ -658,6 +657,8 @@ function PeopleTab() {
   const [resendingId, setResendingId]     = useState<string | null>(null);
   const [resendMsg, setResendMsg]         = useState<{ id: string; ok: boolean; text: string } | null>(null);
   const [resettingMfaId, setResettingMfaId] = useState<string | null>(null);
+  // ADR-563 D3: an admin-started email change for someone who lost their inbox.
+  const [emailChangeFor, setEmailChangeFor] = useState<{ id: string; name: string } | null>(null);
   // ADR-551 D3: people who asked for a two-factor reset. Any role -- the
   // Sign-in protection list covers only privileged ones, and a walker who lost
   // their phone needs to be seen too.
@@ -916,7 +917,12 @@ function PeopleTab() {
       // already handled by the 502 arm below.
       setResetMfaMsg({
         id: emp.id, ok: true,
-        text: `Sign-in unblocked. ${res.data.devices_forgotten} device(s) cleared.`,
+        // ADR-561 D4: say whether the person was told, so the admin knows
+        // whether they still need to.
+        text: `Sign-in unblocked. ${res.data.devices_forgotten} device(s) cleared. `
+          + (res.data.emailed
+            ? 'They were emailed.'
+            : 'No verified email on their account, so tell them directly.'),
       });
     } catch (err: any) {
       // 502 means containment did not FULLY complete. The admin must know it did
@@ -1056,6 +1062,13 @@ function PeopleTab() {
   return (
     <div className="space-y-5">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+      <AdminEmailChangeDialog
+        open={emailChangeFor !== null}
+        personName={emailChangeFor?.name ?? ''}
+        onClose={() => setEmailChangeFor(null)}
+        submit={async (newEmail) => (await axiosClient.post(
+          `/employees/${emailChangeFor!.id}/email/change`, { new_email: newEmail })).data}
+      />
 
       {/* ADR-538: while the setup window is open, the first thing on the page. */}
       {setupWin?.open && <SetupWindowBanner w={setupWin} />}
@@ -1674,6 +1687,18 @@ function PeopleTab() {
                                     : 'Reset two-factor authentication'}
                                 >
                                   <ShieldOff className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {/* ADR-563 D3: active accounts change email through a link
+                                  to the new inbox; the edit form no longer does it. */}
+                              {lc === 'active' && (
+                                <button
+                                  onClick={() => setEmailChangeFor({ id: emp.id, name: emp.name })}
+                                  className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                                  title="Change email (they lost access to their inbox)"
+                                  aria-label={`Change ${emp.name}'s email`}
+                                >
+                                  <AtSign className="w-3.5 h-3.5" />
                                 </button>
                               )}
                               {isAdmin && (

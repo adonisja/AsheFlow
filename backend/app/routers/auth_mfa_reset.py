@@ -155,11 +155,10 @@ def confirm_reset_request(request: Request, body: _ConfirmIn, db: Session = Depe
     who_text = {"employee": "your company's admins", "surveyor": "AsheFlow support",
                 "staff": "a super admin"}[kind]
     # ADR-556 D4: both clients show this as the next step, so it's written once,
-    # here, where the account kind is known. Only the surveyor reset emails the
-    # person (send_surveyor_mfa_reset_notice), so only it promises an email.
-    next_step = ("We'll email you when they've reset it. Then sign in and set up two-factor again."
-                 if kind == "surveyor" else
-                 "Once they've reset it, sign in and you'll set up two-factor again.")
+    # here. ADR-561: every reset path now emails the person, and a request can
+    # only come from a verified address (its code was sent there), so the
+    # promise holds for every kind.
+    next_step = "We'll email you when they've reset it. Then sign in and set up two-factor again."
     # `next_step` apart from `detail` so a client can title its notice with
     # who it went to and put only the next step underneath, without repeating
     # "Request sent" twice (owner, 2026-10-21: "clunky").

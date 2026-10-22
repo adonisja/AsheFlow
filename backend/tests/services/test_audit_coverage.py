@@ -41,6 +41,13 @@ import pytest
 ROUTERS = Path(__file__).resolve().parents[2] / "app" / "routers"
 
 _AUDIT_CALLS = {"write_audit", "AuditLog"}
+
+# ADR-563: email changes are applied by ONE shared service so every path writes
+# Cognito, the database copy, sessions and the audit the same way. Calls into
+# these functions count as audited -- and TestServiceAuditsAreReal proves each
+# one really calls write_audit, so this set can't vouch for something untrue.
+_AUDITING_SERVICE = ("email_change.py", {"apply_change", "start_admin_change",
+                                         "confirm_admin_change", "cancel_admin_change"})
 _WRITE_VERBS = {"post", "patch", "put", "delete"}
 
 
@@ -128,6 +135,8 @@ _NO_AUDIT = {
     "employee_off_days.py::create_employee_off_day",
     "employees.py::request_discord_link",
     "employees.py::request_email_change",
+    # ADR-563: the platform twin -- emails two codes, changes nothing; confirm audits.
+    "platform_account.py::request_email_change",
     # ADR-541: emails a code and changes nothing; /me/password/confirm audits the change.
     "employees.py::request_password_code",
     "feedback.py::create_feedback",
@@ -211,7 +220,7 @@ def _write_endpoints_without_audit() -> list[str]:
     missing: list[str] = []
     for path in sorted(ROUTERS.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        reaches = _audited_names(tree)
+        reaches = _audited_names(tree) | _AUDITING_SERVICE[1]
         local = {
             n.name: n for n in tree.body
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -444,3 +453,17 @@ class TestClaimKeyNames:
             "these read a 'sub' claim that get_current_user never sets, so the "
             f"value is always None: {offenders}"
         )
+
+
+class TestServiceAuditsAreReal:
+    def test_every_trusted_service_function_writes_an_audit_row(self):
+        """The allowance above is only honest if each named function audits."""
+        fname, names = _AUDITING_SERVICE
+        tree = ast.parse((ROUTERS.parent / "services" / fname).read_text(encoding="utf-8"))
+        audited = _audited_names(tree)
+        local = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for _ in range(3):   # same transitive rule as the router scan
+            for name, fn in local.items():
+                if name not in audited and any(c in audited for c in _called_names(fn)):
+                    audited.add(name)
+        assert names <= audited, f"claimed to audit but don't: {sorted(names - audited)}"
