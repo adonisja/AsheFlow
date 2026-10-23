@@ -22,6 +22,17 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>asheflow</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>asheflow</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -33,8 +44,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>AsheFlow uses the camera to read the tracking number and address from a package label, so you do not have to type them.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>AsheFlow can read a package label from a photo you have already taken.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -56,20 +71,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>asheflow</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>asheflow</string>
-			</array>
-		</dict>
-	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>AsheFlow uses the camera to read the tracking number and address from a package label, so you do not have to type them.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>AsheFlow can read a package label from a photo you have already taken.</string>
 </dict>
 </plist>
