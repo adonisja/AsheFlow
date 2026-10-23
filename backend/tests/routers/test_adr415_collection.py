@@ -64,8 +64,9 @@ class TestAnInactiveTokenIsIndistinguishableFromAMissingOne:
 
     @pytest.mark.parametrize("tok", [
         None,
-        _Tok(revoked_at=datetime.now(timezone.utc)),
-        _Tok(expires_at=datetime.now(timezone.utc) - timedelta(days=1)),
+        # ADR-573: fixed past instants, not the clock at import time.
+        _Tok(revoked_at=datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        _Tok(expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc)),
     ], ids=["missing", "revoked", "expired"])
     def test_all_inactive_states_give_the_same_404(self, tok):
         with pytest.raises(HTTPException) as e:

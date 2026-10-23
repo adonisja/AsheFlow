@@ -195,15 +195,18 @@ class TestDeclaringAHold:
             sc_router.release_retention_hold(scorecard_id=sc.id, caller=mgr, _={}, db=db)
         assert exc.value.status_code == 409
 
-    @pytest.mark.parametrize("body", [
-        {"kind": "personnel_decision"},                                              # no date
-        {"kind": "personnel_decision", "decision_date": date.today() + timedelta(days=1)},  # future
-        {"kind": "legal_charge", "decision_date": date.today()},                     # date on the wrong kind
-        {"kind": "legal_charge", "note": "x"},                                       # extra="forbid"
-    ])
-    def test_the_request_is_validated(self, body):
+    # ADR-573: dates are computed when the TEST runs, not when the module is
+    # imported. A decorator argument is evaluated at collection, so a run that
+    # crossed midnight UTC made "tomorrow" today and the future-date case passed.
+    @pytest.mark.parametrize("make_body", [
+        lambda: {"kind": "personnel_decision"},                                           # no date
+        lambda: {"kind": "personnel_decision", "decision_date": date.today() + timedelta(days=1)},  # future
+        lambda: {"kind": "legal_charge", "decision_date": date.today()},                  # date on the wrong kind
+        lambda: {"kind": "legal_charge", "note": "x"},                                    # extra="forbid"
+    ], ids=["no-date", "future", "date-on-wrong-kind", "extra-field"])
+    def test_the_request_is_validated(self, make_body):
         with pytest.raises(ValidationError):
-            RetentionHoldIn(**body)
+            RetentionHoldIn(**make_body())
 
 
 class TestNothingElseCanDeleteAHeldScorecard:
