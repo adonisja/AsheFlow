@@ -42,7 +42,7 @@ from app.schemas.notification import resolve_link
 from app.services.notification_spec import Severity, resolve_spec
 from app.models.device_token import DevicePlatform, DeviceToken
 from app.services.push_delivery import (
-    create_endpoint, live_devices, push_enabled, send_to_device,
+    create_endpoint, live_devices, plain_text, push_enabled, send_to_device,
 )
 from app.services.push_quiet_hours import describe, release_at
 
@@ -149,7 +149,8 @@ def send_push(self, notification_id: str) -> dict:
             # ADR-508 D3: the registry icon leads the title; the body no longer
             # carries its own emoji.
             title = f"{spec.icon} {spec.label}" if spec.icon else spec.label
-            if send_to_device(db, device, title=title, body=notif.message,
+            # ADR-571: a push can't render the inbox's Markdown.
+            if send_to_device(db, device, title=title, body=plain_text(notif.message),
                               data=_push_data(notif)):
                 device.last_seen_at = datetime.now(timezone.utc)
                 sent += 1

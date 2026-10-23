@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import boto3
@@ -151,6 +152,19 @@ def create_endpoint(device: DeviceToken) -> str | None:
             device.id, device.platform, type(e).__name__,
         )
         return None
+
+
+# ADR-571. Messages carry a little Markdown for the inbox (`**Truck 12**`); a
+# push is plain text on both FCM and APNs. The SAME two substitutions every
+# client uses to get plain text (frontend NotificationBanner.tsx, mobile
+# NotificationsScreen.tsx): bold, then italic, non-greedy.
+_BOLD = re.compile(r"\*\*(.*?)\*\*")
+_ITALIC = re.compile(r"\*(.*?)\*")
+
+
+def plain_text(message: str) -> str:
+    """The inbox message as a push body: Markdown emphasis removed."""
+    return _ITALIC.sub(r"\1", _BOLD.sub(r"\1", message or ""))
 
 
 def _payload(platform: str, title: str, body: str, data: dict) -> str:
