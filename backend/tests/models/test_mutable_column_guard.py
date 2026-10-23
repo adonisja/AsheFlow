@@ -122,7 +122,6 @@ REASSIGN_ONLY = {
     # Config / definition data, replaced wholesale on edit.
     "BuildingProfile.days_open":            "replaced wholesale on profile edit",
     "BuildingProfileLibrary.days_open":     "replaced wholesale on promotion",
-    "BuildingProfileLibrary.promoted_from_company_ids": "append via reassignment in promotion path",
     "CompanyZone.bounds":                   "polygon replaced wholesale",
     "GraduationQuizTemplate.choices":       "template definition, replaced on edit",
     "GraduationQuizTemplate.keywords":      "template definition, replaced on edit",

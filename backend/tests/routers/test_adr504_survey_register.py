@@ -135,13 +135,11 @@ class TestWhoMayWrite:
         emp = make_employee(db, role="walker")
         emp.cognito_sub = "surveyor-sub-01"
         db.commit()
-        monkeypatch.setattr(R.settings, "survey_excluded_company_id", str(SEED_COMPANY_ID))
         with pytest.raises(HTTPException) as e:
             R.get_writer(_surveyor(), db)
         assert e.value.status_code == 403
 
-    def test_with_no_company_configured_any_employee_link_is_refused(self, db, monkeypatch):
-        monkeypatch.setattr(R.settings, "survey_excluded_company_id", "")
+    def test_any_employee_link_is_refused(self, db, monkeypatch):
         _admit(db)
         emp = make_employee(db, role="walker")
         emp.cognito_sub = "surveyor-sub-01"
@@ -150,7 +148,6 @@ class TestWhoMayWrite:
             R.get_writer(_surveyor(), db)
 
     def test_admission_refuses_an_employee_linked_account(self, db, monkeypatch):
-        monkeypatch.setattr(R.settings, "survey_excluded_company_id", "")
         emp = make_employee(db, role="walker")
         emp.cognito_sub = "employee-sub-99"
         db.commit()
@@ -289,16 +286,6 @@ class TestWhatARecordMayHold:
         with pytest.raises(ValidationError):
             R.ObservationIn(**body)
 
-    def test_a_malformed_company_setting_fails_closed(self, db, monkeypatch):
-        """A typo in config must not let employees write: it falls back to the
-        strict any-tenant rule."""
-        monkeypatch.setattr(R.settings, "survey_excluded_company_id", "not-a-uuid")
-        _admit(db)
-        emp = make_employee(db, role="walker")
-        emp.cognito_sub = "surveyor-sub-01"
-        db.commit()
-        with pytest.raises(HTTPException):
-            R.get_writer(_surveyor(), db)
 
 
 # ── D7: who reads ───────────────────────────────────────────────────────────

@@ -44,7 +44,6 @@ from app.schemas.collection import (
     LeaderboardIn,
     DATASET_ADDRESSES,
     SCOPE_COMPANY,
-    SCOPE_OPEN,
     TOP_COLLECTORS,
     VERIFICATION_LIMIT,
     CollectionCheckIn,
@@ -52,7 +51,7 @@ from app.schemas.collection import (
     CollectedProfileOut, CollectionSubmitIn, CollectionSubmitOut,
     CollectionTokenCreate, CollectionTokenOut, CollectionTokenSummary,
     MyCampaignOut,
-    AssignCampaignIn, PromoteIn, PromoteOut, PromotionDoorOut,
+    PromoteIn, PromoteOut, PromotionDoorOut,
     PromotionOutcomeOut, PromotionRowOut,
 )
 from app.models.company import Company
@@ -93,8 +92,8 @@ def _resolve_token(db: Session, raw: str, dataset: str | None = None) -> Collect
 def _authorise_scope(tok: CollectionToken, caller: Employee | None) -> None:
     """Who may submit under this campaign (ADR-423 D2).
 
-    OPEN campaigns are unchanged: the link is the credential, which is the whole
-    point of the public collection page.
+    OPEN campaigns are retired (ADR-581 D8): any submission to one is refused
+    with 410.
 
     COMPANY campaigns require an authenticated employee of the owning company.
     The link alone is not enough — it can be forwarded, and a company survey is
@@ -106,7 +105,13 @@ def _authorise_scope(tok: CollectionToken, caller: Employee | None) -> None:
     403 when authenticated as the wrong tenant (it cannot).
     """
     if tok.scope != SCOPE_COMPANY:
-        return
+        # ADR-581 D8: open campaigns are retired. Their rows were delivery
+        # addresses collected with no owning company (ADR-580); none may be
+        # written again, even through a link that predates the retirement.
+        raise HTTPException(
+            status_code=410,
+            detail="This collection link has been retired.",
+        )
     if caller is None:
         raise HTTPException(
             status_code=401,
@@ -409,9 +414,7 @@ def create_token(
 
     TWO PRINCIPALS, and the caller decides the scope — not the request body.
 
-      super admin   -> an OPEN campaign. company_id NULL, anyone with the link
-                       may submit. It collects across tenants, so no company
-                       admin can read it.
+      super admin   -> refused (ADR-581 D8: open campaigns are retired).
       company admin -> a COMPANY campaign bound to their own company, and only
                        an authenticated employee of that company may submit.
 
@@ -425,10 +428,13 @@ def create_token(
     is_super = "super_admin" in groups
 
     if is_super:
-        company_id = None
-        scope = SCOPE_OPEN
-        created_by = None
-        created_by_name = current_user.get("username") or "platform"
+        # ADR-581 D8: a super admin used to get an OPEN campaign (company_id NULL,
+        # anyone with the link may submit). Retired: those rows were delivery
+        # addresses held by no company. Campaigns are company campaigns only.
+        raise HTTPException(
+            status_code=403,
+            detail="Open campaigns are retired. A company admin issues a company campaign.",
+        )
     else:
         # A company admin. RoleChecker is not used here because the two
         # principals need different gates on one endpoint; the role check is
@@ -1085,71 +1091,6 @@ def my_campaigns(
 # buildings. Not the super admin: a platform principal has no Employee row and
 # must not write tenant operational records.
 _allow_promotion = RoleChecker(["management", "admin"])
-
-
-@router.post("/tokens/{token_id}/assign", response_model=CollectionTokenSummary)
-def assign_campaign(
-    token_id: UUID,
-    body: AssignCampaignIn,
-    super_admin: dict = Depends(get_super_admin),
-    db: Session = Depends(get_db),
-):
-    """Hand an OPEN campaign to the one company whose staff collected it (D3).
-
-    One-way. Moving it again would move one DSP's customer addresses to
-    another, which is the disclosure ADR-489 froze the Library over.
-    """
-    if not body.attest_collected_for_company:
-        raise HTTPException(
-            status_code=422,
-            detail="Assigning a campaign records that this company's staff collected it. "
-                   "Confirm that, or leave the campaign unassigned.",
-        )
-    tok = db.query(CollectionToken).filter(CollectionToken.id == token_id).first()
-    if tok is None:
-        raise HTTPException(status_code=404, detail="Collection link not found.")
-    if tok.company_id is not None or tok.scope != SCOPE_OPEN:
-        raise HTTPException(status_code=409, detail="This campaign already belongs to a company.")
-    if (tok.dataset or DATASET_ADDRESSES) != DATASET_ADDRESSES:
-        raise HTTPException(status_code=409, detail="Only address campaigns can be assigned.")
-    if tok.revoked_at is None:
-        # A live open link would keep writing anonymous rows into the
-        # company's data after the move (the ADR-437 D2 gate, reused).
-        raise HTTPException(status_code=409, detail="Revoke this link before assigning it.")
-    if db.query(Company.id).filter(Company.id == body.company_id).first() is None:
-        raise HTTPException(status_code=404, detail="Company not found.")
-
-    now = datetime.now(timezone.utc)
-    moved = (
-        db.query(CollectedAddressProfile)
-        .filter(
-            CollectedAddressProfile.token_id == tok.id,
-            CollectedAddressProfile.company_id.is_(None),
-        )
-        .update({CollectedAddressProfile.company_id: body.company_id},
-                synchronize_session=False)
-    )
-    tok.company_id = body.company_id
-    tok.scope = SCOPE_COMPANY
-    tok.assigned_at = now
-    tok.assigned_by = (super_admin.get("id") or "")[:64] or None
-    db.flush()
-    write_audit(
-        db,
-        action_type="collection.campaign.assign",
-        target_table="collection_tokens",
-        target_id=str(tok.id),
-        actor_id=None,   # no Employee row; identity rides in the payload
-        company_id=str(body.company_id),
-        detail={**super_admin_identity(super_admin), "label": tok.label,
-                "rows": moved, "attested": True},
-    )
-    db.commit()
-    db.refresh(tok)
-    out = CollectionTokenSummary.model_validate(tok)
-    out.submission_count = moved
-    out.token = None   # revoked, by the gate above
-    return out
 
 
 def _company_campaign(db: Session, token_id: UUID, caller: Employee) -> CollectionToken:

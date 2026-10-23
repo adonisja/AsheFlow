@@ -16,7 +16,7 @@ from app.api import deps as D
 ROUTERS = (
     "app/routers/companies.py",
     "app/routers/platform_alerts.py",
-    "app/routers/building_profile_library.py",
+    # building_profile_library.py was deleted by ADR-581 (no tenant writes to PlaceType).
 )
 
 BACKEND = os.path.join(os.path.dirname(__file__), "..", "..")

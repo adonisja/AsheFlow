@@ -112,10 +112,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.role_directory.check_role_directory_drift",
         "schedule": crontab(hour=5, minute=0),
     },
-    "enrich-place-geometry": {
-        "task": "app.tasks.enrich_geometry.enrich_place_geometry",
-        "schedule": crontab(hour=4, minute=30),
-    },
+    # ADR-581 D3: "enrich-place-geometry" (04:30) is deleted. It enriched rows
+    # that tenant traffic had seeded and sent their addresses to GeoClient. The
+    # owner's citywide seed (ADR-583) replaces it.
     # Every 10 min — re-enqueues notification deliveries whose .delay() was
     # lost (broker restart, worker killed between the commit and the enqueue).
     # ADR-487 D3: the safety net, not the mechanism — after_commit does the

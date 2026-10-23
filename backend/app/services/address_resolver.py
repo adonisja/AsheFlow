@@ -28,6 +28,14 @@ Not "a row exists". A bootstrap-only row carries bin/lat/lng from AddressPoint
 and no topology at all — enough to place a pin, not enough to route. Serving it
 would produce blank CSV columns nobody could explain, so it is a MISS and the
 caller reaches GeoClient (ADR-316 D2).
+
+READ-ONLY (ADR-581)
+-------------------
+This module never writes PlaceType. ADR-316 D3's write-through stored every
+GeoClient answer for a tenant's address in the owner's store, which made
+PlaceType a list of tenants' delivery addresses (ADR-580). The write-back is
+deleted; a pinned test (test_adr581_no_tenant_writes_placetype) refuses its
+return.
 """
 from __future__ import annotations
 
@@ -50,7 +58,6 @@ class ResolverStats:
     """
     hits: int = 0
     misses: int = 0
-    written_back: int = 0
     failures: int = 0
 
     def as_dict(self) -> dict:
@@ -58,7 +65,6 @@ class ResolverStats:
         return {
             "hits": self.hits,
             "misses": self.misses,
-            "written_back": self.written_back,
             "failures": self.failures,
             "hit_rate": round(self.hits / total, 3) if total else None,
         }
@@ -109,7 +115,6 @@ def resolve_address(
     borough: str = "manhattan",
     *,
     stats: Optional[ResolverStats] = None,
-    write_back: bool = True,
 ):
     """PlaceType first, GeoClient second. Returns GeoClientResult or None.
 
@@ -136,59 +141,9 @@ def resolve_address(
             stats.failures += 1
         return None
 
-    # D3 — write-through, so the cache warms from real traffic as well as from
-    # the nightly pass. Without it a cache only ever holds what a batch job
-    # reached, which is stale for exactly the addresses that are new.
-    if write_back:
-        try:
-            _write_back(db, geo)
-            if stats:
-                stats.written_back += 1
-        except Exception:
-            # Never fail a caller because the cache could not be warmed. No
-            # exception text: the address is PII-adjacent and the URL carries it.
-            logger.warning("address_resolver: write-back failed for one address")
-
+    # ADR-581 D1: READ-ONLY. This used to write the answer back into PlaceType
+    # (ADR-316 D3, "write-through"), which put every tenant's package and tote
+    # addresses into the owner's store. PlaceType is never written from a
+    # tenant path; the cache warms only from the owner's own seed (ADR-580).
     return geo
 
-
-def _write_back(db: Session, geo) -> None:
-    """Persist a GeoClient answer into PlaceType.
-
-    Composes the owning writers rather than issuing SQL: `upsert_building_geometry`
-    COALESCEs (ADR-314 D1c) so this cannot erase what the enrichment pass
-    supplied, and `upsert_segments` owns `street_segments` (ADR-237 D2).
-    """
-    from app.services.place_geometry import upsert_building_geometry
-    from app.services.segment_map import upsert_segments
-    from app.services.derive_block_key import derive_block_key
-
-    parsed = derive_block_key(geo.normalised_address, tba="")
-    block_key = getattr(parsed, "block_key", None)
-    if not block_key:
-        # block_key is NOT NULL on the library and is the routing key; a row
-        # without one would be inert.
-        return
-
-    upsert_building_geometry(db, [{
-        "normalised_address": geo.normalised_address,
-        "block_key": block_key,
-        "lat": geo.lat,
-        "lng": geo.lng,
-        "segment_id": geo.segment_id,
-        "geo_grc": geo.geo_grc,
-    }], mark_enriched=True)
-
-    if geo.segment_id:
-        upsert_segments(db, [{
-            "segment_id":          geo.segment_id,
-            "from_lion_node_id":   geo.from_lion_node_id,
-            "to_lion_node_id":     geo.to_lion_node_id,
-            "block_key":           block_key,
-            "first_cross_street":  geo.first_cross_street,
-            "second_cross_street": geo.second_cross_street,
-            "x_low_address_end":   geo.x_low_address_end,
-            "y_low_address_end":   geo.y_low_address_end,
-            "x_high_address_end":  geo.x_high_address_end,
-            "y_high_address_end":  geo.y_high_address_end,
-        }])

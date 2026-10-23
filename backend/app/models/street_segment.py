@@ -14,9 +14,13 @@ class StreetSegment(Base):
     tenant column would force redundant re-fetching per company and buy nothing.
     Tenant scoping happens at query time via the company's boundary polygon.
 
-    Nothing tenant-derived is stored here: street name and LION ids only. No house
-    numbers, no normalised_address, no package/TBA data — which is precisely what
-    makes a global table safe (PII dim 7).
+    WRITE BOUNDARY (ADR-581). This docstring used to claim "nothing tenant-derived
+    is stored here". That was false: manifest enrichment stored each package's own
+    lat/lng as the segment "midpoint", stamped last_seen_at on every sort, and the
+    resolver wrote back segments for tenants' addresses. Those writers are deleted.
+    The rows already here are still of tenant origin until the owner's citywide
+    seed replaces them (ADR-580 D9); from ADR-581 on, nothing a tenant does writes
+    this table, and a pinned test refuses any new writer.
 
     Why this table exists: route adjacency is derived from segments sharing a LION
     node (ADR-196). But we only ever resolved segments for PACKAGE addresses, so

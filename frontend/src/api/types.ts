@@ -1646,7 +1646,6 @@ export interface BuildingProfileResponse {
   can_verify?: boolean | null;
   verify_blocked_reason?: 'own_submission' | 'already_verified'
     | 'not_a_field_verifier' | 'awaiting_signoff' | null;
-  nomination_status: string | null;
   submitted_by: string | null;
   submitted_by_name: string;
   submitted_at: string | null;
@@ -3484,11 +3483,6 @@ export interface ErasureResult {
 
 // ── ADR-495: collected doors promoted into a company's building profiles ──
 
-export interface AssignCampaignRequest {
-  company_id: string;
-  /** Must be true: the recorded statement that this company's staff collected it. */
-  attest_collected_for_company: boolean;
-}
 
 export type PromotionDoorState = 'ready' | 'conflict' | 'exists' | 'check_address' | 'already_reviewed';
 

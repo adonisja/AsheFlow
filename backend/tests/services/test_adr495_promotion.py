@@ -18,7 +18,7 @@ from app.models.building_profile_verification import BuildingProfileVerification
 from app.models.collection import CollectedAddressProfile, CollectionToken
 from app.models.company import Company
 from app.routers import collection as C
-from app.schemas.collection import AssignCampaignIn, PromoteIn
+from app.schemas.collection import PromoteIn
 from app.services import collection_promotion as promo
 from app.services.door_key import canonical_address
 from tests.conftest import SEED_COMPANY_ID, make_employee, sqlite_mirror_with_defaults
@@ -323,52 +323,6 @@ class TestScope:
             PromoteIn(**body)
 
 
-# ── assignment (D3) ─────────────────────────────────────────────────────────
-
-OWNER = {"id": "cognito-owner-1", "email": "owner@example.com"}
-
-
-def _assign(db, tok, company=SEED_COMPANY_ID, attest=True):
-    return C.assign_campaign(token_id=tok.id, body=AssignCampaignIn(
-        company_id=company, attest_collected_for_company=attest), super_admin=OWNER, db=db)
-
-
-class TestAssignment:
-    def test_assignment_moves_the_campaign_and_its_rows_once(self, db):
-        tok = _token(db, company=None, scope="open", revoked=True)
-        r = _row(db, tok)
-        out = _assign(db, tok)
-        assert out.submission_count == 1 and out.company_id == SEED_COMPANY_ID
-        db.expire_all()
-        tok = db.get(CollectionToken, tok.id)
-        assert (tok.scope, tok.assigned_by) == ("company", "cognito-owner-1")
-        assert db.get(CollectedAddressProfile, r.id).company_id == SEED_COMPANY_ID
-        # ...and is now promotable by the company.
-        assert _door(db, tok).state == promo.READY
-        a = db.query(AuditLog).filter_by(action_type="collection.campaign.assign").one()
-        assert a.actor_id is None and "West" not in json.dumps(a.after_snapshot)
-
-    def test_it_is_one_way(self, db):
-        tok = _token(db, company=None, scope="open", revoked=True)
-        _assign(db, tok)
-        with pytest.raises(HTTPException) as e:
-            _assign(db, db.get(CollectionToken, tok.id), company=OTHER)
-        assert e.value.status_code == 409
-
-    def test_it_requires_the_attestation(self, db):
-        tok = _token(db, company=None, scope="open", revoked=True)
-        with pytest.raises(HTTPException) as e:
-            _assign(db, tok, attest=False)
-        assert e.value.status_code == 422
-
-    def test_a_live_link_must_be_revoked_first(self, db):
-        tok = _token(db, company=None, scope="open")
-        with pytest.raises(HTTPException) as e:
-            _assign(db, tok)
-        assert e.value.status_code == 409
-
-    def test_the_company_must_exist(self, db):
-        tok = _token(db, company=None, scope="open", revoked=True)
-        with pytest.raises(HTTPException) as e:
-            _assign(db, tok, company=uuid.uuid4())
-        assert e.value.status_code == 404
+# ── assignment (D3) was deleted by ADR-581 D8: open campaigns are retired,
+#    so there is nothing to assign. test_adr581_no_tenant_writes_placetype pins
+#    that the route is gone.
