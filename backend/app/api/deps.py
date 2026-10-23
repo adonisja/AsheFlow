@@ -474,6 +474,16 @@ def get_super_admin(current_user: dict = Depends(get_platform_user)) -> dict:
 PLATFORM_GROUPS = frozenset({"super_admin", "platform_support"})
 
 
+def _is_platform_staff(current_user: dict) -> bool:
+    """super_admin or platform_support: the accounts with no tenant (ADR-577).
+
+    PLATFORM_GROUPS, not PLATFORM_ACCOUNT_GROUPS: a surveyor is a platform
+    account too, but nothing behind the tenant gates is meant for it, so it stays
+    refused there exactly as before.
+    """
+    return bool(PLATFORM_GROUPS & set(current_user.get("cognito_groups", [])))
+
+
 def get_platform_staff(current_user: dict = Depends(get_platform_user)) -> dict:
     """Dependency for platform endpoints that only READ (ADR-343 D1).
 
@@ -519,8 +529,6 @@ class RoleChecker:
         self.machine_scopes = set(machine_scopes or ())
 
     def __call__(self, user: dict = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
-        from app.models.employee import Employee
-
         held = user.get("machine_scopes")
         if held is not None:
             if not self.machine_scopes:
@@ -535,14 +543,13 @@ class RoleChecker:
                 )
             return user
 
-        sub   = user.get("id", "")
-        email = user.get("email", "")
-
-        employee = None
-        if sub:
-            employee = db.query(Employee).filter(Employee.cognito_sub == sub).first()
-        if not employee and email:
-            employee = db.query(Employee).filter(Employee.email == email).first()
+        # ADR-577: the shared lookup (sub, then username; never email). This had
+        # its own copy that still fell back to EMAIL, which ADR-560 removed
+        # everywhere else. It was unreachable for a tenant-less caller while
+        # require_configured refused them all; once platform support passes that
+        # gate, a support account sharing an employee's email would have been
+        # role-checked AS that employee.
+        employee, _ = _resolve_employee_from_cognito(user, db)
 
         if employee:
             # DB role is authoritative — JWT claim may be stale after a role change
@@ -581,6 +588,12 @@ def require_configured(
 
     # Resolve the Employee row to get company_id
     employee, _ = _resolve_employee_from_cognito(current_user, db)
+    if not employee and _is_platform_staff(current_user):
+        # ADR-577: platform_support has no Employee row BY DESIGN (get_platform_staff),
+        # so this gate 403'd it before the platform reads it was given (ADR-343) could
+        # run. Passing is not access: every tenant endpoint behind this resolves the
+        # caller's Employee itself, and refuses a caller with none.
+        return
     if not employee:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -746,6 +759,8 @@ class RequireMode:
             return
 
         employee, _ = _resolve_employee_from_cognito(current_user, db)
+        if not employee and _is_platform_staff(current_user):
+            return  # ADR-577, as in require_configured
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
