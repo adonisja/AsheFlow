@@ -255,6 +255,11 @@ def pending_enrichment(db: Session, limit: int, after_id=None) -> list[tuple]:
     return [tuple(r) for r in q.order_by(BuildingProfileLibrary.id).limit(limit).all()]
 
 
+def door_count(db: Session) -> int:
+    """Distinct doors in PlaceType, for the seed's report (ADR-583)."""
+    return db.query(BuildingProfileLibrary).count()
+
+
 def pending_enrichment_count(db: Session) -> int:
     """How many rows still await GeoClient."""
     return (

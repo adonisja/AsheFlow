@@ -99,7 +99,7 @@ class TestReadersUsePlaceTypesOwnDatabase:
         model through `db` must be @reads_placetype, unless it is a writer or
         a seed-only helper (which receive the writer's session)."""
         seed_only = {"upsert_segments", "upsert_building_geometry", "pending_enrichment",
-                     "pending_enrichment_count", "segments_without_nodes", "create_table",
+                     "pending_enrichment_count", "segments_without_nodes", "create_table", "door_count",
                      "walk_connectors", "fetch_blockface"}
         missing = []
         for module in (client, segment_map, place_geometry):
@@ -232,3 +232,23 @@ def test_the_health_probe_rolls_back_and_reports():
     assert placetype_health._can_write(reader) is False
     assert placetype_health._can_write(writer) is True
     assert reader.rolled_back and writer.rolled_back and not writer.committed
+
+
+def test_the_geoclient_limit_is_honoured(monkeypatch):
+    """A --limit 50 trial processed 500 on real Postgres: the limit was checked
+    only after a full batch. Each fetch is now capped at what remains."""
+    asked = []
+
+    def pending(db, size, after_id=None):
+        asked.append(size)
+        return [(i, f"{i} MAIN ST", "Main_St_0", "1") for i in range(size)]
+    monkeypatch.setattr(place_geometry, "pending_enrichment", pending)
+    monkeypatch.setattr(place_geometry, "upsert_building_geometry", lambda *a, **k: 0)
+    monkeypatch.setattr(seed, "geoclient_address", lambda *a: None)
+    monkeypatch.setattr(seed.settings, "geoclient_app_key", "k")
+
+    class DB:
+        def commit(self):
+            pass
+    out = seed.stage_geoclient(DB(), rate=1000, limit=50)
+    assert asked == [50] and out["looked_up"] == 50

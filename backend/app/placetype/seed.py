@@ -12,6 +12,8 @@ Every stage is idempotent and resumable:
 - `geoclient`    every row with geo_enriched_at IS NULL, at <= 12/s (about 22h):
                  geometry onto the building, the span onto its segment;
 - `nodes`        LION nodes for segments that lack them (blockface lookups).
+                 One pass: a lookup can return a neighbouring segment, so
+                 some rows never fill and a re-run repeats them.
 
 The street lexicon (ADR-582) is refreshed locally, not here, because it is a
 committed file: `python scripts/build_street_lexicon.py`, then commit it.
@@ -123,7 +125,9 @@ def addresspoint_rows(raw: list[dict]) -> Iterator[dict]:
 
 def stage_addresspoint(db: Session, boroughs=tuple(BOROUGH_NAMES)) -> dict:
     from app.services.place_geometry import upsert_building_geometry
-    counts = {"read": 0, "written": 0, "skipped": 0}
+    # `submitted` counts rows sent; AddressPoint has several points for some
+    # doors, so `doors` (distinct, after the upserts) is the number to check.
+    counts = {"read": 0, "submitted": 0, "skipped": 0}
     for boro in boroughs:
         offset = 0
         while True:
@@ -134,12 +138,14 @@ def stage_addresspoint(db: Session, boroughs=tuple(BOROUGH_NAMES)) -> dict:
             counts["read"] += len(raw)
             counts["skipped"] += len(raw) - len(rows)
             for i in range(0, len(rows), _BATCH):
-                counts["written"] += upsert_building_geometry(db, rows[i:i + _BATCH])
+                counts["submitted"] += upsert_building_geometry(db, rows[i:i + _BATCH])
                 db.commit()
             logger.info("addresspoint borough=%s offset=%s %s", boro, offset, counts)
             if len(raw) < _PAGE:
                 break
             offset += _PAGE
+    from app.services.place_geometry import door_count
+    counts["doors"] = door_count(db)
     return counts
 
 
@@ -205,7 +211,8 @@ def stage_geoclient(db: Session, rate: float = 12.0, workers: int = 6,
     done = 0
     last_id = None
     while limit is None or done < limit:
-        batch = pending_enrichment(db, _BATCH, after_id=last_id)
+        size = _BATCH if limit is None else min(_BATCH, limit - done)
+        batch = pending_enrichment(db, size, after_id=last_id)
         if not batch:
             break
         last_id = batch[-1][0]
@@ -262,7 +269,14 @@ def stage_nodes(db: Session, limit: Optional[int] = None) -> dict:
             written += walk_connectors(db, triples[i:i + _BATCH], borough=boro)
             db.commit()
             logger.info("nodes borough=%s written=%s of %s", boro, written, len(rows))
-    return {"segments_without_nodes": len(rows), "written": written}
+    # Measured on the local trial (2026-10-23): of 20 lookups, 16 filled the
+    # segment asked about and 4 returned a NEIGHBOURING segment (stored as a
+    # connector row). The 4 originals still lack nodes, so this stage is ONE
+    # PASS, not a queue that drains: a re-run repeats its misses.
+    left = len(segments_without_nodes(db))
+    return {"segments_without_nodes": len(rows), "written": written,
+            "filled": len(rows) - min(left, len(rows)) if limit is None else None,
+            "still_without_nodes": left}
 
 
 STAGES = {"schema": stage_schema, "addresspoint": stage_addresspoint,
