@@ -10,7 +10,7 @@
 #   API and Celery never hold the write credential.
 # - placetype_reader has CONNECT + SELECT only. Its URL goes to
 #   .placetype-reader.env, and with --activate into backend/.env as
-#   PLACETYPE_DATABASE_URL (then redeploy, or restart backend/celery).
+#   PLACETYPE_DATABASE_URL (then recreate backend/celery: a restart keeps the old env).
 #
 # Passwords are generated here, sent to psql on stdin, and never printed.
 # Idempotent: existing roles and database are kept (pass --rotate to reset the
@@ -71,7 +71,10 @@ if [ "$ACTIVATE" = 1 ]; then
   grep -v '^PLACETYPE_DATABASE_URL=' backend/.env > backend/.env.tmp || true
   cat .placetype-reader.env >> backend/.env.tmp
   mv backend/.env.tmp backend/.env
-  echo "backend/.env now points the API at the reader; restart backend, celery_worker and celery_beat"
+  # `docker restart` keeps a container's original environment, so it would NOT
+  # pick this up; the containers must be recreated.
+  echo "backend/.env now points the API at the reader. Recreate (a restart is not enough):"
+  echo "  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --no-deps backend celery_worker celery_beat"
 fi
 
 # The check: the reader must be refused a write.
