@@ -76,8 +76,17 @@ class Target:
     column: str
     kind: str             # "address" | "tba" | "text"
     action: str           # "delete_row" | "null" | "placeholder" | "scrub"
-    shape: str = "scalar" # "scalar" | "list" (ARRAY or JSONB list)
+    shape: str = "scalar" # "scalar" | "list" (ARRAY or JSONB list) | "roster" (see scrub_roster)
     tenant: bool = True   # filter by company_id; False = platform-only table
+    # ADR-587 D5: columns on the same row that locate the same door and go with
+    # it when `action` is "null" (a tote door's coordinates and cross streets).
+    also_null: tuple[str, ...] = ()
+
+
+# ADR-587 D5. Everything on a tote_addresses row that places the customer's
+# door. block_key and segment_id survive: the sort routes on them and neither
+# names a door.
+_TOTE_DOOR_COLUMNS = ("lat", "lng", "first_cross_street", "second_cross_street")
 
 
 REGISTRY: tuple[Target, ...] = (
@@ -87,8 +96,10 @@ REGISTRY: tuple[Target, ...] = (
     Target("rts:RTSPackage",                      "normalised_address", "address", "null"),
     Target("rts:MissingPackage",                  "normalised_address", "address", "null"),
     Target("rts:DamagedPackage",                  "normalised_address", "address", "null"),
-    Target("tote_address:ToteAddress",            "normalised_address", "address", "null"),
-    Target("tote_address:ToteAddress",            "raw_address",        "address", "null"),
+    Target("tote_address:ToteAddress",            "normalised_address", "address", "null",
+           also_null=_TOTE_DOOR_COLUMNS),
+    Target("tote_address:ToteAddress",            "raw_address",        "address", "null",
+           also_null=_TOTE_DOOR_COLUMNS),
     # Rows whose identity is the address.
     Target("building_profile:BuildingProfile",    "normalised_address", "address", "delete_row"),
     Target("collection:CollectedAddressProfile",  "address",            "address", "delete_row"),
@@ -101,6 +112,9 @@ REGISTRY: tuple[Target, ...] = (
     Target("delivery_stop:DeliveryStop",          "tba_numbers",        "tba", "placeholder", "list"),
     Target("tote_ops:PackageRemoval",             "tba_numbers",        "tba", "placeholder", "list"),
     Target("truck_zone:TruckZone",                "package_tbas",       "tba", "placeholder", "list"),
+    # ADR-587 D4: the per-bag roster holds every TBA again, in `tba_numbers` and
+    # in a loose package's `bag_id` ("(loose) TBA…").
+    Target("truck_zone:TruckZone",                "tote_roster",        "tba", "placeholder", "roster"),
     Target("rts:RTSPackage",                      "tba_number",         "tba", "placeholder"),
     Target("rts:MissingPackage",                  "tba_number",         "tba", "placeholder"),
     Target("rts:DamagedPackage",                  "tba_number",         "tba", "placeholder"),
@@ -191,6 +205,43 @@ EXEMPT: dict[tuple[str, str], str] = {
         "the DSP's own truck staging point on a public street, not a customer",
     ("trucks", "initial_anchor2_display_address"):
         "the DSP's own truck staging point on a public street, not a customer",
+    # ADR-587 D6: coordinates and cross streets, now visible to the drift scan.
+    ("building_profiles", "lat"):
+        "goes with its row: a profile is deleted by normalised_address (delete_row)",
+    ("building_profiles", "lng"):
+        "goes with its row: a profile is deleted by normalised_address (delete_row)",
+    ("building_profiles", "initial_anchor_lat"):
+        "the DSP's own truck staging point for the building, not a customer",
+    ("building_profiles", "initial_anchor_lng"):
+        "the DSP's own truck staging point for the building, not a customer",
+    ("anchor_points", "lat"):  "the DSP's own truck staging point, not a customer",
+    ("anchor_points", "lng"):  "the DSP's own truck staging point, not a customer",
+    ("trucks", "initial_anchor_lat"):  "the DSP's own truck staging point, not a customer",
+    ("trucks", "initial_anchor_lng"):  "the DSP's own truck staging point, not a customer",
+    ("trucks", "initial_anchor2_lat"): "the DSP's own truck staging point, not a customer",
+    ("trucks", "initial_anchor2_lng"): "the DSP's own truck staging point, not a customer",
+    ("trucks", "amazon_anchor_lat"):   "the station-assigned staging point, not a customer",
+    ("trucks", "amazon_anchor_lng"):   "the station-assigned staging point, not a customer",
+    ("btr_sheets", "amazon_anchor_lat"): "the station-assigned staging point, not a customer",
+    ("btr_sheets", "amazon_anchor_lng"): "the station-assigned staging point, not a customer",
+    ("truck_zones", "centroid_lat"):
+        "the mean of a whole zone's packages: no single door is recoverable",
+    ("truck_zones", "centroid_lng"):
+        "the mean of a whole zone's packages: no single door is recoverable",
+    ("route_cluster_centroids", "centroid_lat"):
+        "the mean of a whole route cluster: no single door is recoverable",
+    ("route_cluster_centroids", "centroid_lng"):
+        "the mean of a whole route cluster: no single door is recoverable",
+    ("survey_area_blocks", "lat"):  "ADR-513: a public city block's centre, not a customer",
+    ("survey_area_blocks", "lng"):  "ADR-513: a public city block's centre, not a customer",
+    ("building_profile_library", "lat"):
+        "PlaceType (ADR-580): owner-seeded from public city data, no tenant writes (ADR-581)",
+    ("building_profile_library", "lng"):
+        "PlaceType (ADR-580): owner-seeded from public city data, no tenant writes (ADR-581)",
+    ("street_segments", "lat"):  "public NYC street topology",
+    ("street_segments", "lng"):  "public NYC street topology",
+    ("street_segments", "first_cross_street"):  "public NYC street topology",
+    ("street_segments", "second_cross_street"): "public NYC street topology",
 }
 
 # Audit snapshot keys that carry an address or a TBA (ADR-493 D8). Snapshots
@@ -413,6 +464,42 @@ def blank_keys(obj: Any, keys: frozenset[str]) -> tuple[Any, int]:
     return obj, 0
 
 
+def scrub_roster(roster, match=None) -> tuple[list, int]:
+    """ADR-587 D4. A TruckZone.tote_roster is a list of per-bag dicts. Replace
+    each TBA in `tba_numbers` (all of them, or those `match` accepts) with a
+    placeholder, keeping lengths, and drop the TBA from a loose package's
+    `bag_id` ("(loose) TBA…" → "(loose)"). Returns (new roster, hits)."""
+    out, hits = [], 0
+    for entry in list(roster or []):
+        e = dict(entry or {})
+        tbas = list(e.get("tba_numbers") or [])
+        for i, x in enumerate(tbas):
+            if isinstance(x, str) and x and not is_placeholder(x) and (match is None or match(x)):
+                tbas[i] = placeholder()
+                hits += 1
+        if "tba_numbers" in e:
+            e["tba_numbers"] = tbas
+        bag = e.get("bag_id")
+        if isinstance(bag, str) and bag.startswith("(loose) "):
+            loose_tba = bag[len("(loose) "):]
+            if match is None or match(loose_tba):
+                e["bag_id"] = "(loose)"
+                hits += 1
+        out.append(e)
+    return out, hits
+
+
+def roster_tbas(roster) -> list[str]:
+    """Every real TBA a roster holds, for replay (ADR-587 D4)."""
+    out = []
+    for e in roster or []:
+        out.extend(x for x in (e or {}).get("tba_numbers") or [] if isinstance(x, str))
+        bag = (e or {}).get("bag_id")
+        if isinstance(bag, str) and bag.startswith("(loose) "):
+            out.append(bag[len("(loose) "):])
+    return out
+
+
 def placeholder_all(items) -> tuple[list, int]:
     """Replace every real TBA in a list with a placeholder, keeping the length."""
     items = list(items or [])
@@ -442,6 +529,15 @@ def erase(db: Session, req: Request, *, dry_run: bool) -> Result:
         for row in _rows(db, model, req, t.tenant,
                          _prefilter([getattr(model, t.column)], req)):
             val = getattr(row, t.column)
+            if t.shape == "roster":
+                new, n = scrub_roster(val, req.matches)
+                if n:
+                    res.matched_spellings.update(x for x in roster_tbas(val) if req.matches(x))
+                    res.add(label, n)
+                    if not dry_run:
+                        setattr(row, t.column, new)
+                        flag_modified(row, t.column)
+                continue
             if t.shape == "list":
                 items = list(val or [])
                 hit = [i for i, x in enumerate(items) if req.matches(x)]
@@ -465,6 +561,8 @@ def erase(db: Session, req: Request, *, dry_run: bool) -> Result:
                 _delete_with_children(db, row)
             elif t.action == "null":
                 setattr(row, t.column, None)
+                for col in t.also_null:
+                    setattr(row, col, None)
             elif t.action == "placeholder":
                 setattr(row, t.column, placeholder())
 
@@ -608,6 +706,7 @@ def _distinct_values(db: Session, probe: Request) -> set[str]:
         # still paged (ADR-503).
         for row in _rows(db, model, probe, t.tenant):
             val = getattr(row, t.column)
-            vals = val if t.shape == "list" else [val]
+            vals = (roster_tbas(val) if t.shape == "roster"
+                    else val if t.shape == "list" else [val])
             out.update(v for v in (vals or []) if isinstance(v, str) and v and not is_placeholder(v))
     return out

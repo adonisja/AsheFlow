@@ -20,6 +20,8 @@
  *  why the backend requires confirmation and why this returns candidates for a
  *  human to accept.
  */
+import { canonicalAddress } from './addressProfile';
+
 
 /** Amazon tracking numbers: TBA + 12-15 digits. Bounded rather than \d+ so a
  *  barcode's digit run underneath the label cannot be swallowed as one long
@@ -70,9 +72,6 @@ export interface LabelRead {
   /** 0–1, mean confidence of the lines the fields came from. Null when nothing
    *  was found. */
   confidence: number | null;
-  /** Every line read, so the UI can offer "none of these — type it" without
-   *  re-running OCR. */
-  lines: string[];
   warnings: string[];
   /** More than one street-looking line — the UI should ask rather than assume. */
   addressCandidates: string[];
@@ -103,7 +102,7 @@ const clean = (line: string): string =>
 export function parseLabelLines(lines: [string, number][]): LabelRead {
   const read: LabelRead = {
     tba: null, addressLine: null, confidence: null,
-    lines: lines.map(([t]) => t), warnings: [], addressCandidates: [],
+    warnings: [], addressCandidates: [],
   };
 
   const fieldConfs: number[] = [];
@@ -119,7 +118,13 @@ export function parseLabelLines(lines: [string, number][]): LabelRead {
   for (const [text, conf] of lines) {
     const c = clean(text);
     if (!c || findTba(c) !== null) continue;
-    if (STREET_RE.test(c)) candidates.push([c, conf]);
+    // ADR-587 D1: in the address standard, so a name or unit on the street
+    // line never survives; and only street lines are kept at all — there is no
+    // "every line" field, because the label carries the recipient's name.
+    if (STREET_RE.test(c)) {
+      const canon = canonicalAddress(c);
+      if (canon && !candidates.some(([x]) => x === canon)) candidates.push([canon, conf]);
+    }
   }
 
   if (candidates.length > 0) {

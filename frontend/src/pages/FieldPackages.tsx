@@ -367,9 +367,10 @@ function AssignForm() {
       const r = res.data;
       if (r.tba) setTba(r.tba);
       if (r.address_line) setAddress(r.address_line);
-      // Every line OCR read, so a wrong pick is fixed by clicking the right one
-      // rather than re-scanning (and re-billing Textract).
-      setOcrLines(r.lines ?? []);
+      // The other street lines OCR found, so a wrong pick is fixed by clicking
+      // the right one rather than re-scanning (and re-billing Textract). Only
+      // street lines: the server drops the recipient's name (ADR-587 D1).
+      setOcrLines(r.address_candidates ?? []);
 
       // `warnings` distinguishes three outcomes that all set
       // needs_manual_entry, and the UI used to flatten them into one
@@ -563,35 +564,26 @@ function AssignForm() {
           </div>
         </div>
 
-        {/* Every line OCR read. A misassigned field is fixed by clicking the
-            right line rather than re-scanning — which would re-bill Textract
-            and, on a creased label, probably misread it the same way again. */}
-        {ocrLines.length > 0 && (
+        {/* Street lines OCR found (ADR-587 D1: never the recipient's name).
+            A wrong pick is fixed by clicking the right line rather than
+            re-scanning, which would re-bill Textract. Shown only when there is
+            a choice to make. */}
+        {ocrLines.length > 1 && (
           <div className="mt-3 pt-3 border-t border-border">
             <p className="text-xs text-muted-foreground mb-1.5">
-              Read from the label. Click a line to use it:
+              More than one address on the label. Click the delivery address:
             </p>
             <div className="flex flex-wrap gap-1.5">
               {ocrLines.map((line, i) => (
-                <span key={`${line}-${i}`} className="inline-flex items-center rounded-md border border-border overflow-hidden text-xs">
-                  <span className="px-2 py-1 font-mono truncate max-w-[16rem]">{line}</span>
-                  <button
-                    type="button"
-                    onClick={() => setTba(line.replace(/\s+/g, '').toUpperCase())}
-                    className="px-1.5 py-1 border-l border-border hover:bg-accent"
-                    title="Use as tracking number"
-                  >
-                    TBA
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAddress(line)}
-                    className="px-1.5 py-1 border-l border-border hover:bg-accent"
-                    title="Use as address"
-                  >
-                    Addr
-                  </button>
-                </span>
+                <button
+                  key={`${line}-${i}`}
+                  type="button"
+                  onClick={() => setAddress(line)}
+                  className="rounded-md border border-border px-2 py-1 text-xs font-mono truncate max-w-[16rem] hover:bg-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                  title="Use as address"
+                >
+                  {line}
+                </button>
               ))}
             </div>
           </div>

@@ -301,29 +301,6 @@ export default function LabelScanner({ onAccept, compact, label }: {
             </button>
           </div>
 
-          {/* Every line read, so "none of these" never means re-scanning. */}
-          <details className="text-[11px] text-muted-foreground">
-            <summary className="cursor-pointer">All {read.lines.length} lines read</summary>
-            {/* Tap a line to use it as the address. OCR sometimes reads the
-                street correctly but on a line the street-regex rejected (a unit
-                number first, say), and the text is right there.
-
-                SCROLLS inside a fixed height rather than expanding the panel.
-                On a real scan this was 31 lines of OCR noise that pushed the
-                form — and the field being typed into — off the screen. */}
-            <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto font-mono">
-              {read.lines.map((l, i) => (
-                <li key={i}>
-                  <button
-                    type="button" onClick={() => setAddressDraft(l)}
-                    className="w-full break-words rounded px-1 text-left hover:bg-muted"
-                  >
-                    {l}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </details>
         </div>
       )}
     </div>

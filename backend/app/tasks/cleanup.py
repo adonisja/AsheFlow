@@ -428,10 +428,16 @@ def null_expired_delivery_addresses() -> dict:
             .filter(
                 ToteAddress.entry_date < cutoff_date,
                 (ToteAddress.raw_address.isnot(None))
-                | (ToteAddress.normalised_address.isnot(None)),
+                | (ToteAddress.normalised_address.isnot(None))
+                | (ToteAddress.lat.isnot(None))
+                | (ToteAddress.first_cross_street.isnot(None)),
             )
             .update(
-                {ToteAddress.raw_address: None, ToteAddress.normalised_address: None},
+                # ADR-587 D5: the door's coordinates and cross streets go with
+                # its address. The block key and the street segment stay (ADR-279 D4).
+                {ToteAddress.raw_address: None, ToteAddress.normalised_address: None,
+                 ToteAddress.lat: None, ToteAddress.lng: None,
+                 ToteAddress.first_cross_street: None, ToteAddress.second_cross_street: None},
                 synchronize_session=False,
             )
         )
@@ -844,7 +850,7 @@ def _expire_tbas(db, cutoff_date, window_start) -> dict:
     from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
     from app.models.tote_ops import PackageRemoval
     from app.models.truck_zone import TruckZone
-    from app.services.pi_erasure import placeholder, placeholder_all, is_placeholder
+    from app.services.pi_erasure import placeholder, placeholder_all, is_placeholder, scrub_roster
 
     counts: dict[str, int] = {}
 
@@ -927,6 +933,12 @@ def _expire_tbas(db, cutoff_date, window_start) -> dict:
             z.package_tbas = new
             flag_modified(z, "package_tbas")
             bump("truck_zones.package_tbas", n)
+        # ADR-587 D4: the roster repeats every TBA, and a loose bag's id is one.
+        new, n = scrub_roster(z.tote_roster)
+        if n:
+            z.tote_roster = new
+            flag_modified(z, "tote_roster")
+            bump("truck_zones.tote_roster", n)
 
     return counts
 

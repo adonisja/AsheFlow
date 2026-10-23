@@ -419,9 +419,9 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
                     "geoclient_retry",
                     extra={
                         "attempt":    attempt + 1,
-                        "tba":        tba,
+                        # ADR-587 D2: no TBA, and no str(exc) — a requests
+                        # error carries the URL, whose query is the address.
                         "error_type": type(geo_exc).__name__,
-                        "error":      str(geo_exc)[:120],
                     },
                 )
                 if attempt == 2:
@@ -440,7 +440,7 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
         failure_reason = "missing_address"
 
     if failure_reason:
-        logger.debug("package_enrich_failed", extra={"tba": tba, "reason": failure_reason})
+        logger.debug("package_enrich_failed", extra={"reason": failure_reason})
 
     final_lat = geo.lat if geo and geo.lat is not None else amazon_lat
     final_lng = geo.lng if geo and geo.lng is not None else amazon_lng

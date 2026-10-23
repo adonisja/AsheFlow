@@ -114,14 +114,18 @@ class LabelReadResponse(BaseModel):
 
     The walker confirms both fields before anything is written. `confidence`
     and `needs_manual_entry` exist so the UI can flag a shaky read instead of
-    presenting it as fact, and `lines` lets them pick a different line without
-    a second Textract call.
+    presenting it as fact, and `address_candidates` lets them pick a different
+    street line without a second Textract call.
+
+    ADR-587 D1: there is no field for "every line read". The recipient's name
+    is on the label, and a response that echoed all lines handed it to the
+    client, its cache and any log of the response.
     """
     tba: Optional[str] = None
     address_line: Optional[str] = None
     confidence: Optional[float] = None
     needs_manual_entry: bool
-    lines: List[str] = Field(default_factory=list)
+    address_candidates: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 
 
