@@ -35,6 +35,15 @@ SQL_WRITE = re.compile(
 ALLOWED = {
     # segment_map owns street_segments; walk_connectors composes its own writer.
     ("backend/app/services/segment_map.py", "walk_connectors", "upsert_segments"),
+    # ADR-583 D6: the owner's city seed, run as its own process with the writer
+    # role (PLACETYPE_WRITER_URL), never from the API or Celery.
+    ("backend/app/placetype/seed.py", "stage_addresspoint", "upsert_building_geometry"),
+    ("backend/app/placetype/seed.py", "stage_geoclient", "upsert_building_geometry"),
+    ("backend/app/placetype/seed.py", "stage_geoclient", "upsert_segments"),
+    ("backend/app/placetype/seed.py", "stage_nodes", "walk_connectors"),
+    # ADR-583 D4: the health check's write PROBE. Always rolled back; it exists
+    # to prove the API's role is refused, and reports writable=true if not.
+    ("backend/app/services/placetype_health.py", "_can_write", "raw SQL"),
 }
 
 

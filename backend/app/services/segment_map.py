@@ -34,6 +34,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.database import reads_placetype
 from app.models.street_segment import StreetSegment
 # ADR-409 D4. The SAME degradation guard the building-intelligence client uses:
 # PlaceType is one product with two datasets (ADR-237 D6), so both halves must
@@ -107,8 +108,13 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
         set_={
             # Refresh topology only when the new row actually has it — a later
             # partial lookup must not blank out good data.
-            "from_lion_node_id": stmt.excluded.from_lion_node_id,
-            "to_lion_node_id":   stmt.excluded.to_lion_node_id,
+            # ADR-583: COALESCE like every other column. A straight assignment
+            # meant the seed's geoclient stage (spans, no nodes) erased the
+            # nodes the `nodes` stage had found, on any re-run.
+            "from_lion_node_id": func.coalesce(
+                stmt.excluded.from_lion_node_id, StreetSegment.from_lion_node_id),
+            "to_lion_node_id":   func.coalesce(
+                stmt.excluded.to_lion_node_id, StreetSegment.to_lion_node_id),
             # COALESCE, not straight assignment: enrichment supplies the span
             # and a later package-driven upsert does not, so a plain overwrite
             # would blank it out on the next sort. Same reasoning as the
@@ -152,6 +158,7 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
 
 
 @_degrades_to(set)
+@reads_placetype
 def known_segment_ids(db: Session, segment_ids: Iterable[str]) -> set[str]:
     """Which of these segments are already mapped (so we can skip re-fetching)."""
     ids = [str(s) for s in segment_ids if s]
@@ -240,6 +247,7 @@ def walk_connectors(
 
 
 @_degrades_to(dict)
+@reads_placetype
 def load_node_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str]]:
     """LION NODE adjacency for misroute detection (ADR-238 D4b).
 
@@ -284,6 +292,7 @@ def load_node_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, se
 
 
 @_degrades_to(dict)
+@reads_placetype
 def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str]]:
     """Segment adjacency from the map: two segments are adjacent iff they share a
     LION node (ADR-196).
@@ -325,6 +334,7 @@ def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str
 
 
 @_degrades_to(None)
+@reads_placetype
 def by_segment_id(db: Session, segment_id: str):
     """One segment by its LION id, or None.
 
@@ -340,3 +350,24 @@ def by_segment_id(db: Session, segment_id: str):
         .first()
     )
 
+
+
+def segments_without_nodes(db: Session, limit=None) -> list[tuple]:
+    """Segments the owner's seed must still find LION nodes for (ADR-583 D6):
+    `(street_name, first_cross_street, second_cross_street, borough)`."""
+    q = db.query(StreetSegment.street_name, StreetSegment.first_cross_street,
+                 StreetSegment.second_cross_street, StreetSegment.borough).filter(
+        StreetSegment.from_lion_node_id.is_(None),
+        StreetSegment.street_name.isnot(None),
+        StreetSegment.first_cross_street.isnot(None),
+        StreetSegment.second_cross_street.isnot(None))
+    if limit:
+        q = q.limit(limit)
+    return [tuple(r) for r in q.all()]
+
+
+def create_table(bind) -> str:
+    """Create street_segments in PlaceType's own database (ADR-583 D6), from
+    the model. Owner seed only."""
+    StreetSegment.__table__.create(bind, checkfirst=True)
+    return StreetSegment.__tablename__
