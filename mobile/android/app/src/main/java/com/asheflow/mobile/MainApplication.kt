@@ -1,4 +1,4 @@
-package com.asheflowmobile
+package com.asheflow.mobile
 
 import android.app.Application
 import android.app.NotificationChannel

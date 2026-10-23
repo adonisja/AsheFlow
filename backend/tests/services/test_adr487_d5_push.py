@@ -487,7 +487,7 @@ class TestTheAndroidChannelIsOneId:
     """
 
     ROOT = Path(__file__).resolve().parents[3]
-    KT = ROOT / "mobile/android/app/src/main/java/com/asheflowmobile/MainApplication.kt"
+    KT = ROOT / "mobile/android/app/src/main/java/com/asheflow/mobile/MainApplication.kt"
     MANIFEST = ROOT / "mobile/android/app/src/main/AndroidManifest.xml"
 
     def test_kotlin_creates_the_channel_the_backend_names(self):
