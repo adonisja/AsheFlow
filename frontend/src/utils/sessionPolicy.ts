@@ -73,3 +73,20 @@ export function msUntilIdleSignOut(
   if (limits.idleMs === null) return null;
   return Math.max(0, limits.idleMs - (nowMs - lastActivityMs));
 }
+
+/** ADR-576: where every tab records its latest activity.
+ *
+ *  The session is ONE Amplify session shared by every tab (localStorage), but
+ *  each tab used to keep its own idle clock. A tab left open in the background
+ *  reached 30 minutes and called signOut(), which revokes the shared refresh
+ *  token, so the tab the person was actually working in landed on /login with
+ *  no reason given. Idleness is a property of the person, not of one tab. */
+export const LAST_ACTIVITY_KEY = 'asheflow_last_activity';
+
+/** The latest activity across this tab and every other one. A missing or
+ *  unreadable shared value never makes the session look MORE idle: this tab's
+ *  own clock is the floor. */
+export function latestActivity(ownMs: number, sharedRaw: string | null): number {
+  const shared = sharedRaw === null ? NaN : Number(sharedRaw);
+  return Number.isFinite(shared) && shared > ownMs ? shared : ownMs;
+}

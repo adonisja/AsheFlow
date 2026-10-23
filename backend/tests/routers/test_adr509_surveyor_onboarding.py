@@ -130,12 +130,14 @@ class TestInvite:
 
     @pytest.mark.parametrize("over", [
         {"confirm_agreement_signed": False},
-        {"agreement_signed_on": date.today() + timedelta(days=1)},
+        "SIGNED_TOMORROW",   # ADR-573: resolved when the test runs, not at import
         {"email": "not-an-email"},
         {"name": ""},
         {"role": "super_admin"},
     ])
     def test_malformed_invites_are_refused(self, over):
+        if over == "SIGNED_TOMORROW":
+            over = {"agreement_signed_on": date.today() + timedelta(days=1)}
         body = {**dict(name="Pat Lee", email="pat@example.com", agreement_version="v1",
                        agreement_signed_on=date(2026, 10, 14), confirm_agreement_signed=True), **over}
         with pytest.raises(ValidationError):

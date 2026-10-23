@@ -16,10 +16,22 @@ import axiosClient from '../api/axiosClient';
 
 import {
   expiryReason,
+  LAST_ACTIVITY_KEY,
+  latestActivity,
   limitsForGroups,
   msUntilIdleSignOut,
   type SessionLimits,
 } from '../utils/sessionPolicy';
+
+/** ADR-576: activity is shared across tabs, so a background tab can't decide
+ *  the person is idle while they work in another. Storage can throw (private
+ *  mode, blocked site data); then each tab falls back to its own clock. */
+function shareActivity(ms: number): void {
+  try { localStorage.setItem(LAST_ACTIVITY_KEY, String(ms)); } catch { /* own clock only */ }
+}
+function sharedActivity(): string | null {
+  try { return localStorage.getItem(LAST_ACTIVITY_KEY); } catch { return null; }
+}
 
 /** How long before an idle sign-out the warning appears. */
 const WARN_BEFORE_MS = 60 * 1000;
@@ -116,6 +128,7 @@ export function useSessionTimeout(
       // has passed, so the idle clock restarts on every burst of activity.
       if (now - lastActivity.current >= ACTIVITY_THROTTLE_MS) {
         lastActivity.current = now;
+        shareActivity(now);
         // Any activity also clears a visible warning -- the user is plainly
         // still there, so making them click "Stay signed in" would be theatre.
         setIdleWarningSeconds(prev => (prev === null ? prev : null));
@@ -131,7 +144,10 @@ export function useSessionTimeout(
 
     const tick = setInterval(() => {
       const now = Date.now();
-      const reason = expiryReason(limits.current, authTime.current, lastActivity.current, now);
+      // ADR-576: the person's latest activity in ANY tab, not just this one.
+      const last = latestActivity(lastActivity.current, sharedActivity());
+      lastActivity.current = last;
+      const reason = expiryReason(limits.current, authTime.current, last, now);
       if (reason) {
         // `reason` rides on the query string so the sign-in screen can say WHY.
         // A session that vanishes with no explanation reads as a bug.
@@ -140,7 +156,7 @@ export function useSessionTimeout(
         });
         return;
       }
-      const remaining = msUntilIdleSignOut(limits.current, lastActivity.current, now);
+      const remaining = msUntilIdleSignOut(limits.current, last, now);
       setIdleWarningSeconds(
         remaining !== null && remaining <= WARN_BEFORE_MS
           ? Math.ceil(remaining / 1000)
@@ -161,6 +177,7 @@ export function useSessionTimeout(
     idleWarningSeconds,
     staySignedIn: () => {
       lastActivity.current = Date.now();
+      shareActivity(lastActivity.current);
       setIdleWarningSeconds(null);
     },
   };

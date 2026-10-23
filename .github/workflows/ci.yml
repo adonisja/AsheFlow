@@ -234,6 +234,13 @@ jobs:
         working-directory: backend
         run: pip-audit -r requirements.txt
 
+      # ADR-575: the Discord bot is its own image with its own pins, and this job
+      # audited only the backend's, so the bot sat on aiohttp 3.9.3 with 80 known
+      # advisories while backend was patched. Every requirements file gets audited.
+      - name: Audit bot dependencies
+        working-directory: bot
+        run: pip-audit -r requirements.txt
+
   # ── 1b. PROPRIETARY EXPOSURE GATE ──────────────────────────────────────────
   # Fails the build if anything in PROPRIETARY.txt is tracked in the public repo.
   # This is the check that would have caught run_sort.py, persist_zones.py and
