@@ -126,12 +126,8 @@ def test_profile_creation_does_not_require_a_route_or_stop():
 
 # ── D4: the promotion bar is NOT lowered ─────────────────────────────────────
 
-def test_the_library_promotion_gate_is_unchanged():
-    """Do not lower the bar because collection is sparse — the library is
-    cross-company, and a lower bar propagates one company's guess to everyone."""
-    from app.routers import building_profile_library as BPL
-    src = inspect.getsource(BPL)
-    assert 'building_type_status == "locked"' in src
-    assert "collection_source" not in src, (
-        "promotion must not treat a manual entry differently — same bar (D4)"
-    )
+def test_there_is_no_library_promotion_at_all():
+    """ADR-581 D6: promotion from tenant profiles into the cross-company Library
+    is deleted, so no bar (sparse or not) lets one company's guess reach another."""
+    import importlib.util
+    assert importlib.util.find_spec("app.routers.building_profile_library") is None

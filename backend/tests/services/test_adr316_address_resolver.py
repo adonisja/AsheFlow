@@ -101,37 +101,16 @@ def test_geo_message_is_never_served_from_cache():
     assert "geo_message=None" in src.replace(" ", "")
 
 
-# ── D3: write-through ────────────────────────────────────────────────────────
+# ── D3: write-through was DELETED by ADR-581 ─────────────────────────────────
+# The resolver wrote every GeoClient answer for a tenant's address into
+# PlaceType. It is read-only now; the behavioural proof (writers patched to
+# raise) lives in tests/test_adr581_no_tenant_writes_placetype.py.
 
-def test_a_miss_warms_the_cache():
-    """A cache that only fills from a batch job is stale for exactly the
-    addresses that are new."""
+def test_the_resolver_has_no_write_back():
+    assert not hasattr(AR, "_write_back")
     src = _code_only(AR.resolve_address)
-    assert "_write_back" in src
-
-
-def test_the_write_back_cannot_fail_the_caller():
-    src = _code_only(AR.resolve_address)
-    i = src.index("_write_back")
-    assert "try:" in src[:i]
-    assert "except" in src[i:]
-
-
-def test_the_write_back_composes_the_owning_writers():
-    """ADR-314 D1c's COALESCE and ADR-237 D2's ownership already hold in those
-    modules; re-issuing SQL here would duplicate the invariants and drift."""
-    src = _code_only(AR._write_back)
-    assert "upsert_building_geometry" in src
-    assert "upsert_segments" in src
-    for forbidden in ("pg_insert", "db.add(", "on_conflict"):
-        assert forbidden not in src
-
-
-def test_a_row_without_a_block_key_is_not_written():
-    """block_key is NOT NULL on the library and is the routing key; a row
-    without one would be inert."""
-    src = _code_only(AR._write_back)
-    assert "if not block_key" in src
+    for writer in ("upsert_building_geometry", "upsert_segments", "_write_back"):
+        assert writer not in src
 
 
 # ── D4: telemetry ────────────────────────────────────────────────────────────

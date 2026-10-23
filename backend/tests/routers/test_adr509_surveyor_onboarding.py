@@ -103,7 +103,6 @@ class TestInvite:
         assert e.value.status_code == 403 and cognito.calls == []
 
     def test_an_employee_email_is_refused(self, db, cognito, monkeypatch):
-        monkeypatch.setattr(R.settings, "survey_excluded_company_id", str(SEED_COMPANY_ID))
         emp = make_employee(db, role="walker")
         emp.email = "Pat@Example.com"
         db.commit()

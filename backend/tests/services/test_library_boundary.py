@@ -181,14 +181,6 @@ class TestPlaceTypeCanBecomeRemote:
     branch on whether the store is remote.
     """
 
-    @pytest.fixture(autouse=True)
-    def _sharing_on(self, monkeypatch):
-        """These tests exercise the outage guard, which sits BEHIND the ADR-489
-        freeze. With sharing off, every reader returns empty before the guard
-        runs, so the tests below would pass whether or not the guard exists."""
-        from app.core.config import settings
-        monkeypatch.setattr(settings, "library_sharing_enabled", True)
-
     def _client_src(self) -> str:
         from pathlib import Path
         import app.library.client as c
@@ -273,58 +265,12 @@ class TestPlaceTypeCanBecomeRemote:
         )
 
 
-class TestLibrarySharingIsFrozen:
-    """ADR-489 D1. DSP Agreement §7(b) counts an address as Personal Information
-    and forbids aggregating or disclosing it; the Library is a cross-tenant table
-    keyed on address. Until counsel answers, nothing crosses tenants through it."""
+class TestTheFreezeFlagIsGone:
+    """ADR-581 D7: library_sharing_enabled is deleted. The Library holds no
+    tenant-derived intelligence to freeze, and a flag could be flipped back."""
 
-    def test_the_default_is_frozen(self):
+    def test_no_setting_and_no_gate(self):
         from app.core.config import Settings
-        assert Settings.model_fields["library_sharing_enabled"].default is False
-
-    def test_every_reader_returns_empty_without_querying(self):
-        from unittest.mock import MagicMock
         import app.library.client as c
-
-        db = MagicMock()
-        assert c.all_active(db) == []
-        assert c.by_address(db, "1 MAIN ST") is None
-        assert c.by_addresses(db, ["1 MAIN ST"]) == {}
-        db.query.assert_not_called()
-
-    def test_tenant_reads_see_an_empty_library(self):
-        from unittest.mock import MagicMock
-        from fastapi import HTTPException
-        from app.routers import building_profile_library as r
-
-        db = MagicMock()
-        assert r.list_library(caller=MagicMock(), _={}, db=db) == []
-        with pytest.raises(HTTPException) as exc:
-            r.get_library_entry(entry_id=uuid.uuid4(), caller=MagicMock(), _={}, db=db)
-        assert exc.value.status_code == 404
-        db.query.assert_not_called()
-
-    def test_promotion_is_refused_before_any_read_or_write(self):
-        from unittest.mock import MagicMock
-        from fastapi import HTTPException
-        from app.routers import building_profile_library as r
-
-        db = MagicMock()
-        with pytest.raises(HTTPException) as exc:
-            r.promote_to_library(profile_id=uuid.uuid4(), body=None, super_admin={}, db=db)
-        assert exc.value.status_code == 409
-        assert "ADR-489" in exc.value.detail
-        db.query.assert_not_called()
-        db.add.assert_not_called()
-        db.commit.assert_not_called()
-
-    def test_the_freeze_lifts_when_the_setting_is_on(self, monkeypatch):
-        """The flag is the reversible half of D1; prove it actually reverses."""
-        from unittest.mock import MagicMock
-        from app.core.config import settings
-        import app.library.client as c
-
-        monkeypatch.setattr(settings, "library_sharing_enabled", True)
-        db = MagicMock()
-        db.query.return_value.filter.return_value.all.return_value = ["row"]
-        assert c.all_active(db) == ["row"]
+        assert "library_sharing_enabled" not in Settings.model_fields
+        assert not hasattr(c, "_shared_or")

@@ -204,23 +204,13 @@ def test_bin_is_persisted_at_bootstrap_not_deferred_to_enrichment():
     )
 
 
-def test_the_bootstrap_seeds_placetype_with_what_it_already_has():
-    """bin/lat/lng are 3 of PlaceType's 11 geometry columns and arrive FREE.
-    Seeding now means a second tenant in the same zone inherits the identity
-    anchor without any enrichment pass having run — the compounding effect the
-    shared tier exists for."""
+def test_the_bootstrap_never_seeds_placetype():
+    """ADR-581 D2: the zone is the TENANT's choice, so seeding PlaceType from it
+    recorded where a tenant delivers (ADR-580 V5). The bootstrap writes only the
+    tenant's own inventory; PlaceType is filled by the owner's citywide seed."""
     src = _code_only(AI.persist_zone_inventory)
-    assert "upsert_building_geometry" in src
-    assert "placetype_seeded" in src
-
-
-def test_the_placetype_seed_cannot_fail_a_tenant_bootstrap():
-    """PlaceType is a shared resource; a failure to seed it must not fail the
-    tenant's own inventory write."""
-    src = _code_only(AI.persist_zone_inventory)
-    i = src.index("upsert_building_geometry")
-    assert "try:" in src[:i]
-    assert "except" in src[i:]
+    assert "upsert_building_geometry" not in src
+    assert "placetype_seeded" not in src
 
 
 def test_the_address_list_is_materialised_before_being_walked_twice():

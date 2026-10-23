@@ -133,7 +133,6 @@ class BuildingProfileResponse(BaseModel):
     note_verified:       bool
     building_type_status:           str
     building_type_agreement_count:  int
-    nomination_status:   Optional[str] = None
     # ADR-277 D1: address resolution state. The UI needs all three — the tag
     # ("Address not found"), the reason to show beside it, and enough for the
     # captain to decide whether to edit and retry. Without them a rejected row
@@ -236,43 +235,10 @@ class BuildingProfileResponse(BaseModel):
 
 # ── BuildingProfileLibrary schemas ────────────────────────────────────────────
 
-class BuildingProfileLibraryResponse(BaseModel):
-    id:                  UUID
-    normalised_address:  str
-    block_key:           str
-    building_type:       str
-    workload_class:      str
-    operational_note:    Optional[str] = None
-    note_verified:       bool
-    library_status:      str
-    agreement_source_count: int
-    last_conflict_at:    Optional[datetime] = None
-    promoted_at:         Optional[datetime] = None
-    created_at:          datetime
-    updated_at:          datetime
-    protocol_reminder:   str = ""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    @classmethod
-    def from_orm_with_protocol(cls, obj) -> "BuildingProfileLibraryResponse":
-        r = cls.model_validate(obj)
-        r = r.model_copy(update={"protocol_reminder": BUILDING_TYPE_PROTOCOL.get(obj.building_type, "")})
-        return r
 
 
-class BuildingProfileLibraryStatusPatch(BaseModel):
-    """Super admin resolves a conflict or deprecates a library record."""
-    library_status:   str = Field(...)   # "active" | "deprecated"
-    operational_note: Optional[str] = Field(None, max_length=2000)
 
 
-class PromoteToLibraryRequest(BaseModel):
-    """ADR-220 forced note-scrub confirm. On promotion the note is PII-scrubbed;
-    if anything was flagged the super admin must review and re-submit with
-    confirmed_note (their reviewed/edited text) before it enters the retained
-    library."""
-    confirmed_note: Optional[str] = Field(None, max_length=2000)
 
 
 class NoteScrubReview(BaseModel):

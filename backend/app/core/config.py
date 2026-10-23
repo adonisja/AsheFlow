@@ -243,10 +243,8 @@ class Settings(BaseSettings):
     # ADR-504 D8. NYC Building Footprints: BIN -> base_bbl, whose borough+block
     # digits name the city (tax) block a door is on.
     socrata_footprints_dataset: str = "5zhs-2jue"
-    # ADR-504 D1. The owner's delivery company. Its employees may never write the
-    # survey register. When unset, the stricter rule applies: an account linked
-    # to an employee of ANY tenant is refused.
-    survey_excluded_company_id: str = ""
+    # ADR-581 D10: survey_excluded_company_id is removed; the survey register
+    # refuses every tenant's employees, unconditionally.
 
     # Fernet key for encrypting trainee credentials (flex email, clock-in code).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -258,12 +256,9 @@ class Settings(BaseSettings):
     # Flip to True via ADP_ENABLED=true in the environment to enable all /adp endpoints.
     adp_enabled: bool = False
 
-    # ADR-489 D1 — the cross-tenant PlaceType Library neither serves nor accepts
-    # tenant-derived rows while False. DSP Agreement §7(b) counts an address as
-    # Personal Information and forbids aggregating or disclosing it across DSPs;
-    # whether any form of the Library is permitted is with counsel. Flip only on
-    # a written answer — an empty Library is the proven-safe state (ADR-409 D4).
-    library_sharing_enabled: bool = False
+    # ADR-581 D7: `library_sharing_enabled` is removed. The Library no longer holds
+    # tenant-derived intelligence at all (promoted rows deleted, promotion gone),
+    # so there is nothing to freeze; PlaceType is read-only to tenants (ADR-580).
 
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"

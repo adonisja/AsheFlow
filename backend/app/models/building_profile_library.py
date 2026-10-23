@@ -96,11 +96,9 @@ class BuildingProfileLibrary(Base):
     agreement_source_count  = Column(Integer,    server_default="0",       nullable=False)
     last_conflict_at        = Column(DateTime(timezone=True), nullable=True)
 
-    # Promotion audit
-    promoted_from_company_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=True)
-    promoted_at               = Column(DateTime(timezone=True), nullable=True)
-    promoted_by               = Column(UUID(as_uuid=True), nullable=True)   # null = automatic promotion
-    promoted_by_name          = Column(String(100), nullable=True)
+    # ADR-581: the promotion audit columns (promoted_from_company_ids, promoted_at,
+    # promoted_by, promoted_by_name) are dropped. Promotion from tenants is deleted; a column naming
+    # the companies a row came from is exactly the record ADR-580 forbids.
 
     # Operating hours — propagated from locked BuildingProfile on update
     opens_at            = Column(Time, nullable=True)

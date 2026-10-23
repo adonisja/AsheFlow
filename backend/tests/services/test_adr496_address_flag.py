@@ -84,17 +84,25 @@ def _request():
                     "headers": [], "client": ("127.0.0.1", 1), "query_string": b""})
 
 
+
+def _collector(db):
+    """ADR-581 D8: open campaigns are retired, so a submission is a company
+    campaign's, made by a signed-in employee of that company."""
+    from app.models.employee import Employee
+    emp = db.query(Employee).filter(Employee.company_id == SEED_COMPANY_ID).first()
+    return emp or make_employee(db, role="captain")
+
 def _submit(db, *addresses, device="dev-0001"):
     tok = db.query(CollectionToken).first()
     if tok is None:
-        tok = CollectionToken(id=uuid.uuid4(), company_id=None, token="t" * 32, label="L",
-                              scope="open", dataset="addresses", daily_cap=500)
+        tok = CollectionToken(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, token="t" * 32, label="L",
+                              scope="company", dataset="addresses", daily_cap=500)
         db.add(tok)
         db.commit()
     body = CollectionSubmitIn(token=tok.token, device_id=device, profiles=[
         {"address": a, "building_type": "walkup", "workloads": ["door_to_door"],
          "collected_on": date.today().isoformat()} for a in addresses])
-    return C.submit_profiles(request=_request(), body=body, db=db, caller=None)
+    return C.submit_profiles(request=_request(), body=body, db=db, caller=_collector(db))
 
 
 class TestPublicSubmit:

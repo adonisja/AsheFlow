@@ -42,7 +42,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     # to any tenant's employees table. A tenant-scoped sweep must not touch them.
     ("building_profile_library", "created_by_name"):        "Platform super-admin, not a tenant employee.",
     ("building_profile_library", "updated_by_name"):        "Platform super-admin, not a tenant employee.",
-    ("building_profile_library", "promoted_by_name"):       "Platform super-admin, not a tenant employee.",
     ("building_profile_library", "note_verified_by_name"):  "Platform super-admin, not a tenant employee.",
     ("building_profile_library", "hours_verified_by_name"): "Platform super-admin, not a tenant employee.",
 

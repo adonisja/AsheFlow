@@ -116,22 +116,12 @@ class Writer:
     owner: bool
 
 
-def _excluded_company() -> Optional[UUID]:
-    """The configured company, or None for the strict any-tenant rule. A value
-    that is not a UUID also falls back to strict: a typo in config must never
-    quietly let employees write (fail closed)."""
-    raw = (settings.survey_excluded_company_id or "").strip()
-    try:
-        return UUID(raw) if raw else None
-    except ValueError:
-        return None
-
-
 def _assert_not_excluded(db: Session, sub: str) -> None:
+    # ADR-581 D10: an Employee row in ANY tenant refuses the write. This used to
+    # narrow to one configured company (survey_excluded_company_id); a survey
+    # written by any DSP's staff risks being that DSP's Collected Data, which
+    # PlaceType must never hold (ADR-580 D8). No setting can widen it again.
     q = db.query(Employee.id).filter(Employee.cognito_sub == sub)
-    company = _excluded_company()
-    if company is not None:
-        q = q.filter(Employee.company_id == company)
     if q.first() is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -781,11 +771,8 @@ def _cognito():
 
 
 def _employee_email_excluded(db: Session, email: str) -> bool:
-    q = db.query(Employee.id).filter(Employee.email.ilike(email))
-    company = _excluded_company()
-    if company is not None:
-        q = q.filter(Employee.company_id == company)
-    return q.first() is not None
+    # ADR-581 D10: any tenant's employee, not one configured company.
+    return db.query(Employee.id).filter(Employee.email.ilike(email)).first() is not None
 
 
 @router.post("/contributors/invite", response_model=InviteOut, status_code=status.HTTP_201_CREATED)

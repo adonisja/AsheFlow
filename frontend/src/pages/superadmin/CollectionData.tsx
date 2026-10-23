@@ -11,7 +11,6 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
-import AssignCampaign from '../../components/collection/AssignCampaign';
 import CampaignPromotion from '../../components/collection/CampaignPromotion';
 import {
   groupByDoor, compareProfiles, filterProfiles,
@@ -707,6 +706,13 @@ export default function CollectionData({ platform = true }: {
             <ClipboardList className="w-4 h-4" /> Campaigns
           </h2>
 
+          {/* ADR-581 D8: open campaigns are retired, so the platform issues no
+              links. Company admins issue company campaigns from Building survey. */}
+          {platform ? (
+            <p className="text-[11px] text-muted-foreground">
+              Open campaigns are retired. Companies run their own campaigns from Building survey.
+            </p>
+          ) : (<>
           <div className="flex gap-2">
             <input
               value={label}
@@ -745,12 +751,13 @@ export default function CollectionData({ platform = true }: {
               />
             </label>
           </div>
+          </>)}
 
           {loading ? (
             <SkeletonCard />
           ) : tokens.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No campaigns yet. Name one above to get a collection link.
+              {platform ? 'No campaigns.' : 'No campaigns yet. Name one above to get a collection link.'}
             </p>
           ) : (
             <ul className="space-y-1">
@@ -866,12 +873,6 @@ export default function CollectionData({ platform = true }: {
             </div>
           )}
 
-          {/* ADR-495 D3. An open campaign reaches a company's Building
-              Profiles only after the platform hands it to that company. */}
-          {platform && selected && selected.scope === 'open' && selected.company_id === null
-            && selected.dataset === 'addresses' && (
-            <AssignCampaign token={selected} onAssigned={() => void loadTokens()} />
-          )}
           {platform && selected?.assigned_at && (
             <p className="text-[11px] text-muted-foreground">
               Assigned to a company {formatDate(selected.assigned_at)}. Its admins review it from Building survey.

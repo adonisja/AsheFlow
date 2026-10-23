@@ -468,15 +468,6 @@ class MyCampaignOut(BaseModel):
 
 # ── ADR-495: assignment and promotion ──────────────────────────────────────
 
-class AssignCampaignIn(BaseModel):
-    """Hand an open campaign to the one company whose staff collected it (D3)."""
-    model_config = ConfigDict(extra="forbid")
-
-    company_id: UUID
-    # The recorded statement that makes the move custody rather than
-    # disclosure. Required to be TRUE, not merely present (checked in the
-    # router so the 422 can say why).
-    attest_collected_for_company: bool
 
 
 class PromotionDecisionIn(BaseModel):

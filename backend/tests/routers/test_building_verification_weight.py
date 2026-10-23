@@ -238,15 +238,14 @@ class TestD4DisagreementResets:
             "the disagreeing verifier's own row must be weight 1"
         )
 
-    def test_reset_clears_nomination_and_status(self):
+    def test_reset_clears_status(self):
+        # ADR-581: nomination is gone (nothing promotes into PlaceType), so the
+        # reset only has to make a disputed profile unlockable again.
         src = _verify_src()
         assert 'profile.building_type_status          = "pending"' in src, (
             "a disputed profile stays 'verified' and remains lockable"
         )
-        assert "profile.nomination_status             = None" in src, (
-            "a disputed profile stays nominated and can be promoted to "
-            "PlaceType on a contested fact"
-        )
+        assert "nomination_status" not in src
 
     def test_prior_rows_are_discarded(self):
         # They attested to a different building_type and are not evidence for

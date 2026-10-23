@@ -258,34 +258,15 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
         existing.add(a.normalised_address)
         created += 1
 
-    # ADR-314 — seed PlaceType with what AddressPoint already gives us.
-    #
-    # bin/lat/lng are 3 of the 11 geometry columns and arrive FREE with the
-    # enumeration; the other 8 (bbl, zip, segment_id, corner_code, structures,
-    # frontages, geo_grc) need a GeoClient call per address and stay deferred
-    # (ADR-303 D9). Seeding now means the identity anchor exists from day one
-    # and a second tenant in the same zone inherits it without any enrichment
-    # pass having run.
-    #
-    # Best-effort: PlaceType is a shared resource and a failure to seed it must
-    # not fail a tenant's bootstrap.
-    seeded = 0
-    try:
-        from app.services.place_geometry import upsert_building_geometry
-        seeded = upsert_building_geometry(db, [
-            {"normalised_address": a.normalised_address,
-             "block_key": a.block_key,
-             "bin": a.bin, "lat": a.lat, "lng": a.lng}
-            for a in addresses if a.block_key
-        ])
-    except Exception:
-        logger.warning("address_inventory: PlaceType seed failed; tenant rows are unaffected",
-                       exc_info=False)
+    # ADR-581 D2: no PlaceType seed from here. Which addresses this writes is
+    # chosen by the TENANT's zone, so seeding PlaceType from it made the owner's
+    # store a record of where a tenant delivers (ADR-580). PlaceType is filled
+    # only by the owner's citywide seed (ADR-583). The tenant's own inventory
+    # above is unchanged.
 
     return {
         "created": created,
         "skipped_existing": skipped_existing,
         "skipped_unparseable": skipped_unparseable,
         "bin_backfilled": backfilled,
-        "placetype_seeded": seeded,
     }

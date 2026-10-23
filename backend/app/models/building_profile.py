@@ -22,7 +22,7 @@ class BuildingProfile(Base):
     Lifecycle: pending → verified → locked
       agreement_count increments each time a captain confirms the building_type.
       At 2+ agreements → verified; dispatch can then lock.
-      When locked across 2+ independent companies → auto-nominated for BuildingProfileLibrary.
+      Locking never feeds the shared Library (ADR-581).
 
     Submission flow:
       Walker arrives at stop → normalised_address is already in frontend state from
@@ -137,10 +137,6 @@ class BuildingProfile(Base):
     # Building type verification lifecycle
     building_type_status          = Column(String(20), server_default="pending", nullable=False)
     building_type_agreement_count = Column(Integer,    server_default="0",       nullable=False)
-
-    # Promotion pipeline (→ BuildingProfileLibrary)
-    # null = not yet nominated | "nominated" = queued | "promoted" = in library | "rejected" = declined
-    nomination_status   = Column(String(20), nullable=True)
 
     # Note verification audit
     note_verified_by        = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
