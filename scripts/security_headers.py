@@ -24,9 +24,10 @@ ENVIRONMENTS = {
     "prod": {"distribution": "E22NJCS9JDU8FG", "api": "https://api.asheflow.com"},
 }
 
-# D5: ramp. One day first; a year once a week has passed with nothing broken.
-# includeSubDomains and preload are separate decisions (they reach api. too).
-HSTS_MAX_AGE = 86400
+# D5: one year, applied to staging and prod 2026-10-23 (the owner shortened the
+# one-day trial). includeSubDomains and preload are separate decisions (they
+# reach api. too). Lowering this later only takes effect as each browser revisits.
+HSTS_MAX_AGE = 31536000
 
 COGNITO = "https://cognito-idp.us-east-2.amazonaws.com"
 MAPS_SCRIPT = ["https://maps.googleapis.com", "https://maps.gstatic.com"]

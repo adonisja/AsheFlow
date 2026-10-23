@@ -907,6 +907,12 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # ADR-579: the label scan's OCR engine is served from our own origin so it
+      # works offline, and it is gitignored build output (22MB). Without this
+      # step /tesseract/* fell through to index.html and OCR could not start.
+      - name: Vendor the OCR engine
+        run: bash scripts/vendor-tesseract.sh
+
       - name: Build frontend (staging)
         working-directory: frontend
         run: npm run build
@@ -1172,6 +1178,12 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      # ADR-579: the label scan's OCR engine is served from our own origin so it
+      # works offline, and it is gitignored build output (22MB). Without this
+      # step /tesseract/* fell through to index.html and OCR could not start.
+      - name: Vendor the OCR engine
+        run: bash scripts/vendor-tesseract.sh
 
       - name: Build frontend (prod)
         working-directory: frontend
