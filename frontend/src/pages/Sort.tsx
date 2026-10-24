@@ -18,6 +18,7 @@ import {
   Route, Zap, Download,
 } from 'lucide-react';
 import ReportDamagedModal from '../components/ReportDamagedModal';
+import DoorPicker from '../components/DoorPicker';
 import { formatDayHeader, getLocalYMD } from '../utils/date';
 
 // How each truck's territory seed was resolved (ADR-169 fallback chain)
@@ -30,7 +31,7 @@ const ANCHOR_SOURCE_LABELS: Record<string, string> = {
 import type {
   SortRunResponse, SortRunAccepted, SortRunStatusResponse,
   ManifestPreviewResponse, ManifestPreviewRow, ManifestPackagePatchResponse,
-  SortPreviewResponse,
+  SortPreviewResponse, PackageDoorPatch,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -46,9 +47,13 @@ interface TruckAssignment {
 }
 
 const GEOCODE_REASON_LABELS: Record<string, string> = {
+  // ADR-584: resolved against PlaceType's city doors, never GeoClient.
+  not_in_placetype:    'Needs a door',
+  no_borough_match:    'Needs a door (borough unclear)',
+  missing_address:     'No address',
+  // Manifests enriched before ADR-584.
   geoclient_no_match:  'No match',
   geoclient_error:     'API error',
-  missing_address:     'No address',
   block_key_parse:     'Parse failed',
 };
 
@@ -94,23 +99,25 @@ function PackageAddressEditor({
     );
   }
 
-  const handleSave = async () => {
-    if (!address.trim()) return;
+  const send = async (body: PackageDoorPatch) => {
     setSaving(true);
     setSaveError(null);
     try {
       const { data } = await axiosClient.patch<ManifestPackagePatchResponse>(
         `/sort/manifest/${sortDate}/package/${encodeURIComponent(row.tba)}`,
-        { corrected_address: address.trim() },
+        body,
       );
       onPatched(data);
-      setEditing(false);
+      // A corrected address that still matches no door stays open, with the picker.
+      if (data.door_status !== 'unresolved') setEditing(false);
+      else setSaveError('Still no matching door. Pick one below or pin it.');
     } catch (e: unknown) {
       setSaveError(errorText(e, 'Save failed.'));
     } finally {
       setSaving(false);
     }
   };
+  const handleSave = () => { if (address.trim()) void send({ corrected_address: address.trim() }); };
 
   return (
     <div className="flex flex-col gap-1 py-0.5">
@@ -139,6 +146,13 @@ function PackageAddressEditor({
         </button>
       </div>
       {saveError && <p className="text-[10px] text-danger">{saveError}</p>}
+      <DoorPicker
+        lat={row.lat}
+        lng={row.lng}
+        busy={saving}
+        onPick={(d) => void send({ door: { borough: d.borough, address: d.address } })}
+        onPin={(lat, lng) => void send({ pin: { lat, lng } })}
+      />
     </div>
   );
 }

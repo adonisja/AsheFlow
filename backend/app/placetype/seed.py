@@ -7,6 +7,7 @@ Run as its own process, with the WRITER role, never from the API or Celery:
 
 Every stage is idempotent and resumable:
 - `schema`       creates the two PlaceType tables from the ORM models (no drift);
+- `indexes`      adds indexes the models gained after the tables were created;
 - `addresspoint` all 967,871 NYC addresses, per borough, in the address
                  standard (ADR-582), with BIN, lat/lng, ZIP and block key;
 - `geoclient`    every row with geo_enriched_at IS NULL, at <= 12/s (about 22h):
@@ -67,6 +68,12 @@ def stage_schema(db: Session) -> dict:
     from app.services import place_geometry, segment_map
     bind = db.get_bind()
     return {"tables": [place_geometry.create_table(bind), segment_map.create_table(bind)]}
+
+
+def stage_indexes(db: Session) -> dict:
+    """ADR-584: indexes the model gained after the table was created."""
+    from app.services import place_geometry
+    return {"indexes": place_geometry.create_indexes(db.get_bind())}
 
 
 # ── stage: addresspoint ─────────────────────────────────────────────────────
@@ -279,7 +286,7 @@ def stage_nodes(db: Session, limit: Optional[int] = None) -> dict:
             "still_without_nodes": left}
 
 
-STAGES = {"schema": stage_schema, "addresspoint": stage_addresspoint,
+STAGES = {"schema": stage_schema, "indexes": stage_indexes, "addresspoint": stage_addresspoint,
           "geoclient": stage_geoclient, "nodes": stage_nodes}
 
 

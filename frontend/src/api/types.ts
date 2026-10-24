@@ -1801,6 +1801,9 @@ export interface ManifestPreviewRow {
   bag_id: string | null;
   enriched: boolean;
   geocode_reason: string | null;
+  /** ADR-584: resolved | unresolved | pinned. Absent on manifests from before. */
+  door_status?: string | null;
+  borough?: string | null;
 }
 
 export interface ManifestPreviewResponse {
@@ -1823,7 +1826,24 @@ export interface ManifestPackagePatchResponse {
   lng: number | null;
   enriched: boolean;
   geocode_reason: string | null;
+  door_status?: string | null;
+  borough?: string | null;
 }
+
+/** GET /placetype/doors/nearby — public city doors near a point (ADR-584 D4). */
+export interface NearbyDoor {
+  address: string;
+  borough: string;
+  distance_m: number;
+  lat: number;
+  lng: number;
+}
+
+/** PATCH /sort/manifest/{date}/package/{tba}: exactly one of the three. */
+export type PackageDoorPatch =
+  | { corrected_address: string }
+  | { door: { borough: string; address: string } }
+  | { pin: { lat: number; lng: number } };
 
 export interface SortPreviewAssignment {
   truck_id: string;

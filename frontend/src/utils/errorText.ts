@@ -48,6 +48,10 @@ export function errorText(e: unknown, fallback: string): string {
     if (parts.length) return parts.join('; ');
   }
   if (detail != null && typeof detail === 'object') {
+    // A structured detail with its own sentence (e.g. ADR-584's 409:
+    // {message, held, tbas}) reads as that sentence, not as JSON.
+    const msg = (detail as { message?: unknown }).message;
+    if (typeof msg === 'string' && msg.trim()) return msg;
     try { return JSON.stringify(detail); } catch { /* fall through */ }
   }
   return fallback;

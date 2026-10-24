@@ -40,6 +40,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.database import reads_placetype
+from app.library.client import _degrades_to
 from app.models.building_profile_library import BuildingProfileLibrary
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,16 @@ def pending_enrichment_count(db: Session) -> int:
     )
 
 
+def create_indexes(bind) -> list[str]:
+    """Add any index the model declares that PlaceType's table lacks (ADR-584).
+    `create_table` skips an existing table, so a later index needs this."""
+    made = []
+    for ix in BuildingProfileLibrary.__table__.indexes:
+        ix.create(bind, checkfirst=True)
+        made.append(ix.name)
+    return made
+
+
 def create_table(bind) -> str:
     """Create the building table in PlaceType's own database (ADR-583 D6),
     from the model, so the two can't drift. Owner seed only."""
@@ -338,3 +349,107 @@ def enriched_building_with_segment(db: Session, normalised_address: str):
             return None
 
     return building, by_segment_id(db, building.segment_id)
+
+
+# ── ADR-584: door reads for the tenant resolver and the picker ───────────────
+
+def _house(address: str) -> str:
+    """The standard is "{HOUSE} {STREET}" and a house carries no space (ADR-582)."""
+    return (address or "").partition(" ")[0]
+
+
+@_degrades_to(None)
+@reads_placetype
+def door_with_segment(db: Session, borough: Optional[str], address: str):
+    """(building, segment or None) for a door, or None. ADR-584 D1.
+
+    A door that EXISTS is a hit, enriched or not: AddressPoint's base row
+    already places it (BIN, lat/lng, block key). Topology comes with it once the
+    seed's GeoClient pass has reached it. Unlike `enriched_building_with_segment`,
+    which treated a base-only row as a miss for the GeoClient-backed resolver.
+
+    With a borough: (borough, address), else the same house on the same block
+    in that borough. Without one: the address only if it is unique citywide.
+    """
+    from app.services.derive_block_key import derive_block_key
+    from app.services.segment_map import by_segment_id
+
+    q = db.query(BuildingProfileLibrary).filter(
+        BuildingProfileLibrary.normalised_address == address)
+    if borough:
+        building = q.filter(BuildingProfileLibrary.borough == borough).first()
+    else:
+        rows = q.limit(2).all()
+        building = rows[0] if len(rows) == 1 else None
+
+    if building is None and borough:
+        block_key = getattr(derive_block_key(address, tba=""), "block_key", None)
+        house = _house(address)
+        if block_key and house:
+            building = next(
+                (c for c in db.query(BuildingProfileLibrary).filter(
+                    BuildingProfileLibrary.borough == borough,
+                    BuildingProfileLibrary.block_key == block_key).all()
+                 if _house(c.normalised_address) == house),
+                None)
+    if building is None:
+        return None
+    segment = by_segment_id(db, building.segment_id) if building.segment_id else None
+    return building, segment
+
+
+def _box(lat: float, lng: float, metres: float):
+    import math
+    dlat = metres / 111_320.0
+    dlng = metres / (111_320.0 * max(math.cos(math.radians(lat)), 0.01))
+    return lat - dlat, lat + dlat, lng - dlng, lng + dlng
+
+
+def _metres(lat1, lng1, lat2, lng2) -> float:
+    import math
+    x = math.radians(lng2 - lng1) * math.cos(math.radians((lat1 + lat2) / 2))
+    y = math.radians(lat2 - lat1)
+    return 6_371_000.0 * math.hypot(x, y)
+
+
+@_degrades_to(list)
+@reads_placetype
+def doors_near(db: Session, lat: float, lng: float, *, radius_m: float = 150.0,
+               limit: int = 10, street: Optional[str] = None) -> list[dict]:
+    """The nearest doors to a point, for the tenant's picker (ADR-584 D4).
+
+    Bounded on both axes (radius and count) so it can never dump an area
+    (ADR-580 D6). Returns only what a picker shows: the door, its borough, its
+    distance and its position.
+    """
+    lat0, lat1, lng0, lng1 = _box(lat, lng, radius_m)
+    q = db.query(BuildingProfileLibrary.normalised_address, BuildingProfileLibrary.borough,
+                 BuildingProfileLibrary.lat, BuildingProfileLibrary.lng).filter(
+        BuildingProfileLibrary.lat.between(lat0, lat1),
+        BuildingProfileLibrary.lng.between(lng0, lng1),
+        BuildingProfileLibrary.borough.isnot(None))
+    if street:
+        q = q.filter(BuildingProfileLibrary.normalised_address.ilike(f"% {street.strip()}%"))
+    found = []
+    for address, borough, dlat, dlng in q.limit(2000).all():
+        d = _metres(lat, lng, dlat, dlng)
+        if d <= radius_m:
+            found.append({"address": address, "borough": borough,
+                          "distance_m": round(d, 1), "lat": dlat, "lng": dlng})
+    found.sort(key=lambda r: r["distance_m"])
+    return found[:limit]
+
+
+@_degrades_to(dict)
+@reads_placetype
+def zip_boroughs(db: Session) -> dict[str, str]:
+    """ZIP → borough code, from PlaceType's own doors (ADR-584 D2). A ZIP that
+    spans two boroughs is left out, so it can't decide anything."""
+    rows = (db.query(BuildingProfileLibrary.zip_code, BuildingProfileLibrary.borough)
+            .filter(BuildingProfileLibrary.zip_code.isnot(None),
+                    BuildingProfileLibrary.borough.isnot(None))
+            .distinct().all())
+    seen: dict[str, set] = {}
+    for z, b in rows:
+        seen.setdefault(z, set()).add(b)
+    return {z: next(iter(bs)) for z, bs in seen.items() if len(bs) == 1}

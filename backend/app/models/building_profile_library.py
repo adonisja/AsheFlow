@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Float, Integer, Text, Time, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, Float, Index, Integer, Text, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.sql import func
 import uuid
@@ -32,6 +32,10 @@ class BuildingProfileLibrary(Base):
         # ADR-583 D5: door identity is (borough, canonical address) (ADR-582 D3).
         # The address alone made 100 BROADWAY in Manhattan and in Brooklyn one row.
         UniqueConstraint("borough", "normalised_address", name="uq_building_profile_library_door"),
+        # ADR-584: the door resolver's house-on-block fallback, and the picker's
+        # nearby-doors box. Without them both scan ~946k rows per lookup.
+        Index("ix_building_profile_library_borough_block", "borough", "block_key"),
+        Index("ix_building_profile_library_lat_lng", "lat", "lng"),
     )
 
     id                  = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

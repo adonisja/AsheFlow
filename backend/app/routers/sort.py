@@ -17,16 +17,17 @@ import tempfile
 import uuid as _uuid_mod
 from datetime import date, datetime
 from uuid import UUID
-from typing import Optional
+from typing import Literal, Optional
 
 import redis as redis_lib
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
 from app.core.config import settings
+from app.services.free_text import escape_for_spreadsheet
 from app.services.constants import ROUTE_LEAD_ROLES, TRUCK_SCOPED_ROLES
 from app.database import get_db
 from app.models.company import CompanyConfig, CompanyZone
@@ -101,8 +102,10 @@ class ManifestPreviewRow(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     bag_id: Optional[str] = None
-    enriched: bool   # False when block_key is None (geocoding failed)
-    geocode_reason: Optional[str] = None     # failure code when not enriched
+    enriched: bool   # False when the package still needs a door (ADR-584)
+    geocode_reason: Optional[str] = None     # why, when it does
+    door_status: Optional[str] = None        # resolved | unresolved | pinned (ADR-584)
+    borough: Optional[str] = None
 
 
 class ManifestPreviewResponse(BaseModel):
@@ -116,8 +119,33 @@ class ManifestPreviewResponse(BaseModel):
     preview_rows: list[ManifestPreviewRow]
 
 
+class PickedDoor(BaseModel):
+    """A door the tenant picked from GET /placetype/doors/nearby (ADR-584 D4)."""
+    model_config = ConfigDict(extra="forbid")
+    borough: Literal["1", "2", "3", "4", "5"]
+    address: str = Field(..., min_length=3, max_length=200)
+
+
+class MapPin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lat: float = Field(..., ge=40.47, le=40.93)
+    lng: float = Field(..., ge=-74.27, le=-73.68)
+
+
 class ManifestPackagePatchRequest(BaseModel):
-    corrected_address: str
+    """Exactly one of: a corrected address (resolved through PlaceType), a
+    picked door, or a map pin (ADR-584 D4)."""
+    model_config = ConfigDict(extra="forbid")
+    corrected_address: Optional[str] = Field(None, min_length=3, max_length=300)
+    door: Optional[PickedDoor] = None
+    pin: Optional[MapPin] = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self):
+        given = [x for x in (self.corrected_address, self.door, self.pin) if x is not None]
+        if len(given) != 1:
+            raise ValueError("send exactly one of corrected_address, door or pin")
+        return self
 
 
 class ManifestPackagePatchResponse(BaseModel):
@@ -129,6 +157,8 @@ class ManifestPackagePatchResponse(BaseModel):
     lng: Optional[float] = None
     enriched: bool
     geocode_reason: Optional[str] = None
+    door_status: Optional[str] = None      # resolved | unresolved | pinned (ADR-584)
+    borough: Optional[str] = None
 
 
 class SortPreviewAssignment(BaseModel):
@@ -191,38 +221,11 @@ class ManifestStatusResponse(BaseModel):
     packages_total: int | None = None      # total submitted to enrichment task
 
 
-# ── Borough inference ─────────────────────────────────────────────────────────
-# Approximate bounding boxes for NYC boroughs (lat_min, lat_max, lng_min, lng_max).
-# Used only when admin has not configured geoclient_borough on CompanyConfig.
-# Non-NYC deployments will fall back to "manhattan" which callers can override
-# by setting CompanyConfig.geoclient_borough explicitly.
-_BOROUGH_BOXES = [
-    ("manhattan", 40.700, 40.882, -74.020, -73.907),
-    ("brooklyn",  40.551, 40.740, -74.042, -73.833),
-    ("queens",    40.541, 40.800, -73.962, -73.700),
-    ("bronx",     40.785, 40.917, -73.933, -73.765),
-    ("staten island", 40.477, 40.651, -74.259, -74.034),
-]
-
-
-def _infer_borough(packages: list) -> str | None:
-    """Return the NYC borough name that contains the median package coordinates.
-
-    Uses RawPackage objects (have .lat/.lng attributes).
-    Returns None if coordinates don't fall within any known borough box.
-    """
-    if not packages:
-        return None
-    lats = sorted(p.lat for p in packages if p.lat)
-    lngs = sorted(p.lng for p in packages if p.lng)
-    if not lats or not lngs:
-        return None
-    median_lat = lats[len(lats) // 2]
-    median_lng = lngs[len(lngs) // 2]
-    for name, lat_min, lat_max, lng_min, lng_max in _BOROUGH_BOXES:
-        if lat_min <= median_lat <= lat_max and lng_min <= median_lng <= lng_max:
-            return name
-    return None
+# ── Borough ───────────────────────────────────────────────────────────────────
+# ADR-584 D2: a package's borough comes from its ZIP or its nearest PlaceType
+# door (services/door_resolver.borough_for); the company's configured borough is
+# the last resort. The median-coordinate box inference that lived here is gone:
+# one borough per manifest is wrong for a station straddling two.
 
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
@@ -385,10 +388,10 @@ def upload_manifest(
         date_str = sort_date.isoformat()
         tid_str = str(truck_id)
 
-        cfg = db.query(CompanyConfig).filter(
-            CompanyConfig.company_id == caller.company_id).first()
-        borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough
-                   else _infer_borough(result.packages) or "manhattan")
+        # ADR-584 D2: only the company's configured borough is passed; each
+        # package's own borough comes from its ZIP or its nearest door.
+        from app.services.door_resolver import company_borough
+        borough = company_borough(db, caller.company_id)
 
         # NAMESPACED DATE, not a separate task. enrich_manifest_packages derives
         # its Redis key internally as manifest:{company}:{sort_date} and takes
@@ -471,15 +474,10 @@ def upload_manifest(
         ).delete(synchronize_session="fetch")
     db.commit()
 
-    # Resolve borough for GeoClient enrichment.
-    # Priority: 1) admin-configured value on CompanyConfig
-    #           2) inferred from median package latitude/longitude
-    #           3) platform default "manhattan"
-    cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
-    if cfg and cfg.geoclient_borough:
-        borough = cfg.geoclient_borough
-    else:
-        borough = _infer_borough(result.packages) or "manhattan"
+    # ADR-584 D2: the company's configured borough (a code, or None) is only the
+    # last resort; each package's borough comes from its ZIP or nearest door.
+    from app.services.door_resolver import company_borough
+    borough = company_borough(db, caller.company_id)
 
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
@@ -677,7 +675,8 @@ def get_manifest_status(
                 failed_count=0,
                 failed_reason="Manifest data in cache is corrupted — re-upload the file.",
             )
-        failed_count = sum(1 for p in packages if p.get("block_key") is None)
+        from app.services.door_resolver import needs_attention
+        failed_count = sum(1 for p in packages if needs_attention(p))
         logger.info(
             "manifest_status_ready",
             extra={
@@ -744,7 +743,7 @@ def get_manifest_preview(
 
     Query params:
       page        — 1-indexed page number (default 1)
-      failed_only — when True, only return packages with block_key=None
+      failed_only — when True, only packages that still need a door (ADR-584)
     """
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
@@ -763,10 +762,11 @@ def get_manifest_preview(
             detail="Manifest data is corrupted — re-upload the file.",
         )
 
-    enriched_count = sum(1 for p in packages if p.get("block_key") is not None)
-    failed_count = len(packages) - enriched_count
+    from app.services.door_resolver import needs_attention
+    failed_count = sum(1 for p in packages if needs_attention(p))
+    enriched_count = len(packages) - failed_count
 
-    visible = [p for p in packages if p.get("block_key") is None] if failed_only else packages
+    visible = [p for p in packages if needs_attention(p)] if failed_only else packages
     total_pages = max(1, (len(visible) + _PREVIEW_PAGE_SIZE - 1) // _PREVIEW_PAGE_SIZE)
     page = max(1, min(page, total_pages))
     start = (page - 1) * _PREVIEW_PAGE_SIZE
@@ -781,8 +781,10 @@ def get_manifest_preview(
             lat=p.get("lat"),
             lng=p.get("lng"),
             bag_id=p.get("bag_id"),
-            enriched=p.get("block_key") is not None,
+            enriched=not needs_attention(p),
             geocode_reason=p.get("geocode_reason"),
+            door_status=p.get("door_status"),
+            borough=p.get("borough"),
         )
         for p in page_items
     ]
@@ -842,13 +844,18 @@ def download_enriched_manifest(
               "from_lion_node_id", "to_lion_node_id",
               "x_low_address_end", "y_low_address_end",
               "x_high_address_end", "y_high_address_end",
-              "lat", "lng", "geo_warning", "geocode_reason"]
+              "lat", "lng", "geo_warning", "geocode_reason",
+              "door_status", "borough"]                     # ADR-584
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for p in packages:
-        writer.writerow({f: p.get(f, "") for f in fields})
+        # ADR-584 / ADR-435 D10: raw_address is the manifest's own text, so a
+        # cell starting = + - @ would run as a formula when dispatch opens the
+        # file. Text cells only: a lng of -73.98 is a number, not a formula.
+        writer.writerow({f: (escape_for_spreadsheet(v) if isinstance(v, str) else v)
+                         for f in fields for v in [p.get(f, "")]})
 
     buf.seek(0)
     filename = f"enriched_manifest_{date_str}.csv"
@@ -871,19 +878,15 @@ def patch_manifest_package(
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_sort),
 ):
-    """Re-geocode a single failed package with a corrected address.
+    """Resolve one held package: a corrected address, a picked door or a pin.
 
-    Reads the enriched manifest from Redis, finds the package by TBA,
-    re-runs GeoClient + derive_block_key with the corrected address, updates
-    the package in-place, and writes the manifest back to Redis.
-
-    Only updates the package in the Redis cache — the DB is not touched until
-    sort runs. If GeoClient still cannot resolve the address, the package
-    remains failed (block_key=None) and the response reflects that.
+    ADR-584 D4. Reads the day's manifest from Redis, resolves through PlaceType
+    only (no GeoClient), and writes the package back. The choice lives in that
+    day's manifest (24h) and nowhere else. A corrected address that still
+    matches no door stays held, with the nearby doors to pick from.
     """
-    from app.tasks.enrich_manifest import _geoclient_normalise
-    from app.services.derive_block_key import derive_block_key, ParsedBlock
-    from app.models.company import CompanyConfig
+    from app.database import PlaceTypeSession
+    from app.services import door_resolver as DR
 
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
@@ -900,75 +903,58 @@ def patch_manifest_package(
     except json.JSONDecodeError:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Manifest data corrupted.")
 
-    # Find the package
     pkg_index = next((i for i, p in enumerate(packages) if p.get("tba") == tba), None)
     if pkg_index is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"TBA {tba} not found in manifest.")
+    pkg = packages[pkg_index]
 
-    # Resolve borough for this company
-    from app.database import get_db as _get_db
-    db_gen = _get_db()
-    db = next(db_gen)
+    pt = PlaceTypeSession()
     try:
-        cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
-        borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
+        if body.door is not None:
+            door = DR.door_from_pick(pt, body.door.borough, body.door.address)
+            if door is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                    detail="That door isn't in PlaceType. Pick one from the list.")
+            fields = DR.door_fields(door)
+        elif body.pin is not None:
+            fields = DR.pin_fields(pt, body.pin.lat, body.pin.lng, pkg.get("raw_address"))
+        else:
+            from app.database import get_db as _get_db
+            db_gen = _get_db()
+            db = next(db_gen)
+            try:
+                default = DR.company_borough(db, caller.company_id)
+            finally:
+                db_gen.close()
+            result = DR.resolve_door(pt, body.corrected_address.strip(), lat=pkg.get("lat"),
+                                     lng=pkg.get("lng"), default_borough=default)
+            fields = DR.door_fields(result) if isinstance(result, DR.Door) else DR.miss_fields(result)
     finally:
-        try:
-            next(db_gen)
-        except StopIteration:
-            pass
+        pt.close()
 
-    address = body.corrected_address.strip()
-    geo = _geoclient_normalise(address, borough=borough)
-
-    block_key: Optional[str] = None
-    normalised_address: Optional[str] = None
-    lat = packages[pkg_index].get("lat")
-    lng = packages[pkg_index].get("lng")
-
-    if geo:
-        normalised_address = geo.normalised_address
-        if geo.lat is not None:
-            lat = geo.lat
-        if geo.lng is not None:
-            lng = geo.lng
-        bk = derive_block_key(geo.normalised_address, tba=tba)
-        if isinstance(bk, ParsedBlock):
-            block_key = bk.block_key
-
-    # Update the package in-place and write back to Redis (preserve existing TTL).
-    # Preserve raw_address (original manifest value) and clear geocode_reason on success.
-    failure_reason = None if block_key else "geoclient_no_match"
+    for k in ("lat", "lng"):
+        if fields.get(k) is None:
+            fields[k] = pkg.get(k)
     ttl = r.ttl(key)
-    packages[pkg_index] = {
-        **packages[pkg_index],
-        "raw_address":        packages[pkg_index].get("raw_address") or address,
-        "normalised_address": normalised_address,
-        "block_key":          block_key,
-        "lat":                lat,
-        "lng":                lng,
-        "geocode_reason":     failure_reason,
-    }
+    packages[pkg_index] = {**pkg, **fields}
     r.setex(key, max(ttl, _REDIS_TTL_SECONDS), json.dumps(packages))
 
     logger.info(
         "manifest_package_patched",
-        extra={
-            "company_id": cid_str,
-            "sort_date":  date_str,
-            "resolved":   block_key is not None,
-        },
+        extra={"company_id": cid_str, "sort_date": date_str, "door_status": fields["door_status"]},
     )
-
+    p = packages[pkg_index]
     return ManifestPackagePatchResponse(
         tba=tba,
-        raw_address=packages[pkg_index].get("raw_address"),
-        normalised_address=normalised_address,
-        block_key=block_key,
-        lat=lat,
-        lng=lng,
-        enriched=block_key is not None,
-        geocode_reason=failure_reason,
+        raw_address=p.get("raw_address"),
+        normalised_address=p.get("normalised_address"),
+        block_key=p.get("block_key"),
+        lat=p.get("lat"),
+        lng=p.get("lng"),
+        enriched=not DR.is_held(p),
+        geocode_reason=p.get("geocode_reason"),
+        door_status=p.get("door_status"),
+        borough=p.get("borough"),
     )
 
 
@@ -992,9 +978,27 @@ def run_sort_endpoint(
     cid_str = str(caller.company_id)
     date_str = body.sort_date.isoformat()
 
+    r = _redis()
+
+    # ADR-584 D4: a package PlaceType couldn't place is held until dispatch picks
+    # a door or drops a pin. Checked BEFORE the raw addresses are stripped below,
+    # while the picker can still show what the manifest said.
+    from app.services.door_resolver import is_held
+    try:
+        _pkgs = json.loads(r.get(_manifest_key(cid_str, date_str)) or "[]")
+    except json.JSONDecodeError:
+        _pkgs = []
+    held = [p.get("tba") for p in _pkgs if is_held(p)]
+    if held:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": f"{len(held)} package(s) need a door before the sort can run. "
+                               "Pick a door or drop a pin for each under Unresolved doors.",
+                    "held": len(held), "tbas": held[:50]},
+        )
+
     # Write running sentinel before dispatching — status endpoint returns "running"
     # immediately even before the worker picks up the task.
-    r = _redis()
     from app.tasks.run_sort_task import _running_key, _failed_key
     r.setex(_running_key(cid_str, date_str, task_id), _SORT_RUN_RUNNING_TTL, "1")
     # Pre-write worker_unreachable so status returns "error" if the task is never picked up
@@ -1841,9 +1845,9 @@ class RostersResponse(BaseModel):
 # ── Mid-day freight addition (ADR-184) ───────────────────────────────────────
 
 class LooseFreightIn(BaseModel):
-    tba: str
-    address: str
-    size: Optional[str] = None       # OV_S|OV_M|OV_L|OV_XL; defaults to OV_M
+    tba: str = Field(..., min_length=1, max_length=40)
+    address: str = Field(..., min_length=3, max_length=300)
+    size: Optional[str] = Field(None, max_length=10)   # OV_S|OV_M|OV_L|OV_XL; defaults to OV_M
 
 class ToteFreightIn(BaseModel):
     truck_id: UUID
@@ -2808,7 +2812,7 @@ def add_freight(
     Two modes (a call may mix both):
     - loose: OV packages auto-routed to the best-fit truck by address/location
       (nearest zone centroid; NO balancing). Each becomes its own standalone OV
-      roster entry. GeoClient enrichment with a raw-parse fallback.
+      roster entry. PlaceType door (ADR-584) with a raw-parse fallback.
     - totes: a whole tote added to an explicitly named truck (failsafe).
 
     A load-confirmed truck is locked (ADR-181/183): any item targeting it is
@@ -2822,7 +2826,8 @@ def add_freight(
     from app.models.employee import Employee as _Emp
     from app.services.constants import OVERSIGHT_ROLES
     from app.services.derive_block_key import derive_block_key, ParsedBlock
-    from app.tasks.enrich_manifest import _geoclient_normalise
+    from app.database import PlaceTypeSession
+    from app.services import door_resolver as DR
 
     zones = _active_zones(db, caller.company_id, sort_date)
     if not zones:
@@ -2839,14 +2844,11 @@ def add_freight(
 
     own_truck = _caller_truck_id(db, caller, sort_date) if caller.role in TRUCK_SCOPED_ROLES else None
 
-    # Borough for GeoClient: admin config, else infer from zone centroids, else manhattan.
-    cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
-    if cfg and cfg.geoclient_borough:
-        borough = cfg.geoclient_borough
-    else:
-        borough = _infer_borough(
-            [{"lat": z.centroid_lat, "lng": z.centroid_lng} for z in zones if z.centroid_lat is not None]
-        ) or "manhattan"
+    # ADR-584 D2: the company's configured borough is only the last resort; the
+    # door's own borough comes from its ZIP or nearest door. (This replaced an
+    # _infer_borough call that passed dicts to a function reading p.lat.)
+    default_borough = DR.company_borough(db, caller.company_id)
+    pt = PlaceTypeSession()
 
     # One representative zone per truck (primary = most totes) for best-fit + append.
     zone_by_truck: dict = {}
@@ -2892,54 +2894,57 @@ def add_freight(
             zone.centroid_lng = (zone.centroid_lng * w + lng) / (w + 1)
 
     # ── Loose OV packages → auto-route by best-fit ──────────────────────────
-    for item in body.loose:
-        size = item.size or "OV_M"
-        lat = lng = None
-        dock_tag = None
+    try:
+        for item in body.loose:
+            size = item.size or "OV_M"
+            lat = lng = None
+            dock_tag = None
 
-        geo = _geoclient_normalise(item.address, borough)
-        if geo and geo.lat is not None and geo.lng is not None:
-            lat, lng = geo.lat, geo.lng
-        else:
-            # raw-parse fallback (operator choice): derive a block_key from text
-            parsed = derive_block_key(item.address, item.tba)
-            if isinstance(parsed, ParsedBlock):
-                dock_tag = parsed.block_key
-            # no coords from raw parse — best-fit will use block_key match below
+            door = DR.resolve_door(pt, item.address, default_borough=default_borough)
+            if isinstance(door, DR.Door) and door.lat is not None and door.lng is not None:
+                lat, lng = door.lat, door.lng
+            else:
+                # raw-parse fallback (operator choice): derive a block_key from text
+                parsed = derive_block_key(item.address, item.tba)
+                if isinstance(parsed, ParsedBlock):
+                    dock_tag = parsed.block_key
+                # no coords from raw parse — best-fit will use block_key match below
 
-        # best-fit truck
-        target_zone = None
-        if lat is not None and lng is not None:
-            nearest_truck = _nearest_truck_by_coords(
-                lat, lng,
-                ((z.truck_id, z.centroid_lat, z.centroid_lng) for z in zone_by_truck.values()),
-            )
-            target_zone = zone_by_truck.get(nearest_truck) if nearest_truck else None
-        elif dock_tag is not None:
-            # no coords: pick the zone already carrying this dock tag most often
-            best = None
-            for z in zone_by_truck.values():
-                hits = sum(1 for e in (z.tote_roster or []) if dock_tag in (e.get("dock_tags") or []))
-                if hits > 0 and (best is None or hits > best[0]):
-                    best = (hits, z)
-            target_zone = best[1] if best else None
+            # best-fit truck
+            target_zone = None
+            if lat is not None and lng is not None:
+                nearest_truck = _nearest_truck_by_coords(
+                    lat, lng,
+                    ((z.truck_id, z.centroid_lat, z.centroid_lng) for z in zone_by_truck.values()),
+                )
+                target_zone = zone_by_truck.get(nearest_truck) if nearest_truck else None
+            elif dock_tag is not None:
+                # no coords: pick the zone already carrying this dock tag most often
+                best = None
+                for z in zone_by_truck.values():
+                    hits = sum(1 for e in (z.tote_roster or []) if dock_tag in (e.get("dock_tags") or []))
+                    if hits > 0 and (best is None or hits > best[0]):
+                        best = (hits, z)
+                target_zone = best[1] if best else None
 
-        if target_zone is None:
-            unrouted.append(UnroutedItem(tba=item.tba, reason="geocode_failed" if lat is None else "no_match"))
-            continue
-        if target_zone.truck_id in confirmed_truck_ids:
-            unrouted.append(UnroutedItem(tba=item.tba, reason="truck_confirmed"))
-            continue
-        if own_truck is not None and target_zone.truck_id != own_truck:
-            # driver/trainer: best-fit landed on another truck — they can't add there
-            unrouted.append(UnroutedItem(tba=item.tba, reason="no_match"))
-            continue
+            if target_zone is None:
+                unrouted.append(UnroutedItem(tba=item.tba, reason="geocode_failed" if lat is None else "no_match"))
+                continue
+            if target_zone.truck_id in confirmed_truck_ids:
+                unrouted.append(UnroutedItem(tba=item.tba, reason="truck_confirmed"))
+                continue
+            if own_truck is not None and target_zone.truck_id != own_truck:
+                # driver/trainer: best-fit landed on another truck — they can't add there
+                unrouted.append(UnroutedItem(tba=item.tba, reason="no_match"))
+                continue
 
-        bag_id = f"ADD-{item.tba[-6:]}" if item.tba else f"ADD-{_uuid_mod.uuid4().hex[:6]}"
-        _append_ov(target_zone, bag_id, item.tba, size, dock_tag)
-        _nudge_centroid(target_zone, lat, lng)
-        added += 1
-        touched_labels.add(target_zone.zone_label)
+            bag_id = f"ADD-{item.tba[-6:]}" if item.tba else f"ADD-{_uuid_mod.uuid4().hex[:6]}"
+            _append_ov(target_zone, bag_id, item.tba, size, dock_tag)
+            _nudge_centroid(target_zone, lat, lng)
+            added += 1
+            touched_labels.add(target_zone.zone_label)
+    finally:
+        pt.close()
 
     # ── Whole totes → explicit truck ────────────────────────────────────────
     for tote in body.totes:

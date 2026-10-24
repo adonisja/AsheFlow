@@ -3,7 +3,7 @@
 Flow:
   1. Dispatch uploads manifest → FileManifestIngestor produces RawPackage list
   2. This task is dispatched immediately with the raw packages
-  3. For each package: GeoClient API → normalised address → derive_block_key → block_key
+  3. For each package: PlaceType door (ADR-584) → normalised address, block_key, topology
   4. Enriched packages cached in Redis under key manifest:{company_id}:{date}  (TTL 24h)
   5. Failed packages collected; dispatch notified with TBA + raw address + reason
   6. On completion: dispatch notified "manifest sort-ready"
@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 
 import requests
@@ -363,7 +363,11 @@ def enrich_manifest_packages(
         r.delete(_failed_key)
 
     try:
-        return _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key)
+        # `borough` is the company's configured borough (a code since ADR-584;
+        # a queued task from before carries a name, which borough_code maps).
+        from app.services.door_key import borough_code
+        return _run_enrichment(self, company_id, sort_date, packages,
+                               borough_code(borough) if borough else None, r, _failed_key)
     except Exception as exc:
         logger.error(
             "enrich_manifest_packages unhandled exception: %s",
@@ -380,12 +384,20 @@ def enrich_manifest_packages(
 _GEOCLIENT_WORKERS = 10
 
 
-def _enrich_one(pkg: dict, borough: str) -> dict:
-    """Enrich a single package: GeoClient lookup + block_key derivation.
+def _enrich_one(pkg: dict, default_borough: Optional[str]) -> dict:
+    """Resolve one package to a PlaceType door (ADR-584 D1). No GeoClient: a
+    customer's address does not leave AsheFlow (ADR-580 D4).
+
+    A miss is held for dispatch to pick a door or drop a pin (D4): the package
+    keeps Amazon's lat/lng and a parser block key, and `door_status` says why
+    the sort waits. Opens its own PlaceType session, so the thread pool shares
+    nothing (a Session is not thread-safe).
 
     Returns a result dict with keys: enriched_pkg, failed_entry (or None), ov_entry (or None).
-    Pure function — no shared state, safe to call from a thread pool.
     """
+    from app.database import PlaceTypeSession
+    from app.services import door_resolver as DR
+
     address = pkg.get("address") or ""
     tba = pkg.get("tba", "unknown")
     tag = pkg.get("tag_number")
@@ -394,10 +406,6 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
     bag_color = pkg.get("bag_color")   # ADR-230: parsed physical bag color hex (or None)
     amazon_lat = pkg.get("lat")
     amazon_lng = pkg.get("lng")
-
-    geo: GeoClientResult | None = None
-    block_key: str | None = None
-    failure_reason: str | None = None
 
     ov_entry = None
     if tag:
@@ -410,84 +418,36 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
         }
 
     if address:
-        for attempt in range(3):
-            try:
-                geo = _geoclient_normalise(address, borough=borough)
-                break
-            except Exception as geo_exc:
-                logger.warning(
-                    "geoclient_retry",
-                    extra={
-                        "attempt":    attempt + 1,
-                        # ADR-587 D2: no TBA, and no str(exc) — a requests
-                        # error carries the URL, whose query is the address.
-                        "error_type": type(geo_exc).__name__,
-                    },
-                )
-                if attempt == 2:
-                    failure_reason = "geoclient_error"
-
-        if geo is None and not failure_reason:
-            failure_reason = "geoclient_no_match"
-
-        source = geo.normalised_address if geo else address
-        bk_result = derive_block_key(source, tba=tba)
-        if isinstance(bk_result, ParsedBlock):
-            block_key = bk_result.block_key
-        elif failure_reason is None:
-            failure_reason = bk_result.reason
+        session = PlaceTypeSession()
+        try:
+            result = DR.resolve_door(session, address, lat=amazon_lat, lng=amazon_lng,
+                                     default_borough=default_borough)
+        finally:
+            session.close()
+        fields = (DR.door_fields(result) if isinstance(result, DR.Door)
+                  else DR.miss_fields(result))
     else:
-        failure_reason = "missing_address"
+        fields = DR.miss_fields(DR.Miss("missing_address"))
 
+    if fields.get("lat") is None:
+        fields["lat"] = amazon_lat
+    if fields.get("lng") is None:
+        fields["lng"] = amazon_lng
+
+    failure_reason = fields.get("geocode_reason")
     if failure_reason:
         logger.debug("package_enrich_failed", extra={"reason": failure_reason})
 
-    final_lat = geo.lat if geo and geo.lat is not None else amazon_lat
-    final_lng = geo.lng if geo and geo.lng is not None else amazon_lng
-
-    # Partial GeoClient match: street recognized but no segment topology (e.g.
-    # Geosupport grc 42 "ADDRESS NUMBER OUT OF RANGE" — the house number doesn't
-    # exist on that street). NOT a failure — block_key still derives and the
-    # package stays routable via fallback coords — so geocode_reason/failed_count
-    # are untouched; geo_warning just records WHY topology is missing.
-    geo_warning = None
-    if geo is not None and geo.segment_id is None:
-        if geo.geo_grc or geo.geo_message:
-            geo_warning = f"grc {geo.geo_grc}: {geo.geo_message}"
-        else:
-            geo_warning = "no_segment_topology"
-
     enriched_pkg = {
-        "tba":                tba,
-        "bag_id":             bag_id,
-        "bag_color":          bag_color,   # ADR-230: physical bag color hex (or None)
-        "tag_number":         tag,
-        "package_type":       package_type,
-        "lat":                final_lat,
-        "lng":                final_lng,
-        "block_key":          block_key,
-        "raw_address":        address,           # original manifest address — always preserved
-        "normalised_address": geo.normalised_address if geo else None,
-        "first_cross_street": geo.first_cross_street if geo else None,
-        "second_cross_street":geo.second_cross_street if geo else None,
-        # Use `if geo else None` — NOT `if geo and geo.<field>`. The fields are
-        # already value-or-None from _geoclient_normalise, and a truthiness check
-        # (`and geo.x_low_address_end`) would drop a legitimate 0 coordinate
-        # (0 is falsy) or an empty-string id. `is not None` semantics, achieved by
-        # just guarding on `geo` existing.
-        "segment_id":         geo.segment_id if geo else None,
-        "from_lion_node_id":  geo.from_lion_node_id if geo else None,
-        "to_lion_node_id":    geo.to_lion_node_id if geo else None,
-        "x_low_address_end":  geo.x_low_address_end if geo else None,
-        "y_low_address_end":  geo.y_low_address_end if geo else None,
-        "x_high_address_end": geo.x_high_address_end if geo else None,
-        "y_high_address_end": geo.y_high_address_end if geo else None,
-        "geo_warning":        geo_warning,       # partial match: why topology is missing
-        "geocode_reason":     failure_reason,    # None for success; error code for failures
+        "tba":          tba,
+        "bag_id":       bag_id,
+        "bag_color":    bag_color,   # ADR-230: physical bag color hex (or None)
+        "tag_number":   tag,
+        "package_type": package_type,
+        "raw_address":  address,     # the manifest's text, for the picker; Redis only (24h)
+        **fields,
     }
-
     failed_entry = {"tba": tba, "raw_address": address, "reason": failure_reason} if failure_reason else None
-
     return {"enriched_pkg": enriched_pkg, "failed_entry": failed_entry, "ov_entry": ov_entry}
 
 
@@ -529,8 +489,8 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
             "company_id": company_id,
             "sort_date":  sort_date,
             "total":      total_packages,
-            "borough":    borough,
-            "geoclient":  bool(settings.geoclient_app_key),
+            "default_borough": borough,
+            "source":     "placetype",
             "workers":    _GEOCLIENT_WORKERS,
         },
     )
@@ -578,10 +538,7 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
         fail_pct = len(failed) / total
         threshold = settings.geoclient_failure_threshold
         if fail_pct > threshold:
-            reason = (
-                f"enrichment_threshold_exceeded:{len(failed)}/{total}_failed"
-                + ("_no_api_key" if not settings.geoclient_app_key else "")
-            )
+            reason = f"enrichment_threshold_exceeded:{len(failed)}/{total}_failed"
             r.setex(_failed_key, _REDIS_TTL_SECONDS, reason)
             r.delete(prog_key)
             # Delete the enriching sentinel so the status endpoint returns
@@ -590,12 +547,11 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
             db = SessionLocal()
             try:
                 cid = UUID(company_id)
-                key_hint = " GeoClient API key is not configured." if not settings.geoclient_app_key else ""
                 _notify_dispatch(
                     cid,
                     f"Manifest enrichment failed for {sort_date}: "
-                    f"{len(failed)}/{total} packages could not be geocoded ({fail_pct:.0%}).{key_hint} "
-                    f"Sort is blocked — fix the issue and re-upload.",
+                    f"{len(failed)}/{total} packages matched no door in PlaceType ({fail_pct:.0%}). "
+                    f"Sort is blocked — check that PlaceType is reachable, then re-upload.",
                     db,
                 )
             finally:

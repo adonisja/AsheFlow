@@ -31,11 +31,28 @@ def _exported_fields() -> set[str]:
 
 
 def _enriched_keys() -> set[str]:
-    """The keys of the `enriched_pkg = {...}` dict built by _enrich_one."""
-    src = _TASK.read_text()
-    m = re.search(r"enriched_pkg\s*=\s*\{(.*?)\n    \}", src, re.S)
-    assert m, "could not locate the `enriched_pkg = {...}` dict in enrich_manifest"
-    return set(re.findall(r'"([a-z_]+)":', m.group(1)))
+    """The keys `_enrich_one` actually returns, for both a door and a miss.
+
+    Called, not regex-read: since ADR-584 the dict spreads the shared
+    door/miss field builders (`**fields`), so its source literal no longer
+    lists them and a source match saw only the base keys.
+    """
+    from unittest.mock import patch
+    from app.services import door_resolver as DR
+    from app.tasks import enrich_manifest as E
+
+    door = DR.Door(borough="1", address="350 5 AVE", block_key="5_Ave_300", lat=40.7, lng=-73.9)
+
+    class _S:
+        def close(self):
+            pass
+    keys: set[str] = set()
+    pkg = {"tba": "TBA1", "address": "350 5th Ave", "lat": 40.7, "lng": -73.9, "tag_number": None}
+    with patch("app.database.PlaceTypeSession", _S):
+        for result in (door, DR.Miss("not_in_placetype", address="350 5 AVE", borough="1")):
+            with patch.object(DR, "resolve_door", lambda *a, **k: result):
+                keys |= set(E._enrich_one(pkg, None)["enriched_pkg"])
+    return keys
 
 
 def test_export_covers_every_enriched_field():
