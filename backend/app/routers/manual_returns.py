@@ -310,7 +310,7 @@ def record_rts(
         db=db, company_id=str(caller.company_id), actor_id=str(caller.id),
         action_type="manual_return.rts",
         target_table="rts_packages", target_id=str(row.id),
-        detail={"tba_number": payload.tba_number, "rts_type": payload.rts_type,
+        detail={"rts_type": payload.rts_type,   # ADR-590: the TBA is on the row
                 "route_number": route.route_number, "source": "manual"},
     )
     db.commit()
@@ -361,8 +361,7 @@ def record_missing(
         db=db, company_id=str(caller.company_id), actor_id=str(caller.id),
         action_type="manual_return.missing",
         target_table="missing_packages", target_id=str(row.id),
-        detail={"tba_number": payload.tba_number,
-                "route_number": route.route_number, "source": "manual"},
+        detail={"route_number": route.route_number, "source": "manual"},
     )
     db.commit()
     db.refresh(row)
@@ -413,7 +412,7 @@ def record_damaged(
         db=db, company_id=str(caller.company_id), actor_id=str(caller.id),
         action_type="manual_return.damaged",
         target_table="damaged_packages", target_id=str(row.id),
-        detail={"tba_number": payload.tba_number, "stage": payload.stage,
+        detail={"stage": payload.stage,   # ADR-590: the TBA is on the row
                 "route_number": route.route_number, "source": "manual"},
     )
     db.commit()
