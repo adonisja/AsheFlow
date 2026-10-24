@@ -494,7 +494,7 @@ def redact_departed_employee_names() -> dict:
 
 @celery_app.task(name="app.tasks.cleanup.decay_troublesome_scores")
 def decay_troublesome_scores() -> dict:
-    """Nightly decay of BuildingProfile.troublesome_score (ADR-218).
+    """Nightly decay of troublesome door scores (ADR-218; on troublesome_doors since ADR-584 D6).
 
     ~30-day half-life; scores below the floor snap to 0. Global (all companies),
     like the other cleanup tasks. Lets the troublesome signal fade as buildings
@@ -505,7 +505,7 @@ def decay_troublesome_scores() -> dict:
     try:
         n = decay_all(db)
         db.commit()
-        logger.info("decay_troublesome_scores: decayed %d building(s).", n)
+        logger.info("decay_troublesome_scores: decayed %d door(s).", n)
         return {"decayed": n}
     except Exception as e:
         db.rollback()

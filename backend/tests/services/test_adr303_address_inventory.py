@@ -30,19 +30,6 @@ def _code_only(obj) -> str:
 
 # ── D7: server-side polygon filtering ────────────────────────────────────────
 
-def test_the_polygon_filter_is_pushed_to_the_source():
-    """967k records exist; a zone needs ~5k. Downloading the city to throw most
-    of it away is the thing within_polygon() avoids."""
-    src = _code_only(AI._fetch_page)
-    assert "within_polygon" in src
-    assert "$where" in src
-
-
-def test_pagination_is_ordered_by_a_stable_key():
-    """Paging without a stable $order silently repeats and drops rows."""
-    assert "addresspointid" in _code_only(AI._fetch_page)
-
-
 def test_polygon_from_bounds_renders_closed_wkt():
     poly = {"type": "Polygon", "coordinates": [[
         [-73.99, 40.75], [-73.98, 40.75], [-73.98, 40.76], [-73.99, 40.76], [-73.99, 40.75]]]}
@@ -77,13 +64,67 @@ def test_addresspoint_street_format_feeds_the_real_parser():
         assert getattr(parsed, "block_key", None) == expected, addr
 
 
-def test_the_tba_argument_carries_no_package_meaning():
-    """derive_block_key requires a tba, which workforce mode does not have. It
-    is used only to label an UnparseableAddress for reporting, so "" is correct
-    — but a reader must not infer that packages are involved."""
+# ── ADR-584 D5: the zone's doors are a READ of PlaceType ────────────────────
+
+def _placetype(monkeypatch, rows, zips=None):
+    """A real SQLite PlaceType with `rows`, wired in as PlaceType's session."""
+    import uuid
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import app.database as database
+    from app.models.building_profile_library import BuildingProfileLibrary as BPL
+    from app.services import door_resolver
+    from tests.conftest import sqlite_mirror_with_defaults
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    sqlite_mirror_with_defaults(BPL.__table__).create(engine)
+    S = sessionmaker(bind=engine)
+    with S() as s:
+        for addr, lat, lng in rows:
+            s.add(BPL(id=uuid.uuid4(), normalised_address=addr, borough="1", block_key="W_37_St_400",
+                      lat=lat, lng=lng, bin="1012345", building_type="unknown",
+                      workload_class="standard", library_status="geometry_only",
+                      building_category="residential"))
+        s.commit()
+    monkeypatch.setattr(database, "PLACETYPE_IS_REMOTE", True)
+    monkeypatch.setattr(database, "PlaceTypeSession", S)
+    monkeypatch.setattr(door_resolver, "_zip_map", lambda db: {"10018": "1"} if zips is None else zips)
+
+
+SQUARE = {"type": "Polygon", "coordinates": [[
+    [-73.99, 40.75], [-73.98, 40.75], [-73.98, 40.76], [-73.99, 40.76], [-73.99, 40.75]]]}
+
+
+# A right triangle: its bounding box is the SQUARE, but its north-east half is
+# outside. A square zone can't tell the polygon test from the box filter: the
+# first version of this test used one, and a probe that deleted the polygon test
+# still passed (36/36).
+TRIANGLE = {"type": "Polygon", "coordinates": [[
+    [-73.99, 40.75], [-73.98, 40.75], [-73.99, 40.76], [-73.99, 40.75]]]}
+
+
+def test_only_doors_inside_the_polygon_come_back(monkeypatch):
+    _placetype(monkeypatch, [("400 W 37 ST", 40.752, -73.988),      # inside the triangle
+                             ("403 W 37 ST", 40.758, -73.982),      # in the box, outside the triangle
+                             ("401 W 37 ST", 40.749, -73.985)])     # outside the box
+    got = list(AI.enumerate_zone_addresses(TRIANGLE))
+    assert [a.normalised_address for a in got] == ["400 W 37 ST"]
+    assert (got[0].bin, got[0].borough_code, got[0].block_key) == ("1012345", "1", "W_37_St_400")
+
+
+def test_a_placetype_outage_is_unavailable_not_an_empty_zone(monkeypatch):
+    """The degrade guard reads an outage as "no doors", which the endpoint would
+    report as a zone with no addresses. It must be a 503 instead."""
+    import pytest
+    _placetype(monkeypatch, [], zips={})
+    with pytest.raises(AI.AddressSourceUnavailable):
+        list(AI.enumerate_zone_addresses(SQUARE))
+
+
+def test_the_bootstrap_writes_nothing_to_placetype():
     src = _code_only(AI.enumerate_zone_addresses)
-    assert 'tba=' in src
-    assert "PackageManifest" not in src and "TBA" not in src
+    assert "doors_in_polygon" in src
+    for w in ("upsert_", ".add(", "_soda", "urlopen"):
+        assert w not in src, w
 
 
 # ── D9: no GeoClient in this pass ────────────────────────────────────────────
@@ -164,20 +205,6 @@ def test_persistence_is_company_scoped():
     src = _code_only(AI.persist_zone_inventory)
     assert "BuildingProfile.company_id == company_id" in src
     assert "company_id=company_id" in src.replace(" ", "")
-
-
-def test_upstream_failure_does_not_leak_the_url_or_token():
-    """The URL carries the zone polygon and the header carries the app token;
-    neither belongs in a response body (Dimension 6)."""
-    src = _code_only(AI._fetch_page)
-    assert "str(exc)" not in src and "str(e)" not in src
-
-
-def test_the_token_is_optional():
-    """D8 — anonymous works, the token only raises the rate ceiling. Requiring
-    it would make the feature untestable until one is registered."""
-    src = _code_only(AI._fetch_page)
-    assert "if settings.socrata_app_token" in src
 
 
 def test_the_record_ceiling_is_bounded():

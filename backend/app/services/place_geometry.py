@@ -499,3 +499,39 @@ def doors_on_block(db: Session, borough: Optional[str], address: str, *, limit: 
     rows.sort(key=lambda r: (gap(r[0]), r[0]))
     return [{"address": a, "borough": b, "lat": la, "lng": ln, "house_gap": gap(a)}
             for a, b, la, ln in rows[:limit]]
+
+
+def _inside(lng: float, lat: float, ring: list) -> bool:
+    """Ray casting: is (lng, lat) inside the closed ring of (lng, lat) pairs?"""
+    inside = False
+    j = len(ring) - 1
+    for i in range(len(ring)):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if (yi > lat) != (yj > lat) and lng < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+@_degrades_to(list)
+@reads_placetype
+def doors_in_polygon(db: Session, ring: list, *, limit: int) -> list[dict]:
+    """Every door inside a tenant's zone polygon (ADR-584 D5), for the zone
+    bootstrap: a READ of PlaceType that writes nothing there. Bounding box on
+    the (lat, lng) index, then point-in-polygon. Capped at `limit`."""
+    lngs = [p[0] for p in ring]
+    lats = [p[1] for p in ring]
+    q = (db.query(BuildingProfileLibrary.normalised_address, BuildingProfileLibrary.block_key,
+                  BuildingProfileLibrary.lat, BuildingProfileLibrary.lng,
+                  BuildingProfileLibrary.bin, BuildingProfileLibrary.borough)
+         .filter(BuildingProfileLibrary.lat.between(min(lats), max(lats)),
+                 BuildingProfileLibrary.lng.between(min(lngs), max(lngs)))
+         .limit(limit * 2))
+    out = []
+    for a, bk, la, ln, b, bo in q.all():
+        if la is not None and ln is not None and _inside(ln, la, ring):
+            out.append({"address": a, "block_key": bk, "lat": la, "lng": ln, "bin": b, "borough": bo})
+            if len(out) >= limit:
+                break
+    return out

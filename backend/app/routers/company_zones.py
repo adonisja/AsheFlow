@@ -506,7 +506,8 @@ class ZoneBootstrapOut(BaseModel):
     created: int
     skipped_existing: int
     skipped_unparseable: int
-    source: str = "nyc_addresspoint"
+    bin_backfilled: int = 0                 # was in the summary and silently dropped
+    source: str = "placetype"               # ADR-584 D5: AddressPoint, through PlaceType
 
 
 @router.post("/bootstrap", response_model=ZoneBootstrapOut, status_code=status.HTTP_200_OK)
@@ -556,7 +557,7 @@ def bootstrap_zone_inventory(
         # carries the polygon and the header carries the token (Dimension 6).
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The address source is unavailable. Try again later.",
+            detail="PlaceType is unavailable. Try again later.",
         )
 
     summary = persist_zone_inventory(db, caller.company_id, addresses)

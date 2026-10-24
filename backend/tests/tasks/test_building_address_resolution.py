@@ -200,15 +200,18 @@ class TestSubmitPath:
         assert "409" in src[i : i + 300] or "HTTP_409_CONFLICT" in src[i : i + 300]
 
 
-class TestRTSStubs:
-    def test_rts_stubs_are_born_resolved(self):
-        """The RTS troublesome-score path creates a stub from the enriched
-        manifest's address — already canonical. Marking it pending would queue
-        a redundant geocode and expose a live building to a transport-failure
-        rejection."""
+class TestNoRTSStubs:
+    def test_an_rts_creates_no_building_profile(self):
+        """ADR-584 D6 retired the "system:rts" stub profile: the RTS signal lives
+        on troublesome_doors, so recording one never invents a building row."""
+        import ast, textwrap
         from app.services import building_troublesome
-        src = inspect.getsource(building_troublesome)
-        assert 'address_status="resolved"' in src
+        fn = ast.parse(textwrap.dedent(inspect.getsource(building_troublesome.record_rts_incident))).body[0]
+        # Names in CODE only: the docstring says "no stub BuildingProfile", and
+        # a source-text match would read that sentence as a use.
+        names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | \
+                {a.name for n in ast.walk(fn) if isinstance(n, ast.ImportFrom) for a in n.names}
+        assert "BuildingProfile" not in names and "TroublesomeDoor" in names
 
 
 class TestTaskIsActuallyRegistered:

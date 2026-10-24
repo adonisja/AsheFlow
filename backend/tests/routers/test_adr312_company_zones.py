@@ -232,5 +232,5 @@ def test_the_audit_records_counts_not_addresses():
 
 def test_the_response_carries_no_addresses():
     f = CZ.ZoneBootstrapOut.model_fields
-    assert set(f) == {"zone_id", "enumerated", "created",
-                      "skipped_existing", "skipped_unparseable", "source"}
+    assert set(f) == {"zone_id", "enumerated", "created", "skipped_existing",
+                      "skipped_unparseable", "bin_backfilled", "source"}

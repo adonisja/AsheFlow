@@ -34,6 +34,7 @@ from app.models.walker_route import Route, RouteParticipant, RouteClusterCentroi
 from app.models.truck_zone import TruckZone
 from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
 from app.models.building_profile import BuildingProfile
+from app.models.troublesome_door import TroublesomeDoor  # noqa: F401 — ADR-584 D6
 from app.models.building_profile_library import BuildingProfileLibrary
 from app.models.building_profile_verification import BuildingProfileVerification
 from app.models.street_segment import StreetSegment   # ADR-236: LION topology map

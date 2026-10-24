@@ -102,6 +102,8 @@ REGISTRY: tuple[Target, ...] = (
            also_null=_TOTE_DOOR_COLUMNS),
     # Rows whose identity is the address.
     Target("building_profile:BuildingProfile",    "normalised_address", "address", "delete_row"),
+    # ADR-584 D6: a troublesome door's identity is its address.
+    Target("troublesome_door:TroublesomeDoor",    "address",            "address", "delete_row"),
     Target("collection:CollectedAddressProfile",  "address",            "address", "delete_row"),
     Target("building_profile_library:BuildingProfileLibrary", "normalised_address", "address",
            "delete_row", tenant=False),

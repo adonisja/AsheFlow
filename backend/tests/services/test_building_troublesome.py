@@ -1,18 +1,33 @@
-"""Troublesome decaying-score service (ADR-218).
+"""Troublesome decaying-score service (ADR-218 scoring; ADR-584 D6 storage).
 
-Public service (scoring helper, no proprietary imports). Covers weighted bump,
-stub-create on cold building, nightly decay + floor, and resolution dampening.
+Real rows in `troublesome_doors`: weighted bump, a door created on first RTS
+(and no stub BuildingProfile), the borough a pre-ADR-584 score is claimed by,
+nightly decay + floor, resolution dampening, and the two readers.
 """
 import uuid
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
+import pytest
+
+from app.models.troublesome_door import TroublesomeDoor
 from app.services.building_troublesome import (
-    bump_for_rts_type, record_rts_incident, apply_resolution, decay_all,
-    DECAY_PER_NIGHT, DECAY_FLOOR, RESOLUTION_DAMPEN, TROUBLESOME_THRESHOLD,
+    DECAY_FLOOR, DECAY_PER_NIGHT, RESOLUTION_DAMPEN, TROUBLESOME_THRESHOLD,
+    apply_resolution, bump_for_rts_type, decay_all, record_rts_incident,
+    scores_by_address, troublesome_doors,
 )
+from tests.conftest import SEED_COMPANY_ID, sqlite_mirror_with_defaults
 
-_CID = uuid.uuid4()
+OTHER = uuid.uuid4()
+
+
+@pytest.fixture(autouse=True)
+def _table(db):
+    sqlite_mirror_with_defaults(TroublesomeDoor.__table__).create(db.get_bind(), checkfirst=True)
+
+
+def _doors(db):
+    db.expire_all()
+    return db.query(TroublesomeDoor).order_by(TroublesomeDoor.address).all()
 
 
 def test_bump_weights_by_type():
@@ -22,96 +37,91 @@ def test_bump_weights_by_type():
     assert bump_for_rts_type("package_damaged") == 1.0
 
 
-def _db_with_existing(bp):
-    db = MagicMock()
-    q = MagicMock(); f = MagicMock(); f.filter.return_value = f
-    f.first.return_value = bp
-    q.filter.return_value = f
-    db.query.return_value = q
-    return db
+def test_the_first_rts_creates_the_door_and_no_profile(db):
+    from app.models.building_profile import BuildingProfile
+    sqlite_mirror_with_defaults(BuildingProfile.__table__).create(db.get_bind(), checkfirst=True)
+    record_rts_incident(db, SEED_COMPANY_ID, "340 W 36 ST", "W_36_St_300", "no_access", borough="1")
+    db.commit()
+    (d,) = _doors(db)
+    assert (d.borough, d.address, d.score) == ("1", "340 W 36 ST", 0.5) and d.last_incident_at
+    assert db.query(BuildingProfile).count() == 0, "ADR-584 D6: no stub BuildingProfile"
 
 
-def test_bump_existing_building():
-    bp = SimpleNamespace(troublesome_score=1.0, troublesome_last_incident_at=None)
-    db = _db_with_existing(bp)
-    record_rts_incident(db, _CID, "340 W 36 St", "W_36_St_300", "customer_refused")
-    assert bp.troublesome_score == 2.0            # 1.0 + hard 1.0
-    assert bp.troublesome_last_incident_at is not None
+def test_a_second_rts_bumps_the_same_door(db):
+    for t in ("no_access", "customer_refused"):
+        record_rts_incident(db, SEED_COMPANY_ID, "340 W 36 ST", None, t, borough="1")
+    db.commit()
+    (d,) = _doors(db)
+    assert d.score == 1.5
 
 
-def test_cold_building_creates_stub_and_bumps():
-    added = {}
-    db = MagicMock()
-    q = MagicMock(); f = MagicMock(); f.filter.return_value = f
-    f.first.return_value = None                    # no existing profile
-    q.filter.return_value = f
-    db.query.return_value = q
-    db.add.side_effect = lambda o: added.setdefault("bp", o)
-    record_rts_incident(db, _CID, "999 Nowhere St", "W_99_St_900", "no_access")
-    bp = added["bp"]
-    assert bp.company_id == _CID
-    assert bp.normalised_address == "999 Nowhere St"
-    assert bp.building_type_status == "pending"
-    assert bp.troublesome_score == 0.5             # reattemptable bump on fresh stub
+def test_the_same_address_in_two_boroughs_is_two_doors(db):
+    record_rts_incident(db, SEED_COMPANY_ID, "100 BROADWAY", None, "customer_refused", borough="1")
+    record_rts_incident(db, SEED_COMPANY_ID, "100 BROADWAY", None, "customer_refused", borough="3")
+    db.commit()
+    assert {(d.borough, d.score) for d in _doors(db)} == {("1", 1.0), ("3", 1.0)}
 
 
-def test_no_address_is_noop():
-    db = MagicMock()
-    record_rts_incident(db, _CID, None, None, "customer_refused")
-    db.query.assert_not_called()
-    db.add.assert_not_called()
+def test_a_copied_score_without_a_borough_is_claimed_by_the_first_door_with_one(db):
+    """The migration copies pre-ADR-584 scores with borough NULL; the next RTS
+    with a borough adopts it instead of starting a second row."""
+    db.add(TroublesomeDoor(company_id=SEED_COMPANY_ID, borough=None, address="340 W 36 ST", score=3.0))
+    db.commit()
+    record_rts_incident(db, SEED_COMPANY_ID, "340 W 36 ST", None, "customer_refused", borough="1")
+    db.commit()
+    (d,) = _doors(db)
+    assert (d.borough, d.score) == ("1", 4.0)
 
 
-def test_resolution_dampens_not_zero():
-    bp = SimpleNamespace(troublesome_score=4.0, troublesome_resolved_at=None)
-    apply_resolution(MagicMock(), bp)
-    assert bp.troublesome_score == 4.0 * RESOLUTION_DAMPEN   # halved, not zeroed
-    assert bp.troublesome_resolved_at is not None
+def test_no_address_is_a_noop(db):
+    record_rts_incident(db, SEED_COMPANY_ID, None, None, "customer_refused", borough="1")
+    db.commit()
+    assert _doors(db) == []
 
 
-def test_decay_and_floor(monkeypatch):
-    # ADR-289/293: decay_all now scopes to full-mode companies first. Stub that lookup
-    # so this test still isolates the decay MATHS; the scoping itself is covered by
-    # test_decay_skips_workforce_companies below.
-    monkeypatch.setattr(
-        "app.services.company_config.full_mode_company_ids",
-        lambda db: {"company-a"},
-    )
-    hi = SimpleNamespace(troublesome_score=10.0)
-    lo = SimpleNamespace(troublesome_score=0.05)   # below floor → snaps to 0
-    db = MagicMock()
-    q = MagicMock(); f = MagicMock(); f.filter.return_value = f
-    f.all.return_value = [hi, lo]
-    q.filter.return_value = f
-    db.query.return_value = q
-    n = decay_all(db)
-    assert n == 2
-    assert abs(hi.troublesome_score - 10.0 * DECAY_PER_NIGHT) < 1e-9
-    assert lo.troublesome_score == 0.0             # floored
+def test_resolution_dampens_the_companys_doors_not_to_zero(db):
+    db.add_all([TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="1", address="340 W 36 ST", score=4.0),
+                TroublesomeDoor(company_id=OTHER, borough="1", address="340 W 36 ST", score=4.0)])
+    db.commit()
+    apply_resolution(db, SimpleNamespace(company_id=SEED_COMPANY_ID, normalised_address="340 W 36 ST"))
+    db.commit()
+    mine, theirs = sorted(_doors(db), key=lambda d: d.company_id != SEED_COMPANY_ID)
+    assert mine.score == 4.0 * RESOLUTION_DAMPEN and mine.resolved_at is not None
+    assert theirs.score == 4.0, "Dimension 1: another company's door is untouched"
 
 
-def test_decay_skips_workforce_companies(monkeypatch):
-    """ADR-293: with no full-mode tenant there is nothing to decay, and crucially
-    nothing is touched.
+def test_decay_and_floor(db, monkeypatch):
+    monkeypatch.setattr("app.services.company_config.full_mode_company_ids", lambda db: {SEED_COMPANY_ID})
+    db.add_all([TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="1", address="A", score=10.0),
+                TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="1", address="B", score=0.05)])
+    db.commit()
+    assert decay_all(db) == 2
+    db.commit()
+    a, b = _doors(db)
+    assert abs(a.score - 10.0 * DECAY_PER_NIGHT) < 1e-9 and b.score == 0.0
 
-    In workforce mode building intelligence is entered manually and no delivery
-    evidence refreshes the score. Decaying anyway would fade every score to zero
-    unopposed — erasing real intelligence via a background job nobody is watching.
-    """
-    monkeypatch.setattr(
-        "app.services.company_config.full_mode_company_ids", lambda db: set()
-    )
-    bp = SimpleNamespace(troublesome_score=10.0)
-    db = MagicMock()
-    q = MagicMock(); f = MagicMock(); f.filter.return_value = f
-    f.all.return_value = [bp]
-    q.filter.return_value = f
-    db.query.return_value = q
 
+def test_decay_skips_workforce_companies(db, monkeypatch):
+    """ADR-293: with no full-mode tenant nothing is decayed. In workforce mode no
+    delivery evidence refreshes the score, so decaying would erase it unopposed."""
+    monkeypatch.setattr("app.services.company_config.full_mode_company_ids", lambda db: set())
+    db.add(TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="1", address="A", score=10.0))
+    db.commit()
     assert decay_all(db) == 0
-    assert bp.troublesome_score == 10.0, "a workforce tenant's score was decayed"
+    assert _doors(db)[0].score == 10.0
+
+
+def test_the_readers(db):
+    db.add_all([TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="1", address="A", score=3.0),
+                TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="3", address="A", score=5.0),
+                TroublesomeDoor(company_id=SEED_COMPANY_ID, borough="1", address="B", score=1.0),
+                TroublesomeDoor(company_id=OTHER, borough="1", address="C", score=9.0)])
+    db.commit()
+    assert [d.address for d in troublesome_doors(db, SEED_COMPANY_ID)] == ["A", "A"]
+    assert scores_by_address(db, SEED_COMPANY_ID) == {"A": 5.0, "B": 1.0}
 
 
 def test_threshold_sane():
     # one hard incident (1.0) stays under threshold; ~3 needed to flag.
     assert TROUBLESOME_THRESHOLD > 1.0
+    assert DECAY_FLOOR < 1.0

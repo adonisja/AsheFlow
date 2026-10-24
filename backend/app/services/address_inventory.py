@@ -21,23 +21,16 @@ from __future__ import annotations
 
 import logging
 import re
-import urllib.parse
-import urllib.request
-import json
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_SODA_HOST = "https://data.cityofnewyork.us/resource"
-_PAGE = 1000
 # A zone larger than this is a configuration mistake, not a big zone: Manhattan
 # entire is ~180k addresses. Bounding the walk keeps a bad polygon from pulling
 # the whole city.
 _MAX_RECORDS = 50_000
-_TIMEOUT = 45
 
 
 @dataclass(frozen=True)
@@ -75,90 +68,50 @@ def polygon_from_bounds(bounds: dict) -> Optional[str]:
 
 def _normalise_street(raw: str) -> str:
     """AddressPoint pads street names ('W  55 ST'); collapse to single spaces.
-
-    The form is otherwise exactly what `derive_block_key` expects, so no mapping
-    table is needed — verified end-to-end against the real parser.
-    """
+    Used by the owner's survey (survey_blocks), which reads AddressPoint itself."""
     return re.sub(r"\s+", " ", (raw or "")).strip()
 
 
-def _fetch_page(polygon: str, offset: int) -> list[dict]:
-    params = {
-        "$select": "house_number,full_street_name,boroughcode,bin,the_geom",
-        "$where": f"within_polygon(the_geom, '{polygon}')",
-        "$order": "addresspointid",   # stable key — pagination is meaningless without it
-        "$limit": str(_PAGE),
-        "$offset": str(offset),
-    }
-    url = f"{_SODA_HOST}/{settings.socrata_addresspoint_dataset}.json?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url)
-    # D8: a rate-limit identifier for public data, not an authorisation grant.
-    if settings.socrata_app_token:
-        req.add_header("X-App-Token", settings.socrata_app_token)
+def ring_from_bounds(bounds: dict) -> Optional[list]:
+    """The zone's outer ring as (lng, lat) pairs, or None if unusable."""
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            return json.load(resp)
-    except Exception as exc:
-        # No str(exc) beyond the log: the URL carries the polygon and the header
-        # carries the token, and neither belongs in a response body.
-        logger.warning("address_inventory: SODA page failed offset=%s: %s",
-                       offset, type(exc).__name__)
-        raise AddressSourceUnavailable("address source unavailable") from exc
+        if bounds.get("type") != "Polygon":
+            return None
+        ring = [(float(lng), float(lat)) for lng, lat in bounds["coordinates"][0]]
+        return ring if len(ring) >= 4 else None
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
 
 
 def enumerate_zone_addresses(bounds: dict) -> Iterator[EnumeratedAddress]:
-    """Yield every AddressPoint record inside `bounds`.
+    """Every PlaceType door inside the zone (ADR-584 D5).
 
-    Raises AddressSourceUnavailable if the upstream cannot be reached. Yields
-    nothing for a zone with no usable polygon.
+    Was a Socrata AddressPoint walk run by the tenant's request. PlaceType now
+    holds the whole city's AddressPoint (ADR-583), so the zone's doors are a
+    READ of it; nothing is written to PlaceType (ADR-581).
+
+    Raises AddressSourceUnavailable when PlaceType doesn't answer: the degrade
+    guard would otherwise read an outage as "this zone has no addresses".
     """
-    from app.services.derive_block_key import derive_block_key
+    from app.database import PlaceTypeSession
+    from app.services import door_resolver, place_geometry
 
-    polygon = polygon_from_bounds(bounds)
-    if polygon is None:
+    ring = ring_from_bounds(bounds)
+    if ring is None:
         logger.info("address_inventory: zone has no usable polygon; nothing to enumerate")
         return
-
-    seen: set[str] = set()
-    offset = 0
-    while offset < _MAX_RECORDS:
-        rows = _fetch_page(polygon, offset)
-        if not rows:
-            return
-        for row in rows:
-            house = (row.get("house_number") or "").strip()
-            street = _normalise_street(row.get("full_street_name"))
-            if not house or not street:
-                continue
-            address = f"{house} {street}"
-            if address in seen:
-                continue
-            seen.add(address)
-
-            # `tba` labels an UnparseableAddress for reporting and carries no
-            # package meaning; workforce mode has no TBA to supply.
-            parsed = derive_block_key(address, tba="")
-            block_key = getattr(parsed, "block_key", None)
-
-            lat = lng = None
-            geom = row.get("the_geom") or {}
-            coords = geom.get("coordinates")
-            if isinstance(coords, list) and len(coords) == 2:
-                lng, lat = float(coords[0]), float(coords[1])
-
-            yield EnumeratedAddress(
-                normalised_address=address,
-                block_key=block_key,
-                lat=lat,
-                lng=lng,
-                bin=(row.get("bin") or None),
-                borough_code=(row.get("boroughcode") or None),
-            )
-        if len(rows) < _PAGE:
-            return
-        offset += _PAGE
-    logger.warning("address_inventory: hit the %s-record ceiling; zone may be too large",
-                   _MAX_RECORDS)
+    pt = PlaceTypeSession()
+    try:
+        if not door_resolver._zip_map(pt):
+            raise AddressSourceUnavailable("placetype unavailable")
+        doors = place_geometry.doors_in_polygon(pt, ring, limit=_MAX_RECORDS)
+    finally:
+        pt.close()
+    if len(doors) >= _MAX_RECORDS:
+        logger.warning("address_inventory: hit the %s-door ceiling; zone may be too large", _MAX_RECORDS)
+    for d in doors:
+        yield EnumeratedAddress(normalised_address=d["address"], block_key=d["block_key"],
+                                lat=d["lat"], lng=d["lng"], bin=d["bin"], borough_code=d["borough"])
 
 
 # ── Persistence (ADR-303 D2) ─────────────────────────────────────────────────
@@ -197,8 +150,8 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
     """
     from app.models.building_profile import BuildingProfile
 
-    # Materialised: the list is walked twice — once for tenant rows, once to
-    # seed PlaceType below. An iterator would be empty on the second pass.
+    # Materialised: callers may pass an iterator, and the count below and the
+    # loop both need the whole list.
     addresses = list(addresses)
     created = skipped_existing = skipped_unparseable = 0
     existing_rows = {

@@ -54,6 +54,11 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("building_profile_library",   "normalised_address"): (
         "Global cross-tenant library key (ADR-220). Same reasoning, platform scope."
     ),
+    ("troublesome_doors",          "address"): (
+        "ADR-584 D6: the door IS the key of the decaying RTS score (ADR-218), not "
+        "a record of a delivery; distilling the signal onto it is what lets the "
+        "delivery rows be nulled at 48h. Erasable on request (pi_erasure, delete_row)."
+    ),
     ("collected_address_profiles", "address"): (
         "A building observation submitted via the public collection campaign "
         "(ADR-415/439) — an observation about a place, never tied to a package."
