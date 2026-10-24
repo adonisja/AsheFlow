@@ -122,8 +122,10 @@ class TestThePlaceTypeResolution:
         out, p, _ = run(Door(borough="1", address="433 W 32 ST", block_key="W_32_St_400",
                              lat=40.75, lng=-73.99, segment_id="0034567"))
         assert out["resolved"] == 1
-        assert (p.address_status, p.normalised_address, p.block_key, p.segment_id) == (
-            "resolved", "433 W 32 ST", "W_32_St_400", "0034567")
+        assert (p.address_status, p.normalised_address, p.block_key) == (
+            "resolved", "433 W 32 ST", "W_32_St_400")
+        # ADR-584 D9 (ADR-580 D5): the door identity, not PlaceType's attributes.
+        assert (p.lat, p.lng, p.segment_id) == (None, None, None)
 
     def test_a_door_without_topology_is_still_the_building(self, run):
         """Reversed by ADR-584: a door in AddressPoint means the house exists,

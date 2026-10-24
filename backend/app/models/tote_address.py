@@ -72,6 +72,11 @@ class ToteAddress(Base):
     # see and fix it rather than having it silently vanish.
     block_key  = Column(String(100), nullable=True, index=True)
 
+    # ADR-584 D9: with normalised_address, the door identity (ADR-582). The
+    # door's own position, segment and cross streets are joined from PlaceType
+    # at sort time and are not stored here (ADR-580 D5). lat/lng below hold a
+    # captain's PIN (their own data) or a row written before ADR-584.
+    borough    = Column(String(1), nullable=True)
     lat        = Column(Float, nullable=True)
     lng        = Column(Float, nullable=True)
 

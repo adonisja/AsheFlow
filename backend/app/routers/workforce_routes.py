@@ -758,15 +758,14 @@ def add_tote_address(
         package_count=payload.package_count,
         normalised_address=resolved.normalised_address,
         block_key=resolved.block_key,
-        lat=resolved.lat,
-        lng=resolved.lng,
-        # ADR-408 D2. Store the segment instead of discarding it.
-        #
-        # This value was computed on the line above and thrown away for as long
-        # as this endpoint has existed, because ToteAddress had no column for
-        # it. That omission is what left workforce mode sorting on a graph with
-        # no cost-1 edges.
-        segment_id=resolved.segment_id,
+        # ADR-584 D9 (ADR-580 D5): a door is stored by its identity, (borough,
+        # canonical address); its position, segment and cross streets are joined
+        # from PlaceType at sort time, not copied here. Only a PIN's coordinates
+        # (the captain's own data) are stored.
+        borough=resolved.borough if resolved.door_status != "pinned" else None,
+        lat=resolved.lat if resolved.door_status == "pinned" else None,
+        lng=resolved.lng if resolved.door_status == "pinned" else None,
+        segment_id=None,
         # Cross streets are STILL deliberately not set. ResolvedAddress does not
         # carry them (verified — it has lat/lng/normalised_address/block_key/
         # segment_id/geocoded and nothing else), so a getattr fallback would

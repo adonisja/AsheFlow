@@ -535,3 +535,29 @@ def doors_in_polygon(db: Session, ring: list, *, limit: int) -> list[dict]:
             if len(out) >= limit:
                 break
     return out
+
+
+
+@_degrades_to(dict)
+@reads_placetype
+def doors_by_identity(db: Session, doors: Iterable[tuple]) -> dict:
+    """{(borough, address): {lat, lng, segment_id, first_cross_street,
+    second_cross_street}} for a batch of door identities (ADR-584 D9): what a
+    tenant's sort joins at read time instead of storing (ADR-580 D5)."""
+    from app.services.segment_map import by_segment_id
+    wanted = {(b, a) for b, a in doors if b and a}
+    if not wanted:
+        return {}
+    rows = (db.query(BuildingProfileLibrary)
+            .filter(BuildingProfileLibrary.normalised_address.in_({a for _, a in wanted}))
+            .all())
+    out = {}
+    for r in rows:
+        key = (r.borough, r.normalised_address)
+        if key not in wanted:
+            continue
+        seg = by_segment_id(db, r.segment_id) if r.segment_id else None
+        out[key] = {"lat": r.lat, "lng": r.lng, "segment_id": r.segment_id,
+                    "first_cross_street": getattr(seg, "first_cross_street", None),
+                    "second_cross_street": getattr(seg, "second_cross_street", None)}
+    return out

@@ -159,6 +159,19 @@ def build_packages(
     disagreements: list[ToteBlockDisagreement] = []
     unparseable: list[str] = []
 
+    # ADR-584 D9 (ADR-580 D5): a door's position, segment and cross streets are
+    # joined from PlaceType here, at sort time, for rows stored by door identity.
+    # One batch read per truck. A row without an identity (a pin, or written
+    # before ADR-584) keeps its own stored values.
+    from app.services.place_geometry import doors_by_identity
+    door_facts = doors_by_identity(db, [(e.borough, e.normalised_address)
+                                        for es in by_bag.values() for e in es
+                                        if getattr(e, "borough", None) and e.normalised_address])
+
+    def _fact(e, field):
+        f = door_facts.get((getattr(e, "borough", None), e.normalised_address))
+        return f[field] if f and f.get(field) is not None else getattr(e, field, None)
+
     for bag_id, entries in by_bag.items():
         blocks = [e.block_key for e in entries if e.block_key]
 
@@ -220,17 +233,17 @@ def build_packages(
                 bag_id=bag_id,
                 block_key=e.block_key,
                 normalised_address=e.normalised_address,
-                lat=e.lat,
-                lng=e.lng,
-                first_cross_street=e.first_cross_street,
-                second_cross_street=e.second_cross_street,
+                lat=_fact(e, "lat"),
+                lng=_fact(e, "lng"),
+                first_cross_street=_fact(e, "first_cross_street"),
+                second_cross_street=_fact(e, "second_cross_street"),
                 # ADR-408 D2. The segment is what makes node-adjacency edges
                 # possible; without it the caller's load_node_adjacency() has
                 # nothing to look up and the sort falls back to block-key edges
                 # alone. Null for rows written before the column existed, and
                 # for addresses GeoClient could not place — both degrade to
                 # exactly the previous behaviour.
-                segment_id=e.segment_id,
+                segment_id=_fact(e, "segment_id"),
                 # ADR-400 A2. `OV_{size}` for an OV, None for a tote.
                 #
                 # This is the whole capacity fix and it needs no new arithmetic:

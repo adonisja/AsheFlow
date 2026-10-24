@@ -5,6 +5,8 @@ or keeps it without a door. Intake and route lookup use the same resolver.
 import uuid
 from datetime import date
 
+from tests.services.test_adr291_workforce_adapter import wf_db  # noqa: F401 — real tote tables
+
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -90,3 +92,46 @@ def test_tote_entry_and_intake_never_reach_geoclient():
     for fn in (W._resolve_tote_door, PI.resolve_address):
         src = inspect.getsource(fn)
         assert "_geoclient" not in src and "address_resolver" not in src, fn.__name__
+
+
+
+class TestTheDoorIdentityIsStoredNotItsAttributes:
+    """ADR-584 D9 / ADR-580 D5: a tenant table holds the door identity; the
+    position, segment and cross streets are joined from PlaceType when sorting."""
+
+    def test_the_tote_row_is_built_with_identity_and_no_placetype_attributes(self):
+        import ast, inspect, textwrap
+        src = textwrap.dedent(inspect.getsource(W.add_tote_address))
+        call = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call)
+                    and getattr(n.func, "id", None) == "ToteAddress")
+        kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
+        assert kw["segment_id"] == "None"
+        assert "pinned" in kw["lat"] and "pinned" in kw["lng"], "only a pin's own coordinates"
+        assert "resolved.borough" in kw["borough"]
+
+    def test_the_sort_joins_placetype_for_a_door_and_keeps_a_pins_own_position(self, wf_db, monkeypatch):
+        """Calls the real build_packages on real tote rows."""
+        import uuid as _uuid
+        from datetime import date as _date
+        from app.models.tote_address import ToteAddress
+        from app.services import place_geometry
+        from app.services.workforce_sort_adapter import build_packages
+        facts = {("1", "505 W 37 ST"): {"lat": 40.7567, "lng": -73.9982, "segment_id": "0034567",
+                                         "first_cross_street": "10 AVE", "second_cross_street": "11 AVE"}}
+        seen = {}
+        monkeypatch.setattr(place_geometry, "doors_by_identity",
+                            lambda db, pairs: seen.setdefault("pairs", list(pairs)) and facts)
+        cid, tid = _uuid.uuid4(), _uuid.uuid4()
+        wf_db.add_all([
+            ToteAddress(id=_uuid.uuid4(), company_id=cid, truck_id=tid, entry_date=_date.today(),
+                        bag_id="5270", raw_address="505 West 37th St", normalised_address="505 W 37 ST",
+                        borough="1", block_key="W_37_St_500", entry_sequence=1),
+            ToteAddress(id=_uuid.uuid4(), company_id=cid, truck_id=tid, entry_date=_date.today(),
+                        bag_id="5271", raw_address="corner of the plaza", normalised_address=None,
+                        block_key="W_37_St_500", lat=40.75, lng=-73.99, entry_sequence=1),
+        ])
+        wf_db.commit()
+        pk = {p.bag_id: p for p in build_packages(wf_db, cid, tid, _date.today()).packages}
+        assert seen["pairs"] == [("1", "505 W 37 ST")], "one batch read, door identities only"
+        assert (pk["5270"].segment_id, pk["5270"].lat, pk["5270"].first_cross_street) == ("0034567", 40.7567, "10 AVE")
+        assert (pk["5271"].lat, pk["5271"].lng, pk["5271"].segment_id) == (40.75, -73.99, None)

@@ -110,9 +110,8 @@ def resolve_pending_addresses() -> dict:
                 # (ADR-277 D1); raw_note keeps the submitter's own words.
                 profile.normalised_address = result.address[:200]
                 profile.block_key = result.block_key
-                profile.lat = result.lat
-                profile.lng = result.lng
-                profile.segment_id = result.segment_id
+                # ADR-584 D9 (ADR-580 D5): the door's identity, not PlaceType's
+                # attributes. Position and segment are joined when shown.
                 profile.geo_grc = None
                 profile.geo_message = None
                 profile.address_status = "resolved"
