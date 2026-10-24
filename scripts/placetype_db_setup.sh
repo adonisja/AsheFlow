@@ -24,7 +24,11 @@ for a in "$@"; do
 done
 
 PGUSER="$(grep -E '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2- || true)"; PGUSER="${PGUSER:-asheflow}"
-PSQL=(docker exec -i asheflow_postgres psql -v ON_ERROR_STOP=1 -qtA -U "$PGUSER")
+# Postgres tools inside the container, authenticated with the password the
+# container already holds (POSTGRES_PASSWORD). Staging's socket requires it;
+# prod's happened not to. Nothing reaches a host command line.
+pgx() { local tool="$1"; shift; docker exec -i asheflow_postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" exec "$0" "$@"' "$tool" "$@"; }
+PSQL=(pgx psql -v ON_ERROR_STOP=1 -qtA -U "$PGUSER")
 
 role_exists() { [ "$("${PSQL[@]}" -d postgres -c "SELECT 1 FROM pg_roles WHERE rolname='$1'")" = "1" ]; }
 db_exists()   { [ "$("${PSQL[@]}" -d postgres -c "SELECT 1 FROM pg_database WHERE datname='placetype'")" = "1" ]; }
