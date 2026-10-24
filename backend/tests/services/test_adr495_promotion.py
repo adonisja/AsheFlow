@@ -116,10 +116,13 @@ def _profiles(db, company=SEED_COMPANY_ID, source="campaign"):
 VECTOR = [
     ("433 West 32nd Street", "433 W 32 ST"),
     ("433 w. 32nd st, Apt 4A", "433 W 32 ST"),
-    ("330 Fifth Avenue", "330 FIFTH AVE"),
+    # ADR-582: the city's own spelling wins where AddressPoint has the street.
+    # The web twin (a preview, ADR-582 D6) still gives "330 FIFTH AVE" and
+    # "1 PENN PLAZA" for these two; the server is authoritative.
+    ("330 Fifth Avenue", "330 5 AVE"),
     ("10 E 33rd St Floor 3", "10 E 33 ST"),
     ("2 east 33 street", "2 E 33 ST"),
-    ("1 Penn Plaza", "1 PENN PLAZA"),
+    ("1 Penn Plaza", "1 PENN PLZ"),
     ("200 North End Ave Lobby", "200 N END AVE"),
     ("77 Lane Road", "77 LN RD"),
     ("12 Westend Ave", "12 WESTEND AVE"),

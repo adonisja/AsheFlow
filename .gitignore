@@ -255,3 +255,7 @@ frontend/.cert/
 
 # mkcert CA copied into public/ for phone install (scripts/field-cert.sh).
 frontend/public/rootCA.pem
+
+# ADR-583: PlaceType role credentials, server-only
+.placetype-writer.env
+.placetype-reader.env

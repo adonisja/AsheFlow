@@ -500,6 +500,6 @@ async def read_label(
         address_line=read.address_line,
         confidence=read.confidence,
         needs_manual_entry=read.needs_manual_entry,
-        lines=read.lines,
+        address_candidates=read.address_candidates,
         warnings=read.warnings,
     )

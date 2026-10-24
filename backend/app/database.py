@@ -1,3 +1,4 @@
+import functools
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -75,3 +76,36 @@ def get_placetype_db():
         yield db
     finally:
         db.close()
+
+
+def reads_placetype(fn):
+    """Run a PlaceType READER on PlaceType's own database (ADR-583 D3).
+
+    The boundary readers (`library.client`, `segment_map`, `place_geometry`)
+    take the caller's session as their first argument, and every caller passes
+    its TENANT session. With PlaceType in its own database that session can't
+    see the tables at all, so this swaps it: when PlaceType is remote, the
+    reader gets a fresh `PlaceTypeSession` (closed afterwards) in place of
+    `db`; otherwise the caller's session, which is the same database.
+
+    This picks a SESSION, not a behaviour, which is why it can branch where
+    the note above `PLACETYPE_IS_REMOTE` says readers must not: both branches
+    run the same query, and both are tested
+    (tests/test_adr583_placetype_database.py drives the remote one with two
+    separate databases). Writers are never decorated: only the owner's seed
+    calls them, with its own writer session (ADR-583 D2).
+
+    Apply UNDER `_degrades_to`, so a connection failure while opening the
+    session degrades to an empty map like any other unreachable read.
+    """
+    @functools.wraps(fn)
+    def wrapper(db, *args, **kwargs):
+        if not PLACETYPE_IS_REMOTE:
+            return fn(db, *args, **kwargs)
+        session = PlaceTypeSession()
+        try:
+            return fn(session, *args, **kwargs)
+        finally:
+            session.close()
+    wrapper.__reads_placetype__ = True
+    return wrapper

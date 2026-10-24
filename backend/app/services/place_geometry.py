@@ -39,6 +39,7 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.database import reads_placetype
 from app.models.building_profile_library import BuildingProfileLibrary
 
 logger = logging.getLogger(__name__)
@@ -134,20 +135,24 @@ def upsert_building_geometry(db: Session, rows: Iterable[dict],
     """
     now = datetime.now(timezone.utc)
     payload = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for r in rows:
         addr = _clean(r.get("normalised_address"))
         bk = _clean(r.get("block_key"))
-        if not addr or not bk:
+        boro = _clean(r.get("borough"))
+        # ADR-583 D5: a door is (borough, address); a row without a borough
+        # cannot be placed and is not written.
+        if not addr or not bk or not boro:
             continue
         # ON CONFLICT cannot fire twice for the same key in one statement.
-        if addr in seen:
+        if (boro, addr) in seen:
             continue
-        seen.add(addr)
+        seen.add((boro, addr))
         row = {k: r.get(k) for k in _GEOMETRY_COLUMNS if k != "geo_enriched_at"}
         row.update({
             "normalised_address": addr,
             "block_key": bk,
+            "borough": boro,
             # `geo_enriched_at` means "GeoClient has run for this address",
             # NOT "this row was written". The bootstrap seed writes bin/lat/lng
             # from AddressPoint and must leave it NULL, or the enrichment pass
@@ -167,7 +172,7 @@ def upsert_building_geometry(db: Session, rows: Iterable[dict],
 
     stmt = pg_insert(BuildingProfileLibrary).values(payload)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["normalised_address"],
+        index_elements=["borough", "normalised_address"],
         # library_status is absent on purpose: a promoted row must not be
         # demoted to geometry_only by a later enrichment pass.
         #
@@ -230,26 +235,29 @@ def span_from_geoclient(resp: dict) -> dict:
     }
 
 
-def pending_enrichment(db: Session, limit: int) -> list[tuple[str, str]]:
-    """Addresses that have never been through GeoClient, oldest first (ADR-315 D2).
+def pending_enrichment(db: Session, limit: int, after_id=None) -> list[tuple]:
+    """Doors that have never been through GeoClient (ADR-315 D2), for the
+    owner's seed (ADR-583 D6). Keyset-paged by id, so a 22-hour pass resumes
+    where it stopped and never re-reads a page.
 
-    Lives here rather than in the task because this module owns PlaceType's
-    geometry tier — the ADR-237 boundary test flagged the task importing
-    `BuildingProfileLibrary` directly, correctly: a second module naming the
-    model is how ownership erodes.
+    Lives here because this module owns PlaceType's geometry tier: the ADR-237
+    boundary test rejects a second module naming the model.
 
-    Returns `(normalised_address, block_key)` rather than ORM rows so the caller
-    cannot mutate them behind this module's back.
+    Returns `(id, normalised_address, block_key, borough)` tuples rather than
+    ORM rows, so the caller cannot mutate them behind this module's back.
     """
-    rows = (
-        db.query(BuildingProfileLibrary.normalised_address,
-                 BuildingProfileLibrary.block_key)
-        .filter(BuildingProfileLibrary.geo_enriched_at.is_(None))
-        .order_by(BuildingProfileLibrary.created_at.asc())
-        .limit(limit)
-        .all()
-    )
-    return [(a, b) for a, b in rows]
+    q = (db.query(BuildingProfileLibrary.id, BuildingProfileLibrary.normalised_address,
+                  BuildingProfileLibrary.block_key, BuildingProfileLibrary.borough)
+         .filter(BuildingProfileLibrary.geo_enriched_at.is_(None),
+                 BuildingProfileLibrary.borough.isnot(None)))
+    if after_id is not None:
+        q = q.filter(BuildingProfileLibrary.id > after_id)
+    return [tuple(r) for r in q.order_by(BuildingProfileLibrary.id).limit(limit).all()]
+
+
+def door_count(db: Session) -> int:
+    """Distinct doors in PlaceType, for the seed's report (ADR-583)."""
+    return db.query(BuildingProfileLibrary).count()
 
 
 def pending_enrichment_count(db: Session) -> int:
@@ -261,6 +269,14 @@ def pending_enrichment_count(db: Session) -> int:
     )
 
 
+def create_table(bind) -> str:
+    """Create the building table in PlaceType's own database (ADR-583 D6),
+    from the model, so the two can't drift. Owner seed only."""
+    BuildingProfileLibrary.__table__.create(bind, checkfirst=True)
+    return BuildingProfileLibrary.__tablename__
+
+
+@reads_placetype
 def enriched_building_with_segment(db: Session, normalised_address: str):
     """An ENRICHED building row plus its segment, or None (ADR-316 D2).
 

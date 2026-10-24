@@ -72,7 +72,8 @@ type LabelRead = {
   address_line: string | null;
   confidence: number | null;
   needs_manual_entry: boolean;
-  lines: string[];
+  /** ADR-587 D1: street lines only; mirrors LabelReadResponse in the web types. */
+  address_candidates: string[];
   warnings: string[];
 };
 

@@ -15,7 +15,8 @@ not: which transport is configured, and whether the store answered at all.
 """
 from __future__ import annotations
 
-from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy import text
+from sqlalchemy.exc import InterfaceError, OperationalError, ProgrammingError
 
 
 def health() -> dict:
@@ -37,12 +38,17 @@ def health() -> dict:
         "reachable": False,
         "segments": None,
         "buildings": None,
+        # ADR-583 D4: the API's role must be SELECT-only. None = not checked
+        # (PlaceType shares the app database, so the grant does not exist yet).
+        "writable": None,
     }
     db = PlaceTypeSession()
     try:
         out["segments"] = db.query(StreetSegment).count()
         out["buildings"] = db.query(BuildingProfileLibrary).count()
         out["reachable"] = True
+        if PLACETYPE_IS_REMOTE:
+            out["writable"] = _can_write(db)
     except (OperationalError, InterfaceError) as exc:
         # The same two errors the readers degrade on, for the same reason: an
         # outage is reported, a bug still raises.
@@ -50,3 +56,18 @@ def health() -> dict:
     finally:
         db.close()
     return out
+
+
+def _can_write(db) -> bool:
+    """ADR-583 D4. Attempt one INSERT and roll it back. A SELECT-only role is
+    refused with a permission error (ProgrammingError); anything that inserts
+    means the grant is wrong. Never commits, so a writable role leaves no row."""
+    try:
+        db.execute(text(
+            "INSERT INTO street_segments (id, segment_id, source) "
+            "VALUES (gen_random_uuid(), '__adr583_write_probe__', 'probe')"))
+    except ProgrammingError:
+        db.rollback()
+        return False
+    db.rollback()
+    return True

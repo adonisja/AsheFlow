@@ -55,6 +55,7 @@ from typing import Iterable, Optional
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
+from app.database import reads_placetype
 from app.models.building_profile_library import BuildingProfileLibrary
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ def _degrades_to(empty):
 
 
 @_degrades_to(list)
+@reads_placetype
 def all_active(db: Session) -> list[BuildingProfileLibrary]:
     """Every active Library record.
 
@@ -128,23 +130,31 @@ def all_active(db: Session) -> list[BuildingProfileLibrary]:
 
 
 @_degrades_to(None)
-def by_address(db: Session, normalised_address: str) -> Optional[BuildingProfileLibrary]:
+@reads_placetype
+def by_address(db: Session, normalised_address: str,
+               borough: Optional[str] = None) -> Optional[BuildingProfileLibrary]:
     """One active Library record, or None.
 
     Tier 2 of the lookup chain: callers try their own tenant `BuildingProfile`
     first and fall back here for cold-start coverage.
+
+    ADR-583 D5: a door is (borough, address). Pass the borough when known;
+    without it the same address in two boroughs is ambiguous, and an
+    ambiguous lookup answers None rather than picking one (ADR-584 brings the
+    borough to every caller).
     """
-    return (
-        db.query(BuildingProfileLibrary)
-        .filter(
-            BuildingProfileLibrary.normalised_address == normalised_address,
-            BuildingProfileLibrary.library_status == _ACTIVE,
-        )
-        .first()
+    q = db.query(BuildingProfileLibrary).filter(
+        BuildingProfileLibrary.normalised_address == normalised_address,
+        BuildingProfileLibrary.library_status == _ACTIVE,
     )
+    if borough:
+        return q.filter(BuildingProfileLibrary.borough == borough).first()
+    rows = q.limit(2).all()
+    return rows[0] if len(rows) == 1 else None
 
 
 @_degrades_to(dict)
+@reads_placetype
 def by_addresses(
     db: Session, normalised_addresses: Iterable[str]
 ) -> dict[str, BuildingProfileLibrary]:

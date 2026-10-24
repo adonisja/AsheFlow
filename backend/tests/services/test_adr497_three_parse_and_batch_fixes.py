@@ -136,9 +136,10 @@ class TestStreetNamesThatLookLikeUnitWords:
 # ── 3. an unparseable typed address is stored, never a 500 ───────
 
 class TestAnUnparseableManualAddress:
-    # A lettered house number: common in Brooklyn and Queens, and the routing
-    # parser reads it as "missing_house_number". ADR-496 passes it (it names a street).
-    ADDR = "455A Main St"
+    # A named place with no hundred-block. ADR-496 passes it (it names a
+    # street). This was "455A Main St" until ADR-582 D5 taught the parser
+    # lettered house numbers, so that example became parseable.
+    ADDR = "Pier 40 West St"
 
     def test_it_really_is_unparseable(self):
         assert isinstance(derive_block_key(self.ADDR, tba=""), UnparseableAddress)

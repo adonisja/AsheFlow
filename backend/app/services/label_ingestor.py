@@ -90,9 +90,12 @@ class LabelRead:
     # 0.0–1.0, the mean Textract confidence of the lines the fields came from.
     # None when nothing was found.
     confidence: Optional[float] = None
-    # Every line read, so the UI can offer "none of these — type it" without a
-    # second Textract call.
-    lines: list[str] = field(default_factory=list)
+    # ADR-587 D1: the street-looking lines only, each in the address standard
+    # (ADR-582), so the UI can offer "a different line" without a second
+    # Textract call. Every other line (the recipient's name, the return
+    # address's company, label furniture) is dropped here and never returned,
+    # logged or stored. There is deliberately no field holding all lines.
+    address_candidates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -122,7 +125,9 @@ def parse_label_lines(lines: list[tuple[str, float]]) -> LabelRead:
     return address, so first-wins matches the physical layout. A label with two
     candidates records a warning so the UI can ask rather than silently choose.
     """
-    read = LabelRead(lines=[t for t, _ in lines])
+    from app.services.door_key import canonical_address
+
+    read = LabelRead()
 
     # Confidence of every line a returned field came from — the mean is what
     # the UI thresholds on, so a shaky address must drag the score down even
@@ -141,8 +146,11 @@ def parse_label_lines(lines: list[tuple[str, float]]) -> LabelRead:
         if not cleaned or _find_tba(cleaned) is not None:
             continue
         if _STREET_RE.match(cleaned):
-            street_candidates.append((cleaned, conf))
+            canon = canonical_address(cleaned)
+            if canon and all(c != canon for c, _ in street_candidates):
+                street_candidates.append((canon, conf))
 
+    read.address_candidates = [c for c, _ in street_candidates]
     if street_candidates:
         read.address_line, addr_conf = street_candidates[0]
         field_confs.append(addr_conf)

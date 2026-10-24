@@ -18,6 +18,9 @@ vector below is what keeps them honest — add a case to both when either moves.
 """
 from __future__ import annotations
 
+import functools
+import json
+import pathlib
 import re
 
 # Ordered: ordinals before direction words, so "33rd" is a number before
@@ -107,15 +110,150 @@ _NOISE = re.compile(NOISE_PATTERN, re.IGNORECASE)
 _CANON_TYPES = [(re.compile(p.pattern, re.IGNORECASE), c.upper()) for p, c in _STREET_TYPES]
 
 
-def canonical_address(address: str) -> str:
-    """`433 West 32nd Street, Apt 4` -> `433 W 32 ST`."""
-    s = _NOISE.split(address)[0].strip().rstrip(",")
+def _rule_fold(text: str) -> str:
+    """The rule-based fold (ADR-495 D7): the fallback when the lexicon has no
+    match, and what the web twin `canonicalAddress()` previews offline."""
+    s = _NOISE.split(text)[0].strip().rstrip(",")
     s = _PUNCT.sub(" ", s)
     s = re.sub(r"\b(\d+)(st|nd|rd|th)\b", r"\1", s, flags=re.IGNORECASE)
     s = re.sub(r"\b(north|south|east|west)\b", lambda m: m.group(0)[0], s, flags=re.IGNORECASE)
     for pattern, canon in _CANON_TYPES:
         s = pattern.sub(canon, s)
     return _WHITESPACE.sub(" ", s).strip().upper()
+
+
+# ── ADR-582: the city's own street names ─────────────────────────────────────
+#
+# The standard's target is AddressPoint's spelling, because PlaceType's doors
+# come from AddressPoint. A rule cannot tell `WEST ST` (a street named West)
+# from `West 32nd St` (a direction), or keep `HOLLIS CT BOULEVARD` whole; the
+# city's list of names can. Input is folded to a key and matched against the
+# same fold of every city name; the city's spelling is returned.
+
+# House number: digits, optional -digits (Queens), each with an optional letter.
+_HOUSE = re.compile(r"^\s*(\d+[A-Za-z]?(?:\s*-\s*\d+[A-Za-z]?)?)(?=\s|,|$)")
+
+_ORDINAL_WORDS = {
+    "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5", "sixth": "6",
+    "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10", "eleventh": "11",
+    "twelfth": "12",
+}
+# Fold-key street types: wider than _STREET_TYPES because the city uses more.
+_FOLD_TYPES = {
+    "street": "st", "avenue": "ave", "av": "ave", "boulevard": "blvd", "road": "rd",
+    "place": "pl", "drive": "dr", "lane": "ln", "parkway": "pkwy", "court": "ct",
+    "terrace": "ter", "plaza": "plz", "square": "sq", "circle": "cir",
+    "expressway": "expy", "crescent": "cres", "highway": "hwy", "green": "grn",
+    "alley": "aly", "saint": "st", "mount": "mt", "fort": "ft",
+}
+_DIRECTION_FOLD = {"north": "n", "south": "s", "east": "e", "west": "w"}
+
+
+def _fold_tokens(text: str) -> list[str]:
+    s = _PUNCT.sub(" ", text.lower())
+    s = re.sub(r"\b(\d+)(st|nd|rd|th)\b", r"\1", s)
+    out = []
+    for t in s.split():
+        t = _ORDINAL_WORDS.get(t, t)
+        t = _DIRECTION_FOLD.get(t, t)
+        out.append(_FOLD_TYPES.get(t, t))
+    return out
+
+
+_BOROUGH_CODES = {
+    "1": "1", "manhattan": "1", "mn": "1", "new york": "1",
+    "2": "2", "bronx": "2", "bx": "2",
+    "3": "3", "brooklyn": "3", "bk": "3",
+    "4": "4", "queens": "4", "qn": "4",
+    "5": "5", "staten island": "5", "si": "5",
+}
+
+
+def borough_code(borough) -> str | None:
+    """'manhattan' / 'MN' / 1 / '1' -> '1'. None when unknown."""
+    if borough is None:
+        return None
+    return _BOROUGH_CODES.get(str(borough).strip().lower())
+
+
+@functools.lru_cache(maxsize=1)
+def _lexicon() -> tuple[dict, dict]:
+    """({borough: {fold_key: name}}, {fold_key: name-or-None-if-ambiguous})."""
+    path = pathlib.Path(__file__).resolve().parents[1] / "data" / "street_lexicon.json"
+    data = json.loads(path.read_text())["boroughs"]
+    by_boro: dict[str, dict[str, str]] = {}
+    city: dict[str, str | None] = {}
+    for boro, names in data.items():
+        m = by_boro.setdefault(boro, {})
+        for name in names:
+            key = " ".join(_fold_tokens(name))
+            # Same key twice in one borough: keep neither, so the fold never
+            # silently picks one of two real streets.
+            m[key] = None if key in m and m[key] != name else name
+            city[key] = name if city.get(key, name) == name else None
+    return by_boro, city
+
+
+def _match_street(tokens: list[str], boro: str | None) -> str | None:
+    by_boro, city = _lexicon()
+    table = by_boro.get(boro) if boro else city
+    if not table:
+        return None
+    # Exact spelling first: where two real streets fold to one key (the Bronx
+    # has both NORTH ST and N ST), the fold refuses to choose, and the words as
+    # written are the only honest tie-break.
+    exact = _exact_names().get(boro) if boro else _exact_names().get(None)
+    words = _PUNCT.sub(" ", " ".join(tokens)).upper().split()
+    for k in range(len(words), 0, -1):
+        cand = " ".join(words[:k])
+        if exact and cand in exact:
+            return cand
+    folded = _fold_tokens(" ".join(tokens))
+    for k in range(len(folded), 0, -1):          # longest run of words wins
+        name = table.get(" ".join(folded[:k]))
+        if name:
+            return name
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _exact_names() -> dict:
+    """{borough: set(names)} plus None -> every name in the city."""
+    path = pathlib.Path(__file__).resolve().parents[1] / "data" / "street_lexicon.json"
+    data = json.loads(path.read_text())["boroughs"]
+    out = {b: set(v) for b, v in data.items()}
+    out[None] = set().union(*out.values())
+    return out
+
+
+def canonical_address(address: str, borough=None) -> str:
+    """The address standard (ADR-582).
+
+    `Jane Sample 350 Fifth Avenue #4B` -> `350 5 AVE`;  `1 West Street` -> `1 WEST ST`;
+    `455a W 32nd St, Apt 3` -> `455A W 32 ST`;  `123 - 45 145th Street` -> `123-45 145 ST`.
+
+    House number plus the city's spelling of the street. Never a name before
+    the number (ADR-449, enforced HERE, not only in one request schema), never a
+    unit, floor or anything after the street. Falls back to the rule fold when
+    the street is not in the city's list.
+    """
+    s = strip_leading_non_number(address or "")
+    m = _HOUSE.match(s)
+    if not m:
+        return _rule_fold(s)
+    house = re.sub(r"\s+", "", m.group(1)).upper()
+    rest = _NOISE.split(s[m.end():])[0]
+    street = _match_street(rest.split(), borough_code(borough))
+    if street:
+        return f"{house} {street}"
+    folded = _rule_fold(rest)
+    return f"{house} {folded}".strip()
+
+
+def door_identity(borough, address: str) -> tuple[str | None, str]:
+    """ADR-580 D2 / ADR-582 D3: one door, one key. BIN is an attribute."""
+    code = borough_code(borough)
+    return code, canonical_address(address, code)
 
 
 # ADR-496 — does this address still name a street?

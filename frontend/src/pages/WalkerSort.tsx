@@ -1234,9 +1234,21 @@ function TruckSortPanel({
                     {state.routes.length} routes committed · {pkgCount} packages
                   </div>
                   {state.packages_dropped > 0 && (
-                    <div className="flex items-center gap-1.5 text-xs text-warning">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      {state.packages_dropped} package{state.packages_dropped === 1 ? '' : 's'} dropped. These TBAs were not found in the enriched manifest.
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs text-warning">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        {state.packages_dropped} package{state.packages_dropped === 1 ? '' : 's'} dropped. These TBAs were not found in the enriched manifest.
+                      </div>
+                      {/* ADR-587 D3: the push and Discord carry the count only;
+                          this list is where dispatch sees which ones. */}
+                      {state.dropped_tbas.length > 0 && (
+                        <details className="text-xs text-muted-foreground">
+                          <summary className="cursor-pointer">Show the {state.dropped_tbas.length} TBAs</summary>
+                          <ul className="mt-1 font-mono tabular-nums grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-4">
+                            {state.dropped_tbas.map((t) => <li key={t}>{t}</li>)}
+                          </ul>
+                        </details>
+                      )}
                     </div>
                   )}
                 </div>

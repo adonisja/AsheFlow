@@ -2736,7 +2736,9 @@ export interface LabelReadResponse {
   address_line: string | null;
   confidence: number | null;
   needs_manual_entry: boolean;
-  lines: string[];
+  /** ADR-587 D1: street lines only, in the address standard. There is no
+   *  "every line" field — the label carries the recipient's name. */
+  address_candidates: string[];
   warnings: string[];
 }
 

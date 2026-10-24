@@ -104,7 +104,9 @@ class LabelReadOut(BaseModel):
     """What the scanner thinks is on the label. Always confirmed by a human."""
     tba: Optional[str] = None
     confidence: Optional[float] = None
-    lines: list[str] = []
+    # ADR-587 D1: no `lines`. The docstring of scan_label said "only the TBA is
+    # returned" while this model returned every OCR line, the recipient's name
+    # included.
     warnings: list[str] = []
     needs_manual_entry: bool = True
 
@@ -255,8 +257,8 @@ async def scan_label(
     return LabelReadOut(
         tba=read.tba,
         confidence=read.confidence,
-        lines=read.lines,
-        warnings=read.warnings,
+        # Address warnings are about the half this endpoint does not return.
+        warnings=[w for w in read.warnings if w == "no_tba_found"],
         # The address half of the read is irrelevant here, so a missing address
         # must not force manual entry of a TBA that scanned cleanly.
         needs_manual_entry=read.tba is None,

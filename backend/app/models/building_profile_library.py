@@ -29,7 +29,9 @@ class BuildingProfileLibrary(Base):
     """
     __tablename__ = "building_profile_library"
     __table_args__ = (
-        UniqueConstraint("normalised_address", name="uq_building_profile_library_address"),
+        # ADR-583 D5: door identity is (borough, canonical address) (ADR-582 D3).
+        # The address alone made 100 BROADWAY in Manhattan and in Brooklyn one row.
+        UniqueConstraint("borough", "normalised_address", name="uq_building_profile_library_door"),
     )
 
     id                  = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -37,6 +39,9 @@ class BuildingProfileLibrary(Base):
     # Address identity — global key, no company_id
     normalised_address  = Column(String(200), nullable=False)
     block_key           = Column(String(60),  nullable=False)   # denormalised for difficulty flag resolution
+    # ADR-583 D5: NYC borough code, "1" Manhattan .. "5" Staten Island (AddressPoint's
+    # boroughcode). Nullable only for rows that predate the seed; the seed always sets it.
+    borough             = Column(String(1), nullable=True, index=True)
 
     # ── Geometry tier (ADR-314 D0a) ──────────────────────────────────────────
     # This table held 33 columns of building INTELLIGENCE and no geometry at

@@ -55,7 +55,7 @@ class TestAddressExtraction:
 
     def test_strips_label_furniture(self):
         r = parse_label_lines(_lines("SHIP TO: 250 W 57TH ST"))
-        assert r.address_line == "250 W 57TH ST"
+        assert r.address_line == "250 W 57 ST"   # the address standard (ADR-582)
 
     def test_city_state_zip_is_not_an_address_line(self):
         """No leading house number, so it must not be mistaken for the street."""
@@ -78,9 +78,11 @@ class TestAddressExtraction:
         r = parse_label_lines(_lines("TBA303912345447"))
         assert r.address_line is None
 
-    def test_apartment_suffix_survives(self):
+    def test_a_unit_never_survives(self):
+        """ADR-587 D1 / ADR-582 D4: the door, never the apartment. This test
+        asserted the opposite before ADR-587."""
         r = parse_label_lines(_lines("250 W 57TH ST APT 4B"))
-        assert r.address_line == "250 W 57TH ST APT 4B"
+        assert r.address_line == "250 W 57 ST"
 
 
 class TestConfidenceAndFallback:
@@ -103,10 +105,21 @@ class TestConfidenceAndFallback:
         assert r.needs_manual_entry
         assert r.confidence is None
 
-    def test_all_lines_are_returned_for_manual_pick(self):
-        """So the UI can offer 'none of these' without a second Textract call."""
-        r = parse_label_lines(_lines("SHIP TO:", "1 MAIN ST", "TBA303912345447"))
-        assert r.lines == ["SHIP TO:", "1 MAIN ST", "TBA303912345447"]
+    def test_only_address_candidates_are_returned_for_manual_pick(self):
+        """ADR-587 D1. The UI can still offer another line without a second
+        Textract call, but only street lines, in the standard. The recipient's
+        name, the city line and the TBA line are dropped here."""
+        r = parse_label_lines(_lines(
+            "SHIP TO:", "JANE SAMPLE", "1 MAIN ST APT 2", "NEW YORK NY 10001",
+            "TBA303912345447", "Return: ACME CO 999 RETURN RD"))
+        assert r.address_candidates == ["1 MAIN ST"]
+        assert not hasattr(r, "lines")
+
+    def test_a_name_on_the_street_line_is_dropped(self):
+        """A recipient printed on the same line as the street (ADR-449)."""
+        r = parse_label_lines(_lines("Jane Sample 350 5th Ave Apt 12B"))
+        assert r.address_line is None or "JANE" not in r.address_line
+        assert all("JANE" not in c.upper() for c in r.address_candidates)
 
 
 class TestTextractBoundary:

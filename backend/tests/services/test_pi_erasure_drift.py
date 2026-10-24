@@ -14,7 +14,11 @@ from app.services import pi_erasure
 
 # `location` added by ADR-512: incidents.incident_location stored a customer
 # address under a name this scan could not see, so erasure never reached it.
-_PATTERN = re.compile(r"address|tba|location|(^|_)notes?$")
+# `roster`, `cross_street` and lat/lng added by ADR-587 D6: truck_zones.tote_roster
+# held every TBA in JSON, and tote_addresses kept a door's coordinates after its
+# address was nulled, both under names this scan could not see.
+_PATTERN = re.compile(
+    r"address|tba|location|(^|_)notes?$|roster|cross_street|(^|_)(lat|lng|latitude|longitude)$")
 
 
 def _candidates() -> dict[tuple[str, str], str]:
@@ -27,7 +31,12 @@ def _candidates() -> dict[tuple[str, str], str]:
 
 
 def _registered() -> set[tuple[str, str]]:
-    return {(pi_erasure.resolve(t).__tablename__, t.column) for t in pi_erasure.REGISTRY}
+    out = set()
+    for t in pi_erasure.REGISTRY:
+        table = pi_erasure.resolve(t).__tablename__
+        out.add((table, t.column))
+        out.update((table, c) for c in t.also_null)   # ADR-587 D5
+    return out
 
 
 def test_every_pi_column_is_registered_or_exempt():
@@ -59,6 +68,8 @@ def test_every_registered_column_exists_on_its_model():
     for t in pi_erasure.REGISTRY:
         model = pi_erasure.resolve(t)
         assert t.column in model.__table__.columns, f"{t.model}.{t.column} does not exist"
+        for c in t.also_null:
+            assert c in model.__table__.columns, f"{t.model}.{c} (also_null) does not exist"
         if t.tenant:
             assert "company_id" in model.__table__.columns, f"{t.model} has no company_id to scope by"
 

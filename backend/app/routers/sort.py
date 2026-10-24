@@ -956,7 +956,6 @@ def patch_manifest_package(
         extra={
             "company_id": cid_str,
             "sort_date":  date_str,
-            "tba":        tba,
             "resolved":   block_key is not None,
         },
     )
