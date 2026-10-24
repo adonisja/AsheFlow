@@ -20,9 +20,16 @@ IMAGE="$(docker inspect asheflow_backend --format '{{.Config.Image}}')"
 NET="$(docker inspect asheflow_postgres --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')"
 docker rm -f placetype_seed >/dev/null 2>&1 || true
 
-# Values come from env files, so no credential appears in the command line.
+# The backend container's own environment, NOT backend/.env: compose builds
+# DATABASE_URL, SECRET_KEY, INTERNAL_SECRET and the encryption key from the root
+# .env, so backend/.env alone fails Settings() at import ("database_url Field
+# required" — the first prod run, 2026-10-23). Written mode 600, removed once
+# the container exists; no credential appears on the command line.
+ENVF="$(mktemp)"; chmod 600 "$ENVF"; trap 'rm -f "$ENVF"' EXIT
+docker inspect asheflow_backend --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -v '^$' > "$ENVF"
+
 docker run -d --name placetype_seed --network "$NET" \
-  --env-file backend/.env --env-file .placetype-writer.env \
+  --env-file "$ENVF" --env-file .placetype-writer.env \
   -e PLACETYPE_DATABASE_URL= \
   "$IMAGE" sh -c 'n=0; until python -m app.placetype.seed "$@"; do n=$((n+1)); [ "$n" -ge 30 ] && { echo "seed failed 30 times; giving up"; exit 1; }; echo "seed exited; retry $n in 60s"; sleep 60; done' \
   seed "$@"
