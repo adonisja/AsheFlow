@@ -58,6 +58,9 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { Badge, Button, tick } from '@components/ui/primitives';
 import { errorText } from '@api/errorText';
+
+/** A city door on the same street, from the 409 when no door matched (ADR-584). */
+type StreetDoor = { address: string; borough: string };
 import { localYMD } from '@hooks/localDate';
 import BuildingInfoPrompt from '@components/route/BuildingInfoPrompt';
 
@@ -144,6 +147,8 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [address, setAddress] = useState('');
   const [saving, setSaving] = useState(false);
+  // ADR-584 D4: the doors on that street when no city door matched (a 409).
+  const [doorChoices, setDoorChoices] = useState<StreetDoor[] | null>(null);
   const addressRef = useRef<TextInput>(null);
 
   const load = useCallback(async (isRefresh = false) => {
@@ -185,7 +190,7 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
   // which is the order the totes are physically stacked in.
   const groupedBags = groupBags(data?.unaddressed ?? [], filter);
 
-  const submit = async () => {
+  const submit = async (choice?: { door: { borough: string; address: string } } | { without_door: true }) => {
     if (!canSubmit) return;
     setSaving(true);
     setError(null);
@@ -195,12 +200,18 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
         entry_date: day,
         bag_id: bagId.trim(),
         raw_address: address.trim(),
+        ...(choice ?? {}),
       });
       tick();                       // a captain wearing gloves feels this
+      setDoorChoices(null);
       setAddress('');               // bag id deliberately survives
       addressRef.current?.focus();  // straight into the next address
       await load();
     } catch (e: unknown) {
+      const err = e as { response?: { status?: number; data?: { detail?: { near?: StreetDoor[] } } } };
+      if (err.response?.status === 409 && Array.isArray(err.response.data?.detail?.near)) {
+        setDoorChoices(err.response.data.detail.near);
+      }
       setError(errorText(e, 'Could not save that address.'));
     } finally {
       setSaving(false);
@@ -463,20 +474,51 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
               <TextInput
                 ref={addressRef}
                 value={address}
-                onChangeText={setAddress}
+                onChangeText={(t) => { setAddress(t); setDoorChoices(null); }}
                 placeholder="411 W 36 St"
                 placeholderTextColor={c.placeholder}
                 autoCapitalize="words"
                 autoCorrect={false}          // street names are not dictionary words
                 autoFocus                    // the bag is chosen; the address is all that is left
                 returnKeyType="done"
-                onSubmitEditing={submit}
+                onSubmitEditing={() => submit()}
                 style={s.input}
                 accessibilityLabel={`Delivery address for bag ${bagId}`}
               />
 
+              {/* ADR-584 D4. No city door matched: the real doors on that street,
+                  closest house first, or keep it as typed. */}
+              {doorChoices !== null ? (
+                <View style={s.doorChoices} accessibilityLabel="Which door is it?">
+                  <Text style={s.doorTitle}>Which door is it?</Text>
+                  {doorChoices.length === 0 ? (
+                    <Text style={s.hint}>No city doors on that block. Check the street, or keep it as typed.</Text>
+                  ) : doorChoices.map(d => (
+                    <Button
+                      key={`${d.borough}:${d.address}`}
+                      variant="outline"
+                      fullWidth
+                      disabled={saving}
+                      onPress={() => submit({ door: { borough: d.borough, address: d.address } })}
+                      accessibilityLabel={`Use ${d.address}`}
+                    >
+                      {d.address}
+                    </Button>
+                  ))}
+                  <Button
+                    variant="ghost"
+                    fullWidth
+                    disabled={saving}
+                    onPress={() => submit({ without_door: true })}
+                    accessibilityHint="Saves the address as typed, without matching it to a city door"
+                  >
+                    Keep it without a door
+                  </Button>
+                </View>
+              ) : null}
+
               <Button
-                onPress={submit}
+                onPress={() => submit()}
                 disabled={!canSubmit}
                 loading={saving}
                 fullWidth
@@ -783,6 +825,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
 
   submit: { marginTop: spacing.md },
+  doorChoices: { marginTop: spacing.md, gap: spacing.sm, padding: spacing.md, borderRadius: 12,
+                 borderWidth: 1, borderColor: c.warning },
+  doorTitle: { fontSize: fontSize.md, fontWeight: '600', color: c.foreground },
   hint: {
     marginTop: spacing.sm,
     fontSize: fontSize.sm,

@@ -619,169 +619,128 @@ class TestDuplicateGuard:
 
 
 class TestResolveAddress:
-    """Deriving coords, canonical address and block key from label text (ADR-259).
+    """Deriving coords, canonical address and block key from label text (ADR-259),
+    against PlaceType only since ADR-584 (a customer's address never reaches
+    GeoClient).
 
-    Clients only ever send what the OCR read off the label. Before this, lat/lng
-    arrived null on every request, so `check_zone` answered `no_coords` every
-    time and the whole ownership tree of ADR-246 never ran.
-
-    The two derivations are deliberately independent: the block key is pure
-    string work, so a GeoClient outage must still leave routes rankable.
+    The two derivations stay independent: the block key is pure string work,
+    so a PlaceType miss or outage still leaves routes rankable.
     """
 
-    @staticmethod
-    def _geo(**kw):
-        from app.tasks.enrich_manifest import GeoClientResult
-        base = dict(
-            normalised_address="505 WEST 37 STREET", lat=40.756679, lng=-73.998177,
-            first_cross_street=None, second_cross_street=None, segment_id=None,
-            from_lion_node_id=None, to_lion_node_id=None,
-            x_low_address_end=None, y_low_address_end=None,
-            x_high_address_end=None, y_high_address_end=None,
-        )
-        base.update(kw)
-        return GeoClientResult(**base)
+    DOOR = dict(borough="1", address="505 W 37 ST", block_key="W_37_St_500",
+                lat=40.756679, lng=-73.998177, segment_id="0034567")
 
     @pytest.fixture(autouse=True)
-    def _no_network(self, monkeypatch):
-        """Fail loudly if a test forgets to stub GeoClient.
-
-        A unit test that silently reaches the real API would pass locally, cost
-        400ms, and break in CI where no key is set.
-        """
+    def _no_geoclient(self, monkeypatch):
+        """Fail loudly if anything reaches GeoClient: the path must not."""
         import app.tasks.enrich_manifest as em
 
         def _boom(*a, **kw):
-            raise AssertionError("unstubbed GeoClient call")
-
+            raise AssertionError("intake reached GeoClient (ADR-584)")
         monkeypatch.setattr(em, "_geoclient_normalise", _boom)
 
-    def _stub(self, monkeypatch, fn):
-        import app.tasks.enrich_manifest as em
-        monkeypatch.setattr(em, "_geoclient_normalise", fn)
+        class _S:
+            def close(self):
+                pass
+        monkeypatch.setattr("app.database.PlaceTypeSession", _S)
+
+    def _stub(self, monkeypatch, result, seen=None):
+        from app.services import door_resolver as DR
+
+        def _resolve(db, address, **kw):
+            if seen is not None:
+                seen.update(kw)
+            return result
+        monkeypatch.setattr(DR, "resolve_door", _resolve)
+
+    def _door(self, **kw):
+        from app.services.door_resolver import Door
+        return Door(**{**self.DOOR, **kw})
+
+    def _miss(self):
+        from app.services.door_resolver import Miss
+        return Miss("not_in_placetype", address="505 W 37 ST", borough="1",
+                    near=[{"address": "501 W 37 ST", "borough": "1"}])
 
     def test_block_key_is_derived_from_label_text(self, db, monkeypatch):
         """The bug in one line: nothing derived this, so the block-match tier
         could never fire."""
-        self._stub(monkeypatch, lambda *a, **kw: None)
+        self._stub(monkeypatch, self._miss())
         r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
         assert r.block_key == "W_37_St_500"
 
-    def test_geocode_supplies_coords_and_canonical_address(self, db, monkeypatch):
-        self._stub(monkeypatch, lambda *a, **kw: self._geo())
+    def test_a_door_supplies_coords_and_the_citys_address(self, db, monkeypatch):
+        self._stub(monkeypatch, self._door())
         r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
         assert (r.lat, r.lng) == (40.756679, -73.998177)
-        assert r.geocoded is True
-        # GeoClient's canonical form is what Route.normalised_addresses holds,
-        # so preferring it is what lets the exact-address tier match at all.
-        assert r.normalised_address == "505 WEST 37 STREET"
+        assert r.geocoded is True and r.door_status == "resolved"
+        assert r.normalised_address == "505 W 37 ST" and r.segment_id == "0034567"
 
-    def test_block_key_survives_a_geocode_failure(self, db, monkeypatch):
-        """The reason the two derivations are independent: an outage costs the
-        ownership check, not the ability to rank routes."""
-        self._stub(monkeypatch, lambda *a, **kw: None)
+    def test_a_miss_keeps_the_block_key_and_offers_doors(self, db, monkeypatch):
+        """An unplaced address costs the ownership check, not the ability to
+        rank routes, and the caller gets doors to ask about."""
+        self._stub(monkeypatch, self._miss())
         r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
-        assert r.geocoded is False
-        assert r.lat is None
-        assert r.block_key == "W_37_St_500"
-
-    def test_a_geoclient_exception_never_propagates(self, db, monkeypatch):
-        """Intake must reach dispatch even when geocoding is down — a network
-        error here would otherwise 500 a walker mid-route."""
-        def _raise(*a, **kw):
-            raise RuntimeError("connection reset")
-        self._stub(monkeypatch, _raise)
-
-        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
-        assert r.geocoded is False
-        assert r.block_key == "W_37_St_500"
+        assert r.geocoded is False and r.lat is None and r.door_status == "unresolved"
+        assert r.block_key == "W_37_St_500" and r.near[0]["address"] == "501 W 37 ST"
 
     def test_caller_supplied_coords_are_not_overridden(self, db, monkeypatch):
         """Mobile may send a device fix, and a dispatcher may correct a bad
-        parse. Neither should be silently replaced — and no call is made."""
+        parse. Neither should be silently replaced, and no lookup is made."""
+        self._stub(monkeypatch, AssertionError)   # would be returned only if called
         r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1",
                             lat=40.70, lng=-74.00)
-        assert (r.lat, r.lng) == (40.70, -74.00)
-        assert r.geocoded is True
+        assert (r.lat, r.lng) == (40.70, -74.00) and r.geocoded is True
 
     def test_caller_supplied_block_key_is_not_overridden(self, db, monkeypatch):
-        self._stub(monkeypatch, lambda *a, **kw: None)
+        self._stub(monkeypatch, self._door())
         r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1",
                             block_key="MANUAL_1")
         assert r.block_key == "MANUAL_1"
 
     def test_an_unparseable_address_yields_no_block_key(self, db, monkeypatch):
-        """derive_block_key returns UnparseableAddress for OCR mush. That is a
-        normal outcome carrying a reason, not a block key — and not a crash."""
-        self._stub(monkeypatch, lambda *a, **kw: None)
+        from app.services.door_resolver import Miss
+        self._stub(monkeypatch, Miss("no_address"))
         r = resolve_address(db, COMPANY, "no house number here", "TBA1")
-        assert r.block_key is None
-        assert r.geocoded is False
+        assert r.block_key is None and r.geocoded is False
 
     def test_no_address_at_all_is_handled(self, db):
-        """A radio report may carry only a TBA. No address means nothing to
-        derive and nothing to call — the autouse guard proves no call is made."""
         r = resolve_address(db, COMPANY, None, "TBA1")
-        assert r.block_key is None
-        assert r.geocoded is False
+        assert r.block_key is None and r.geocoded is False
 
-    def test_a_geocode_without_coords_is_not_treated_as_located(self, db, monkeypatch):
-        """GeoClient answers 200 with the street matched but the house number
-        out of range: a normalised name and NO coords. That is not a location,
-        and treating it as one would put the package in the wrong zone."""
-        self._stub(monkeypatch, lambda *a, **kw: self._geo(lat=None, lng=None))
-        r = resolve_address(db, COMPANY, "99999 W 37TH ST", "TBA1")
-        assert r.geocoded is False
-        assert r.lat is None
+    def test_a_door_without_coords_is_not_treated_as_located(self, db, monkeypatch):
+        """Treating a door with no position as located would put the package in
+        the wrong zone."""
+        self._stub(monkeypatch, self._door(lat=None, lng=None))
+        r = resolve_address(db, COMPANY, "505 W 37TH ST", "TBA1")
+        assert r.geocoded is False and r.lat is None
 
-    def test_borough_comes_from_company_config(self, db, monkeypatch):
-        """An operator outside Manhattan sets it on CompanyConfig; the default
-        is only a default. Passing the wrong borough silently geocodes to the
-        wrong city block."""
+    def test_the_default_borough_comes_from_company_config(self, db, monkeypatch):
         from app.models.company import CompanyConfig
-        db.add(CompanyConfig(id=uuid.uuid4(), company_id=COMPANY,
-                             geoclient_borough="brooklyn"))
+        db.add(CompanyConfig(id=uuid.uuid4(), company_id=COMPANY, geoclient_borough="brooklyn"))
         db.commit()
-
         seen = {}
-
-        def _capture(addr, borough="manhattan"):
-            seen["borough"] = borough
-            return None
-
-        self._stub(monkeypatch, _capture)
+        self._stub(monkeypatch, self._miss(), seen)
         resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
-        assert seen["borough"] == "brooklyn"
+        assert seen["default_borough"] == "3"
 
-    def test_borough_defaults_to_manhattan(self, db, monkeypatch):
+    def test_no_configured_borough_means_no_default(self, db, monkeypatch):
+        """Not "manhattan" any more (ADR-584 D2): the ZIP or the nearest door
+        decides, and with neither only a unique address matches."""
         seen = {}
-
-        def _capture(addr, borough="manhattan"):
-            seen["borough"] = borough
-            return None
-
-        self._stub(monkeypatch, _capture)
+        self._stub(monkeypatch, self._miss(), seen)
         resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
-        assert seen["borough"] == "manhattan"
+        assert seen["default_borough"] is None
 
     def test_another_companys_config_does_not_apply(self, db, monkeypatch):
-        """Dimension 1: the borough lookup is company-scoped like every other
-        read. Without the filter, one tenant's borough would geocode another's
-        packages."""
+        """Dimension 1: the borough lookup is company-scoped like every other read."""
         from app.models.company import CompanyConfig
-        db.add(CompanyConfig(id=uuid.uuid4(), company_id=OTHER,
-                             geoclient_borough="queens"))
+        db.add(CompanyConfig(id=uuid.uuid4(), company_id=OTHER, geoclient_borough="queens"))
         db.commit()
-
         seen = {}
-
-        def _capture(addr, borough="manhattan"):
-            seen["borough"] = borough
-            return None
-
-        self._stub(monkeypatch, _capture)
+        self._stub(monkeypatch, self._miss(), seen)
         resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
-        assert seen["borough"] == "manhattan"
+        assert seen["default_borough"] is None
 
 
 class TestProximityRanking:

@@ -116,7 +116,10 @@ def resolve_door(db: Session, address: str, *, lat: Optional[float] = None,
 
     row = place_geometry.door_with_segment(db, borough, canonical)
     if row is None:
-        near = (place_geometry.doors_near(db, lat, lng) if lat is not None and lng is not None else [])
+        # With a location, the doors around it; without one (a captain typing
+        # at the truck), the real doors on the same street and block.
+        near = (place_geometry.doors_near(db, lat, lng) if lat is not None and lng is not None
+                else place_geometry.doors_on_block(db, borough, canonical))
         return Miss("not_in_placetype" if borough else "no_borough_match",
                     address=canonical, borough=borough, near=near)
 

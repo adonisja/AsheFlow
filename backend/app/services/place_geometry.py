@@ -453,3 +453,49 @@ def zip_boroughs(db: Session) -> dict[str, str]:
     for z, b in rows:
         seen.setdefault(z, set()).add(b)
     return {z: next(iter(bs)) for z, bs in seen.items() if len(bs) == 1}
+
+
+def _house_number(house: str) -> Optional[int]:
+    """The numeric part a person compares: 455A → 455, 123-45 → 12345."""
+    import re
+    digits = re.sub(r"[^0-9]", "", house or "")
+    return int(digits) if digits else None
+
+
+@_degrades_to(list)
+@reads_placetype
+def doors_on_block(db: Session, borough: Optional[str], address: str, *, limit: int = 10) -> list[dict]:
+    """Real doors on the same street near a typed address (ADR-584 D4), for a
+    picker with no location to search from: a captain entering a tote's
+    address at the truck is standing at the staging point, not the door.
+
+    Same block key and its two neighbours (±100 for a hundred-block, ±1 for a
+    hyphenated Queens block), closest house number first. Indexed on (borough,
+    block_key); bounded to `limit` doors. Without a borough, all five.
+    """
+    import re
+    from app.services.derive_block_key import derive_block_key
+
+    block_key = getattr(derive_block_key(address, tba=""), "block_key", None)
+    m = re.match(r"^(.*)_(\d+)$", block_key or "")
+    if not m:
+        return []
+    stem, n = m.group(1), int(m.group(2))
+    house = _house(address)
+    step = 1 if "-" in house else 100
+    keys = [f"{stem}_{k}" for k in (n - step, n, n + step) if k >= 0]
+    target = _house_number(house)
+
+    q = db.query(BuildingProfileLibrary.normalised_address, BuildingProfileLibrary.borough,
+                 BuildingProfileLibrary.lat, BuildingProfileLibrary.lng).filter(
+        BuildingProfileLibrary.block_key.in_(keys))
+    q = q.filter(BuildingProfileLibrary.borough == borough) if borough else \
+        q.filter(BuildingProfileLibrary.borough.in_(["1", "2", "3", "4", "5"]))
+    rows = q.limit(500).all()
+
+    def gap(addr):
+        h = _house_number(_house(addr))
+        return abs(h - target) if (h is not None and target is not None) else 10**9
+    rows.sort(key=lambda r: (gap(r[0]), r[0]))
+    return [{"address": a, "borough": b, "lat": la, "lng": ln, "house_gap": gap(a)}
+            for a, b, la, ln in rows[:limit]]

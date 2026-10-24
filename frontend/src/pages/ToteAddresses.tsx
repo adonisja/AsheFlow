@@ -4,6 +4,9 @@ import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
 import { errorText } from '../utils/errorText';
+
+/** A city door on the same street, from the 409 when no door matched (ADR-584). */
+interface StreetDoor { address: string; borough: string }
 import SectionHeader from '../components/ui/SectionHeader';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import type {
@@ -58,10 +61,14 @@ export default function ToteAddresses() {
   const [count, setCount] = useState(1);
   const [size, setSize] = useState<OVSize | null>(null);
   const [saving, setSaving] = useState(false);
+  // ADR-584 D4: when the typed address matches no city door, the server
+  // answers 409 with the doors on that street. Null = no choice pending.
+  const [doorChoices, setDoorChoices] = useState<StreetDoor[] | null>(null);
   const [addingOv, setAddingOv] = useState(false);
 
   const beginEntry = (bagId: string) => {
     setOpenBag(bagId);
+    setDoorChoices(null);
     setAddress('');
     setCount(1);
     // Pre-fill a known size so a re-address does not silently change it.
@@ -167,7 +174,7 @@ export default function ToteAddresses() {
   const openIsOv = openBag !== null && isOv(openBag);
   const openHasAddress = openBag !== null && (byBag.get(openBag)?.length ?? 0) > 0;
 
-  const submit = async () => {
+  const submit = async (choice?: { door: { borough: string; address: string } } | { without_door: true }) => {
     if (!truckId || !openBag) return;
     if (openIsOv && !size) {
       setError('Choose a size for this OV. The sort needs it to plan the route.');
@@ -182,13 +189,20 @@ export default function ToteAddresses() {
         raw_address: address.trim(),
         package_count: count,
         ...(openIsOv ? { ov_size: size } : {}),
+        ...(choice ?? {}),
       });
+      setDoorChoices(null);
+      setError('');
       setAddress('');
       setCount(1);
       await load();
       // An OV takes one address, so entry is finished. A tote may take more.
       if (openIsOv) setOpenBag(null);
     } catch (e: unknown) {
+      const err = e as { response?: { status?: number; data?: { detail?: { near?: StreetDoor[] } } } };
+      if (err.response?.status === 409 && Array.isArray(err.response.data?.detail?.near)) {
+        setDoorChoices(err.response.data.detail.near);
+      }
       setError(errorText(e, 'Could not save that address.'));
     } finally {
       setSaving(false);
@@ -234,7 +248,7 @@ export default function ToteAddresses() {
               </div>
               <div className="text-xl font-semibold">{openBag}</div>
             </div>
-            <button className="btn-ghost" onClick={() => setOpenBag(null)}>
+            <button className="btn-ghost" onClick={() => { setOpenBag(null); setDoorChoices(null); }}>
               <X className="w-4 h-4" /> Done
             </button>
           </div>
@@ -252,7 +266,7 @@ export default function ToteAddresses() {
                   id="addr"
                   className="input w-full"
                   value={address}
-                  onChange={e => setAddress(e.target.value)}
+                  onChange={e => { setAddress(e.target.value); setDoorChoices(null); }}
                   placeholder="350 W 36th St"
                   autoFocus
                 />
@@ -315,9 +329,42 @@ export default function ToteAddresses() {
                 </div>
               )}
 
+              {/* ADR-584 D4. No city door matched: the real doors on that
+                  street, closest house number first, or keep it without a door. */}
+              {doorChoices !== null && (
+                <div className="rounded-lg border border-warning/40 bg-warning/5 p-3 space-y-2">
+                  <p className="text-sm font-medium">Which door is it?</p>
+                  {doorChoices.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {doorChoices.map(d => (
+                        <button
+                          key={`${d.borough}:${d.address}`}
+                          type="button"
+                          disabled={saving}
+                          onClick={() => submit({ door: { borough: d.borough, address: d.address } })}
+                          className="min-h-11 rounded-lg border border-border px-3 py-2 text-left text-sm font-mono hover:bg-accent disabled:opacity-50"
+                        >
+                          {d.address}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No city doors on that block. Check the street, or keep it as typed.</p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => submit({ without_door: true })}
+                    className="text-sm text-primary hover:underline disabled:opacity-50"
+                  >
+                    Keep it without a door
+                  </button>
+                </div>
+              )}
+
               <button
                 className="btn-primary w-full"
-                onClick={submit}
+                onClick={() => submit()}
                 disabled={saving || address.trim().length < 3}
               >
                 {saving ? 'Saving…' : 'Save address'}

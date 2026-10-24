@@ -149,9 +149,9 @@ def check_zone(
 class ResolvedAddress:
     """What the server worked out from the label text (ADR-259).
 
-    `geocoded` records whether GeoClient answered, which is what separates
+    `geocoded` records whether PlaceType placed it (ADR-584), which is what separates
     "outside the zone" from "ownership unconfirmed" downstream. The block key is
-    derived offline, so it survives a GeoClient outage and the block-match tier
+    derived offline, so it survives a PlaceType outage and the block-match tier
     keeps working when the zone check cannot.
     """
     lat: Optional[float] = None
@@ -159,9 +159,14 @@ class ResolvedAddress:
     normalised_address: Optional[str] = None
     block_key: Optional[str] = None
     # LION segment the address sits on — the package-side anchor for proximity
-    # ranking against Route.segment_ids (ADR-260). Only GeoClient supplies it.
+    # ranking against Route.segment_ids (ADR-260). It comes from the PlaceType door once the city seed has reached it.
     segment_id: Optional[str] = None
     geocoded: bool = False
+    # ADR-584: what PlaceType said. `geocoded` keeps its meaning downstream
+    # ("we know where this is"); these say why not, and what to pick from.
+    door_status: Optional[str] = None          # resolved | unresolved
+    borough: Optional[str] = None
+    near: list = field(default_factory=list)   # doors to pick from on a miss
 
 
 def resolve_address(
@@ -183,14 +188,15 @@ def resolve_address(
 
     Two derivations, deliberately independent (ADR-259):
 
-      * `derive_block_key` is pure string work, so a GeoClient outage still
+      * `derive_block_key` is pure string work, so a PlaceType outage still
         leaves routes rankable by block.
-      * `_geoclient_normalise` answers ownership AND supplies the normalised
-        address for the exact-building match tier, in one call.
+      * `door_resolver.resolve_door` answers ownership and supplies the city's
+        canonical address for the exact-building match tier. PlaceType only:
+        since ADR-584 a customer's address never reaches GeoClient.
 
-    Never raises: intake must reach dispatch even when geocoding fails, so a
-    GeoClient error degrades to `geocoded=False` and the caller escalates
-    (ADR-246).
+    Never raises: intake must reach dispatch even when no door matches, so a
+    miss returns `geocoded=False` with `door_status="unresolved"` and the doors
+    to pick from, and the caller escalates or asks (ADR-246, ADR-584 D4).
     """
     out = ResolvedAddress(
         lat=lat, lng=lng,
@@ -212,50 +218,28 @@ def resolve_address(
     if out.lat is not None and out.lng is not None:
         return out
 
-    borough = _company_borough(db, company_id)
+    # ADR-584: PlaceType only. A customer's address never reaches GeoClient.
+    from app.database import PlaceTypeSession
+    from app.services import door_resolver as DR
+    default = DR.company_borough(db, company_id)
+    pt = PlaceTypeSession()
     try:
-        # ADR-316 — PlaceType first, GeoClient on a miss. Aliased because this
-        # module already has a `resolve_address` of its own (a different job:
-        # this one answers ownership, that one answers geometry).
-        from app.services.address_resolver import resolve_address as _resolve_geo
-        geo = _resolve_geo(db, raw_address, borough=borough)
-    except Exception as exc:
-        # Network, timeout, malformed upstream payload. Ownership stays
-        # undecidable and the package escalates — never a 500 at the edge.
-        #
-        # Deliberately NOT exc_info=True: the traceback frames carry
-        # `raw_address`, a customer delivery address, straight into the logs
-        # (Dimension 7). The exception type is what identifies an outage; the
-        # address adds nothing an operator can act on.
-        logger.warning("intake geocode failed: %s", type(exc).__name__)
+        result = DR.resolve_door(pt, raw_address, default_borough=default)
+    finally:
+        pt.close()
+
+    if isinstance(result, DR.Miss):
+        out.door_status, out.borough, out.near = "unresolved", result.borough, result.near
         return out
 
-    if geo is None or geo.lat is None or geo.lng is None:
-        return out
-
-    out.lat, out.lng = geo.lat, geo.lng
-    out.segment_id = geo.segment_id
-    out.geocoded = True
-    # GeoClient's canonical form is what Route.normalised_addresses holds, so
-    # preferring it is what makes the exact-address tier able to match at all.
-    if geo.normalised_address:
-        out.normalised_address = geo.normalised_address
+    out.door_status, out.borough = "resolved", result.borough
+    out.lat, out.lng = result.lat, result.lng
+    out.segment_id = result.segment_id
+    out.geocoded = result.lat is not None and result.lng is not None
+    # The city's canonical form, which is what route addresses are compared in.
+    out.normalised_address = result.address
+    out.block_key = out.block_key or result.block_key
     return out
-
-
-def _company_borough(db: Session, company_id: UUID) -> str:
-    """Borough for GeoClient lookups: company config, else Manhattan.
-
-    Same resolution order as sort.py:774 — an operator outside Manhattan sets
-    it on CompanyConfig, and the default is only a default.
-    """
-    from app.models.company import CompanyConfig
-    cfg = (
-        db.query(CompanyConfig)
-        .filter(CompanyConfig.company_id == company_id)
-        .first()
-    )
-    return (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
 
 
 _MAX_SEGMENT_HOPS = 3

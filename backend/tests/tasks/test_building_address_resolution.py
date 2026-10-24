@@ -59,39 +59,6 @@ class TestResolverRules:
         from app.tasks import resolve_building_addresses
         return inspect.getsource(resolve_building_addresses)
 
-    def test_transport_failure_does_not_reject_the_address(self):
-        """The trap: `except Exception -> rejected` is the obvious handler and
-        it is wrong. A network blip is not the address's fault, and marking it
-        rejected tells the captain to fix an address that is correct."""
-        src = self._src()
-        exc_block = src[src.index("except Exception:"):]
-        first_branch = exc_block[: exc_block.index("continue")]
-        assert 'address_status = "rejected"' not in first_branch, (
-            "a transport failure must leave the row `pending` for the next "
-            "sweep, never `rejected`"
-        )
-        assert "skipped" in first_branch
-
-    def test_missing_segment_is_a_rejection_for_a_building(self):
-        """grc 42 is a WARNING for a package (it still gets delivered) but a
-        REJECTION for a building profile — a house number that does not exist
-        on that street cannot be the building the row describes."""
-        src = self._src()
-        assert "if not geo.segment_id:" in src
-        seg = src[src.index("if not geo.segment_id:"):]
-        assert 'address_status = "rejected"' in seg[:400]
-
-    def test_success_rewrites_the_address_and_rederives_block_key(self):
-        """block_key is denormalised FROM the address. Rewriting one without
-        the other groups the building under its old spelling — the exact
-        fragmentation this ADR removes, reintroduced by the fix for it."""
-        src = self._src()
-        assert "profile.normalised_address = geo.normalised_address" in src
-        i = src.index("profile.normalised_address = geo.normalised_address")
-        after = src[i : i + 600]
-        assert "derive_block_key" in after, "block_key must be re-derived"
-        assert "ParsedBlock" in after, "and only applied when the address parses"
-
     def test_it_is_one_shot_not_a_retry_loop(self):
         """Operator's call: one-shot plus a manual retry from the rejected tag.
         A geocoder that failed on a string fails again on the same string, and
@@ -103,16 +70,84 @@ class TestResolverRules:
             "the task must claim only pending rows, never re-walk rejected ones"
         )
 
-    def test_borough_is_company_scoped(self):
-        """GeoClient needs a borough. Hardcoding manhattan would mis-resolve
-        every other tenant's addresses into a plausible-but-wrong building."""
-        src = self._src()
-        assert "geoclient_borough" in src
-        assert "Company" in src
-
     def test_batch_is_bounded(self):
         src = self._src()
         assert ".limit(" in src, "an unbounded sweep can hold a worker"
+
+
+class TestThePlaceTypeResolution:
+    """ADR-584: the task resolves against PlaceType only, driven on real rows.
+
+    These replaced four source-text tests. One of them ("the borough is company
+    scoped") would have kept passing on a comment that mentions the word."""
+
+    @pytest.fixture
+    def run(self, db, monkeypatch):
+        import uuid
+        from unittest.mock import patch
+        from app.services import door_resolver as DR
+        from app.tasks import resolve_building_addresses as T
+        from tests.conftest import SEED_COMPANY_ID, sqlite_mirror_with_defaults
+        sqlite_mirror_with_defaults(BuildingProfile.__table__).create(db.get_bind(), checkfirst=True)
+
+        class _S:
+            def close(self):
+                pass
+        monkeypatch.setattr("app.database.PlaceTypeSession", _S)
+        monkeypatch.setattr("app.services.company_config.full_mode_company_ids", lambda db: [SEED_COMPANY_ID])
+
+        def go(result, zip_map=None, borough=None):
+            p = BuildingProfile(id=uuid.uuid4(), company_id=SEED_COMPANY_ID,
+                                normalised_address="433 West 32nd Street", block_key="",
+                                building_type="walkup", workload_class="standard",
+                                address_status="pending", submitted_by_name="Captain")
+            db.add(p)
+            db.commit()
+            seen = {}
+
+            def resolve(pt, address, **kw):
+                seen.update(kw)
+                return result
+            monkeypatch.setattr(DR, "_zip_map", lambda pt: {"10001": "1"} if zip_map is None else zip_map)
+            monkeypatch.setattr(DR, "resolve_door", resolve)
+            monkeypatch.setattr(DR, "company_borough", lambda db, cid: borough)
+            with patch.object(T, "SessionLocal", return_value=db), patch.object(db, "close"):
+                out = T.resolve_pending_addresses()
+            db.expire_all()
+            return out, db.get(BuildingProfile, p.id), seen
+        return go
+
+    def test_a_door_replaces_the_typed_address(self, run):
+        from app.services.door_resolver import Door
+        out, p, _ = run(Door(borough="1", address="433 W 32 ST", block_key="W_32_St_400",
+                             lat=40.75, lng=-73.99, segment_id="0034567"))
+        assert out["resolved"] == 1
+        assert (p.address_status, p.normalised_address, p.block_key, p.segment_id) == (
+            "resolved", "433 W 32 ST", "W_32_St_400", "0034567")
+
+    def test_a_door_without_topology_is_still_the_building(self, run):
+        """Reversed by ADR-584: a door in AddressPoint means the house exists,
+        so a missing segment (not yet seeded) no longer rejects the building."""
+        from app.services.door_resolver import Door
+        _, p, _ = run(Door(borough="1", address="433 W 32 ST", block_key="W_32_St_400", lat=40.75, lng=-73.99))
+        assert p.address_status == "resolved" and p.segment_id is None
+
+    def test_no_city_door_is_a_rejection_with_a_reason(self, run):
+        from app.services.door_resolver import Miss
+        _, p, _ = run(Miss("not_in_placetype", address="433 W 32 ST", borough="1"))
+        assert p.address_status == "rejected" and p.geo_message == "No city door matches this address."
+
+    def test_an_unreachable_placetype_rejects_nothing(self, run):
+        """The trap: the degrade guard reads an outage as "no door", which would
+        reject addresses that are fine. Every profile stays pending."""
+        from app.services.door_resolver import Miss
+        out, p, _ = run(Miss("not_in_placetype"), zip_map={})
+        assert out == {"resolved": 0, "rejected": 0, "skipped": 1} and p.address_status == "pending"
+
+    def test_the_companys_own_borough_is_the_default(self, run):
+        from app.services.door_resolver import Miss
+        _, _, seen = run(Miss("not_in_placetype"), borough="3")
+        assert seen["default_borough"] == "3"
 
 
 class TestSubmitPath:

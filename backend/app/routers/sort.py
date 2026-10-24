@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import RoleChecker, get_caller_employee
 from app.core.config import settings
 from app.services.free_text import escape_for_spreadsheet
+from app.schemas.placetype import MapPin, PickedDoor  # noqa: F401 — ADR-584, re-exported for tests
 from app.services.constants import ROUTE_LEAD_ROLES, TRUCK_SCOPED_ROLES
 from app.database import get_db
 from app.models.company import CompanyConfig, CompanyZone
@@ -117,19 +118,6 @@ class ManifestPreviewResponse(BaseModel):
     page_size: int
     total_pages: int
     preview_rows: list[ManifestPreviewRow]
-
-
-class PickedDoor(BaseModel):
-    """A door the tenant picked from GET /placetype/doors/nearby (ADR-584 D4)."""
-    model_config = ConfigDict(extra="forbid")
-    borough: Literal["1", "2", "3", "4", "5"]
-    address: str = Field(..., min_length=3, max_length=200)
-
-
-class MapPin(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lat: float = Field(..., ge=40.47, le=40.93)
-    lng: float = Field(..., ge=-74.27, le=-73.68)
 
 
 class ManifestPackagePatchRequest(BaseModel):

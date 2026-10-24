@@ -98,24 +98,22 @@ def test_no_write_to_placetype_outside_the_owner_allowlist():
 
 
 def test_the_resolver_writes_nothing_on_a_miss(monkeypatch):
-    """Behavioural: a cache miss answers from GeoClient and leaves PlaceType alone."""
-    from app.services import address_resolver, place_geometry, segment_map
-    from app.tasks import enrich_manifest
-
-    geo = SimpleNamespace(normalised_address="350 5 AVE", lat=40.7, lng=-73.9, segment_id="0001",
-                          geo_grc="00")
-    monkeypatch.setattr(address_resolver, "_from_placetype", lambda db, a: None)
-    monkeypatch.setattr(enrich_manifest, "_geoclient_normalise", lambda a, borough=None: geo)
+    """Behavioural: a miss returns the doors to pick from and leaves PlaceType
+    alone. Since ADR-584 the resolver is door_resolver (PlaceType only); the
+    GeoClient-backed address_resolver is deleted."""
+    from app.services import door_resolver, place_geometry, segment_map
 
     def _boom(*a, **k):
         raise AssertionError("the resolver wrote PlaceType")
     monkeypatch.setattr(place_geometry, "upsert_building_geometry", _boom)
     monkeypatch.setattr(segment_map, "upsert_segments", _boom)
+    monkeypatch.setattr(place_geometry, "door_with_segment", lambda db, b, a: None)
+    monkeypatch.setattr(place_geometry, "doors_on_block", lambda db, b, a: [{"address": "350 5 AVE"}])
+    monkeypatch.setattr(door_resolver, "_zip_map", lambda db: {})
 
-    stats = address_resolver.ResolverStats()
-    assert address_resolver.resolve_address(object(), "350 5th Avenue", stats=stats) is geo
-    assert stats.misses == 1 and "written_back" not in stats.as_dict()
-    assert not hasattr(address_resolver, "_write_back")
+    miss = door_resolver.resolve_door(object(), "352 5th Avenue", default_borough="1")
+    assert isinstance(miss, door_resolver.Miss) and miss.near == [{"address": "350 5 AVE"}]
+    assert not (BACKEND / "app/services/address_resolver.py").exists()
 
 
 def test_the_library_router_and_promotion_are_gone():

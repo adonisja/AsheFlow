@@ -32,6 +32,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.schemas.placetype import MapPin, PickedDoor
 from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.assignment_member import AssignmentMember
@@ -92,6 +93,14 @@ class ToteAddressIn(BaseModel):
     # on another field.
     ov_size: Optional[Literal["XS", "S", "M", "L", "XL"]] = None
 
+    # ADR-584 D4. When the typed address matches no city door, the first save
+    # returns 409 with the doors on that street. The captain then resends with
+    # one of these (at most one): the door they picked, a pin, or an explicit
+    # "keep it without a door", which stores the parser's block key only.
+    door: Optional[PickedDoor] = None
+    pin: Optional[MapPin] = None
+    without_door: bool = False
+
     @model_validator(mode="after")
     def _size_matches_the_unit(self) -> "ToteAddressIn":
         """An OV needs a size; a tote must not carry one.
@@ -109,6 +118,8 @@ class ToteAddressIn(BaseModel):
             )
         if not is_ov_id(self.bag_id) and self.ov_size is not None:
             raise ValueError("ov_size applies to an OV, not a tote.")
+        if sum(x is not None and x is not False for x in (self.door, self.pin, self.without_door)) > 1:
+            raise ValueError("send at most one of door, pin or without_door")
         return self
 
 
@@ -623,6 +634,52 @@ def _assignment(db: Session, caller: Employee, assignment_id: UUID) -> TruckAssi
 
 # ── tote addresses ────────────────────────────────────────────────────────────
 
+def _resolve_tote_door(db: Session, company_id, payload: "ToteAddressIn"):
+    """ADR-584 D4 for one tote address. A picked door, a pin, an explicit
+    "without a door", or the typed address resolved through PlaceType. A miss
+    with no choice made is refused with the doors on that street, so the
+    captain picks while still standing at the tote."""
+    from app.database import PlaceTypeSession
+    from app.services import door_resolver as DR
+    from app.services.package_intake import ResolvedAddress
+
+    tba = f"tote:{payload.bag_id}"
+    if payload.without_door:
+        from app.services.derive_block_key import derive_block_key
+        from app.services.door_key import canonical_address
+        bk = getattr(derive_block_key(canonical_address(payload.raw_address), tba=tba), "block_key", None)
+        return ResolvedAddress(block_key=bk, door_status=None)
+
+    if payload.door is not None or payload.pin is not None:
+        pt = PlaceTypeSession()
+        try:
+            if payload.door is not None:
+                door = DR.door_from_pick(pt, payload.door.borough, payload.door.address)
+                if door is None:
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                        detail="That door isn't in PlaceType. Pick one from the list.")
+                f = DR.door_fields(door)
+            else:
+                f = DR.pin_fields(pt, payload.pin.lat, payload.pin.lng, payload.raw_address)
+        finally:
+            pt.close()
+        return ResolvedAddress(lat=f.get("lat"), lng=f.get("lng"), normalised_address=f.get("normalised_address"),
+                               block_key=f.get("block_key"), segment_id=f.get("segment_id"),
+                               geocoded=f.get("lat") is not None, door_status=f["door_status"],
+                               borough=f.get("borough"))
+
+    resolved = resolve_address(db=db, company_id=company_id, raw_address=payload.raw_address, tba=tba)
+    if resolved.door_status == "unresolved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "No city door matches that address. Pick the right door, "
+                               "or keep it without a door.",
+                    "near": resolved.near},
+        )
+    return resolved
+
+
+
 @router.post("/tote-addresses", response_model=ToteAddressOut,
              status_code=status.HTTP_201_CREATED)
 def add_tote_address(
@@ -645,15 +702,7 @@ def add_tote_address(
     """
     _assert_truck_member(caller, payload.truck_id, payload.entry_date, db)
 
-    resolved = resolve_address(
-        db=db,
-        company_id=caller.company_id,
-        raw_address=payload.raw_address,
-        # resolve_address labels an unparseable address with this. No Amazon TBA
-        # exists here, so the bag identifies it — which is what a captain would
-        # be looking for anyway.
-        tba=f"tote:{payload.bag_id}",
-    )
+    resolved = _resolve_tote_door(db, caller.company_id, payload)
 
     # Server-assigned, never client-supplied: ties break by first-entered so a
     # re-sort is stable (D2).
